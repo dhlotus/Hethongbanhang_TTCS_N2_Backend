@@ -1,4 +1,7 @@
-// Khung Controller: InvoicesController
+import { Controller } from '@nestjs/common';
+import { InvoicesService } from './invoices.service';
+
+@Controller('invoices')
 export class InvoicesController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly invoicesService: InvoicesService) {}
 }

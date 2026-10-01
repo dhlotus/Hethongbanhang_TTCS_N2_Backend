@@ -1,4 +1,4 @@
-// Khung Service: UsersService
-export class UsersService {
-  // Business logic sẽ được triển khai trong từng Sprint
-}
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class UsersService {}

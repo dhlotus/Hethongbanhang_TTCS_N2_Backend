@@ -1,4 +1,7 @@
-// Khung Controller: ShipmentsController
+import { Controller } from '@nestjs/common';
+import { ShipmentsService } from './shipments.service';
+
+@Controller('shipments')
 export class ShipmentsController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly shipmentsService: ShipmentsService) {}
 }

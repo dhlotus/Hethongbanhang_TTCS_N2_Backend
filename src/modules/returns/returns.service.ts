@@ -1,4 +1,4 @@
-// Khung Service: ReturnsService
-export class ReturnsService {
-  // Business logic sẽ được triển khai trong từng Sprint
-}
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class ReturnsService {}

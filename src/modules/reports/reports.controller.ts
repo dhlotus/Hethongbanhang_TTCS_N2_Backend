@@ -1,4 +1,7 @@
-// Khung Controller: ReportsController
+import { Controller } from '@nestjs/common';
+import { ReportsService } from './reports.service';
+
+@Controller('reports')
 export class ReportsController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly reportsService: ReportsService) {}
 }

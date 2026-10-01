@@ -1,4 +1,7 @@
-// Khung Controller: ReturnsController
+import { Controller } from '@nestjs/common';
+import { ReturnsService } from './returns.service';
+
+@Controller('returns')
 export class ReturnsController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly returnsService: ReturnsService) {}
 }

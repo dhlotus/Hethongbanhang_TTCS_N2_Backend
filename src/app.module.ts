@@ -1,4 +1,4 @@
-// Module gốc liên kết toàn bộ 12 Feature-Modules và cấu hình hệ thống
+import { Module } from '@nestjs/common';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ProductsModule } from './modules/products/products.module';
@@ -12,8 +12,8 @@ import { ReturnsModule } from './modules/returns/returns.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 
-export class AppModule {
-  imports = [
+@Module({
+  imports: [
     AuthModule,
     UsersModule,
     ProductsModule,
@@ -26,5 +26,6 @@ export class AppModule {
     ReturnsModule,
     ReportsModule,
     AuditLogsModule,
-  ];
-}
+  ],
+})
+export class AppModule {}
