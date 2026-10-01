@@ -4,17 +4,20 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { appConfig } from './config/app.config';
 
-async function bootstrap(): Promise<void> {
+export async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors();
-  app.setGlobalPrefix(appConfig.apiPrefix);
+  app.setGlobalPrefix('api');
+  app.enableCors({
+    origin: true,
+    credentials: true,
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: false,
       transform: true,
+      forbidNonWhitelisted: false,
     }),
   );
 
@@ -22,7 +25,7 @@ async function bootstrap(): Promise<void> {
 
   await app.listen(appConfig.port);
   console.log(
-    `Backend server is running on http://localhost:${appConfig.port}/${appConfig.apiPrefix}`,
+    `🚀 Backend server is running on http://localhost:${appConfig.port}/api`,
   );
 }
 

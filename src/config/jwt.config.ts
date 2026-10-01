@@ -1,6 +1,15 @@
-export const jwtConfig = {
+import type { StringValue } from 'ms';
+
+export interface IJwtConfig {
+  secret: string;
+  expiresIn: StringValue | number;
+  refreshSecret: string;
+  refreshExpiresIn: StringValue | number;
+}
+
+export const jwtConfig: IJwtConfig = {
   secret: process.env.JWT_SECRET ?? 'htbh-jwt-secret-key',
-  expiresIn: 3600, // 1 hour (3600 seconds)
+  expiresIn: (process.env.JWT_EXPIRES_IN as StringValue) ?? '1h',
   refreshSecret: process.env.JWT_REFRESH_SECRET ?? 'htbh-jwt-refresh-secret',
-  refreshExpiresIn: 7 * 24 * 3600, // 7 days (604800 seconds)
+  refreshExpiresIn: (process.env.JWT_REFRESH_EXPIRES_IN as StringValue) ?? '7d',
 };

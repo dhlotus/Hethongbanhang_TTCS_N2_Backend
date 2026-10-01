@@ -1,19 +1,23 @@
 # Compiled output
 dist/
+build/
 
-# Dependencies
+# Dependency directories
 node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Environment files
 .env
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-*.log
-
-# OS metadata
+# OS files
 .DS_Store
 Thumbs.db

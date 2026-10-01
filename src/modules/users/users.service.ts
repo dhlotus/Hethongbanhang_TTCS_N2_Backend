@@ -9,20 +9,26 @@ import { UserEntity } from './entities/user.entity';
 export class UsersService implements OnModuleInit {
   private users: Map<string, UserEntity> = new Map();
 
-  async onModuleInit(): Promise<void> {
-    await this.seedInitialUsers();
+  constructor() {
+    this.seedInitialUsersSync();
   }
 
-  private async seedInitialUsers(): Promise<void> {
+  async onModuleInit(): Promise<void> {
+    if (this.users.size === 0) {
+      this.seedInitialUsersSync();
+    }
+  }
+
+  private seedInitialUsersSync(): void {
     const defaultPassword = '123456';
-    const passwordHash = await bcrypt.hash(defaultPassword, BCRYPT_SALT_ROUNDS);
+    const passwordHash = bcrypt.hashSync(defaultPassword, BCRYPT_SALT_ROUNDS);
 
     const initialUsers: Array<Partial<UserEntity>> = [
       {
         id: 'usr-admin-001',
         email: 'admin@loha.vn',
         username: 'admin',
-        fullName: 'Nguyễn Văn Admin',
+        fullName: 'Nguyễn Văn Admin (Quản Trị Viên)',
         role: UserRole.ADMIN,
         status: UserStatus.ACTIVE,
         passwordHash,
@@ -33,7 +39,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-sales-002',
         email: 'sales@loha.vn',
         username: 'sales',
-        fullName: 'Trần Văn Nam',
+        fullName: 'Trần Văn Nam (Nhân Viên Kinh Doanh)',
         role: UserRole.SALES_REP,
         status: UserStatus.ACTIVE,
         passwordHash,
@@ -44,7 +50,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-salesmgr-003',
         email: 'salesmanager@loha.vn',
         username: 'salesmanager',
-        fullName: 'Lê Hoàng Trưởng Phòng',
+        fullName: 'Lê Hoàng Trưởng Phòng (Quản Lý Kinh Doanh)',
         role: UserRole.SALES_MANAGER,
         status: UserStatus.ACTIVE,
         passwordHash,
@@ -55,7 +61,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-wh-004',
         email: 'warehouse@loha.vn',
         username: 'warehouse',
-        fullName: 'Phạm Hùng Kho',
+        fullName: 'Phạm Hùng Kho (Thủ Kho)',
         role: UserRole.WAREHOUSE_KEEPER,
         status: UserStatus.ACTIVE,
         passwordHash,
@@ -66,7 +72,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-whmgr-005',
         email: 'warehousemanager@loha.vn',
         username: 'warehousemanager',
-        fullName: 'Đỗ Quốc Bảo',
+        fullName: 'Đỗ Quốc Bảo (Quản Lý Kho)',
         role: UserRole.WAREHOUSE_MANAGER,
         status: UserStatus.ACTIVE,
         passwordHash,
@@ -77,7 +83,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-acc-006',
         email: 'accountant@loha.vn',
         username: 'accountant',
-        fullName: 'Vũ Mai Hoa',
+        fullName: 'Vũ Mai Hoa (Kế Toán Công Nợ)',
         role: UserRole.ACCOUNTANT,
         status: UserStatus.ACTIVE,
         passwordHash,
@@ -88,7 +94,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-cust-007',
         email: 'dealer@loha.vn',
         username: 'dealer',
-        fullName: 'Cửa Hàng Minh Khang',
+        fullName: 'Đại Lý Cửa Hàng Minh Khang (B2B)',
         role: UserRole.CUSTOMER,
         status: UserStatus.ACTIVE,
         passwordHash,
