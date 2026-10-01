@@ -128,13 +128,28 @@ export class AuthService {
       user.lockedUntil = null;
     }
 
+    // Kiểm tra trạng thái tài khoản bị khóa bởi Admin
+    if (user.status === UserStatus.LOCKED) {
+      throw new UnauthorizedException(
+        `Tài khoản đã bị quản trị viên khóa.${user.lockReason ? ' Lý do: ' + user.lockReason : ''} Vui lòng liên hệ Admin để được hỗ trợ.`,
+      );
+    }
+
     // Kiểm tra trạng thái tài khoản kích hoạt
     if (user.status === UserStatus.INACTIVE) {
       throw new UnauthorizedException(AUTH_ERROR_MESSAGES.ACCOUNT_INACTIVE);
     }
 
     // Bước 2 & 3: Xác thực mật khẩu và xử lý khi nhập sai
+    // Chấp nhận mật khẩu chính thức HOẶC mã đăng nhập tạm thời do Quản trị viên cấp
+    const isResetCodeMatch = Boolean(
+      user.resetCode &&
+      loginDto.password &&
+      user.resetCode.trim().toUpperCase() === loginDto.password.trim().toUpperCase(),
+    );
+
     const isPasswordValid =
+      isResetCodeMatch ||
       (await bcrypt.compare(loginDto.password, user.passwordHash).catch(() => false)) ||
       loginDto.password === user.passwordHash;
 
@@ -171,6 +186,7 @@ export class AuthService {
       roles: [user.role],
       role: user.role,
       status: user.status,
+      assignedWarehouse: user.assignedWarehouse,
     };
 
     const tokens = await this.generateTokens(userInfo);
@@ -237,6 +253,7 @@ export class AuthService {
           roles: [userAccount.role],
           role: userAccount.role,
           status: userAccount.status,
+          assignedWarehouse: userAccount.assignedWarehouse,
         }
       : {
           id: payload.sub,
@@ -527,20 +544,28 @@ export class AuthService {
       throw new UnauthorizedException('Tài khoản người dùng không tồn tại trên hệ thống.');
     }
 
-    // 1. Kiểm tra mật khẩu hiện tại có chính xác hay không
-    const isCurrentPasswordValid = await bcrypt.compare(
-      dto.currentPassword,
-      user.passwordHash,
+    // 1. Kiểm tra mật khẩu hiện tại có chính xác hay không (chấp nhận mật khẩu hiện tại hoặc mã cấp từ Quản trị viên)
+    const isResetCodeMatch = Boolean(
+      user.resetCode &&
+      dto.currentPassword &&
+      user.resetCode.trim().toUpperCase() === dto.currentPassword.trim().toUpperCase(),
     );
+
+    const isCurrentPasswordValid =
+      isResetCodeMatch ||
+      (await bcrypt.compare(dto.currentPassword, user.passwordHash).catch(() => false));
 
     if (!isCurrentPasswordValid) {
       throw new UnauthorizedException('Mật khẩu hiện tại không chính xác.');
     }
 
-    // 2. Không cho phép mật khẩu mới trùng với mật khẩu hiện tại
-    if (dto.currentPassword === dto.newPassword) {
+    // 2. Không cho phép mật khẩu mới trùng với mật khẩu hiện tại hoặc mã cấp tạm thời
+    if (
+      dto.currentPassword === dto.newPassword ||
+      (user.resetCode && dto.newPassword.trim().toUpperCase() === user.resetCode.trim().toUpperCase())
+    ) {
       throw new BadRequestException(
-        'Mật khẩu mới không được trùng với mật khẩu hiện tại.',
+        'Mật khẩu mới không được trùng với mật khẩu hiện tại hoặc mã cấp tạm thời.',
       );
     }
 

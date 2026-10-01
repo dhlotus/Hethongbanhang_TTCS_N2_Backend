@@ -510,6 +510,8 @@ export class UsersService implements OnModuleInit {
       return;
     }
     user.passwordHash = newPasswordHash;
+    user.resetCode = null;
+    user.resetCodeCreatedAt = null;
     user.failedAttempts = 0;
     user.lockedUntil = null;
     user.updatedAt = new Date();

@@ -6,6 +6,7 @@ export interface IAuthUserInfo {
   roles: string[];
   role?: string;
   status?: string;
+  assignedWarehouse?: string;
 }
 
 export class TokenResponseDto {

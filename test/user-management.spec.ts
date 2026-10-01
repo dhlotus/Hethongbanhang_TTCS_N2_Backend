@@ -194,31 +194,29 @@ async function runTests(): Promise<void> {
   const userCheck1 = await usersService.findById(newAccount.user.id);
   assert(userCheck1?.resetCode === codeRes.resetCode, 'Mã cấp tiếp tục hiển thị chừng nào nhân sự chưa đổi mật khẩu');
 
-  // 3. Nhân sự nhập sai mã -> Báo lỗi
-  try {
-    await authService.resetPasswordWithCode({
-      identifier: 'minhle_acc',
-      resetCode: 'LH-000000',
-      newPassword: 'NewPassword123',
-    });
-    assert(false, 'Nhập sai mã cấp phải bị từ chối');
-  } catch (err: any) {
-    assert(err.message.includes('Mã cấp đổi mật khẩu không chính xác'), 'Từ chối mã cấp không chính xác');
-  }
+  // 3. Nhân sự có thể nhập tên đăng nhập bình thường và nhập mã này vào ô Mật khẩu để đăng nhập trực tiếp
+  const loginWithCode = await authService.login({
+    username: 'minhle_acc',
+    password: codeRes.resetCode,
+  });
+  assert(Boolean(loginWithCode.accessToken), 'Đăng nhập trực tiếp thành công bằng mã cấp từ Admin trong ô Mật khẩu');
 
-  // 4. Nhân sự nhập đúng mã -> Đổi mật khẩu thành công
-  const resetSuccess = await authService.resetPasswordWithCode({
-    identifier: 'minhle_acc',
-    resetCode: codeRes.resetCode,
+  // 4. Mã vẫn tiếp tục hiển thị trên tài khoản vì nhân sự chưa tự đổi mật khẩu mới
+  const userCheckStillHasCode = await usersService.findById(newAccount.user.id);
+  assert(userCheckStillHasCode?.resetCode === codeRes.resetCode, 'Mã cấp vẫn hiển thị khi nhân sự mới đăng nhập mà chưa đổi mật khẩu');
+
+  // 5. Nhân sự tự đổi mật khẩu trong ứng dụng bằng cách dùng mã admin làm currentPassword
+  const changePassRes = await authService.changePassword(newAccount.user.id, {
+    currentPassword: codeRes.resetCode,
     newPassword: 'NewPassword123',
   });
-  assert(resetSuccess.success === true, 'Nhân sự đổi mật khẩu thành công bằng mã được Admin cấp');
+  assert(changePassRes.success === true, 'Đổi mật khẩu thành công khi dùng mã admin làm mật khẩu hiện tại');
 
-  // 5. Kiểm tra mã ĐÃ BỊ XÓA sau khi đổi thành công (không còn hiển thị)
+  // 6. Kiểm tra mã ĐÃ BỊ XÓA sau khi đổi thành công (không còn hiển thị)
   const userCheck2 = await usersService.findById(newAccount.user.id);
   assert(userCheck2?.resetCode === null, 'Mã cấp tự động biến mất sau khi nhân sự đã đổi mật khẩu thành công');
 
-  // 6. Đăng nhập thử với mật khẩu mới
+  // 7. Đăng nhập thử với mật khẩu mới
   const loginWithNewPass = await authService.login({
     username: 'minhle_acc',
     password: 'NewPassword123',
