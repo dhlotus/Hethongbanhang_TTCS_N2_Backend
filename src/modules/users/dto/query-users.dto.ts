@@ -14,7 +14,7 @@ export class QueryUsersDto {
   @Type(() => Number)
   @IsInt({ message: 'Limit phải là số nguyên' })
   @Min(1, { message: 'Limit phải lớn hơn hoặc bằng 1' })
-  limit?: number = 10;
+  limit?: number = 20;
 
   @IsOptional()
   @IsString()

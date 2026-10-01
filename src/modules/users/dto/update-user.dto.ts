@@ -13,6 +13,10 @@ export class UpdateUserDto {
   fullName?: string;
 
   @IsOptional()
+  @IsString({ message: 'Tên đăng nhập phải là chuỗi ký tự' })
+  username?: string;
+
+  @IsOptional()
   @IsEmail({}, { message: 'Email không đúng định dạng' })
   email?: string;
 

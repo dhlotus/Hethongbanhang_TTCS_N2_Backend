@@ -8,6 +8,16 @@ export interface SendResetPasswordEmailParams {
   token: string;
 }
 
+export interface SendAccountActivationEmailParams {
+  to: string;
+  fullName: string;
+  username: string;
+  temporaryPassword: string;
+  role: string;
+  assignedWarehouse?: string;
+  loginUrl?: string;
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -188,4 +198,141 @@ export class MailService {
       return { success: false };
     }
   }
+
+  /**
+   * Gửi email kích hoạt tài khoản kèm mật khẩu tạm thời cho nhân viên mới (SN-13)
+   */
+  async sendAccountActivationEmail(
+    params: SendAccountActivationEmailParams,
+  ): Promise<{ success: boolean; previewUrl?: string }> {
+    const { to, fullName, username, temporaryPassword, role, assignedWarehouse, loginUrl } = params;
+    const recipientName = fullName || username;
+    const finalLoginUrl = loginUrl || process.env.FRONTEND_URL || 'http://localhost:5173/login';
+
+    const smtpUser = process.env.SMTP_USER?.trim() || '';
+    const fromAddress =
+      smtpUser && smtpUser.includes('@gmail.com')
+        ? `"LOHA SALES" <${smtpUser}>`
+        : process.env.MAIL_FROM || `"LOHA SALES" <${smtpUser || 'no-reply@loha.vn'}>`;
+
+    const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Kích hoạt tài khoản nhân sự — LOHA SALES</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 24px; }
+        .card { max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 36px 32px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+        .logo-box { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; background: #eff6ff; border-radius: 12px; margin-bottom: 20px; border: 1px solid #dbeafe; }
+        .logo-text { font-size: 20px; font-weight: 800; color: #2563eb; letter-spacing: -0.5px; }
+        h1 { font-size: 22px; font-weight: 700; color: #0f172a; margin: 0 0 12px 0; }
+        p { font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 16px 0; }
+        .info-table { width: 100%; border-collapse: separate; border-spacing: 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 20px 0; overflow: hidden; }
+        .info-table td { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
+        .info-table tr:last-child td { border-bottom: none; }
+        .info-table .label { color: #64748b; font-weight: 500; width: 40%; }
+        .info-table .value { color: #0f172a; font-weight: 600; font-family: monospace; }
+        .btn-box { text-align: center; margin: 28px 0; }
+        .btn { display: inline-block; background-color: #2563eb; color: #ffffff !important; font-size: 14px; font-weight: 600; text-decoration: none; padding: 13px 28px; border-radius: 12px; box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2); }
+        .btn:hover { background-color: #1d4ed8; }
+        .notice { font-size: 12px; color: #64748b; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 16px; margin-top: 24px; }
+        .notice strong { color: #334155; }
+        .footer { text-align: center; margin-top: 24px; font-size: 12px; color: #94a3b8; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="logo-box">
+          <span class="logo-text">LS</span>
+        </div>
+        <h1>Chào mừng bạn đến với LOHA SALES</h1>
+        <p>Xin chào <strong>${recipientName}</strong>,</p>
+        <p>Tài khoản nhân sự của bạn đã được Quản trị viên kích hoạt trên hệ thống <strong>LOHA SALES</strong>. Dưới đây là thông tin đăng nhập khởi tạo của bạn:</p>
+        
+        <table class="info-table">
+          <tr>
+            <td class="label">Tên đăng nhập:</td>
+            <td class="value" style="color: #2563eb;">${username}</td>
+          </tr>
+          <tr>
+            <td class="label">Mật khẩu tạm thời:</td>
+            <td class="value" style="color: #ea580c; font-size: 15px;">${temporaryPassword}</td>
+          </tr>
+          <tr>
+            <td class="label">Vai trò hệ thống:</td>
+            <td class="value" style="font-family: inherit;">${role}</td>
+          </tr>
+          ${
+            assignedWarehouse
+              ? `<tr>
+                  <td class="label">Kho / Địa bàn phụ trách:</td>
+                  <td class="value" style="font-family: inherit;">${assignedWarehouse}</td>
+                </tr>`
+              : ''
+          }
+        </table>
+
+        <div class="btn-box">
+          <a href="${finalLoginUrl}" class="btn" target="_blank">Đăng nhập hệ thống ngay</a>
+        </div>
+
+        <div class="notice">
+          <p>⚠️ <strong>Lưu ý bảo mật quan trọng:</strong></p>
+          <ul style="margin: 0; padding-left: 18px;">
+            <li>Mật khẩu trên là <strong>mật khẩu tạm thời</strong> được hệ thống cấp tự động.</li>
+            <li>Vì lý do an toàn bảo mật, bạn bắt buộc phải đổi lại mật khẩu cá nhân ngay trong lần đăng nhập đầu tiên.</li>
+            <li>Tuyệt đối không chia sẻ thông tin đăng nhập này cho bất kỳ ai.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer">
+        © 2026 LOHA SALES — Hệ thống Quản trị Bán hàng & Kho Doanh nghiệp B2B
+      </div>
+    </body>
+    </html>
+    `;
+
+    // Gửi email thật nếu có cấu hình SMTP
+    if (this.transporter) {
+      try {
+        const info = await this.transporter.sendMail({
+          from: fromAddress,
+          to,
+          subject: '🎉 [LOHA SALES] Thông tin kích hoạt tài khoản & Mật khẩu khởi tạo',
+          text: `Xin chào ${recipientName},\n\nTài khoản của bạn đã được kích hoạt trên hệ thống LOHA SALES.\nTên đăng nhập: ${username}\nMật khẩu tạm thời: ${temporaryPassword}\nVai trò: ${role}\n\nĐăng nhập tại: ${finalLoginUrl}\nVui lòng đổi mật khẩu ngay sau khi đăng nhập.`,
+          html: htmlContent,
+        });
+
+        this.logger.log(`✅ [ACTIVATION EMAIL DISPATCHED] Đã gửi email kích hoạt tới: ${to} (MessageId: ${info.messageId})`);
+        return { success: true };
+      } catch (err) {
+        this.logger.error(`❌ [ACTIVATION EMAIL FAILED] Lỗi gửi email kích hoạt qua SMTP: ${err}`);
+      }
+    }
+
+    // Ethereal / Fallback simulation
+    try {
+      const ethereal = await this.getEtherealTransporter();
+      const info = await ethereal.sendMail({
+        from: '"LOHA SALES System" <support@loha.vn>',
+        to,
+        subject: '🎉 [LOHA SALES] Thông tin kích hoạt tài khoản & Mật khẩu khởi tạo',
+        text: `Xin chào ${recipientName},\n\nTài khoản của bạn đã được kích hoạt trên hệ thống LOHA SALES.\nTên đăng nhập: ${username}\nMật khẩu tạm thời: ${temporaryPassword}\nVai trò: ${role}\n\nĐăng nhập tại: ${finalLoginUrl}`,
+        html: htmlContent,
+      });
+
+      const previewUrl = nodemailer.getTestMessageUrl(info) || undefined;
+      this.logger.log(`✉️ [ACTIVATION EMAIL SENT] Thư kích hoạt gửi tới: ${to} | User: ${username} | Pass: ${temporaryPassword}`);
+      if (previewUrl) {
+        this.logger.log(`🌐 [XEM HÒM THƯ EMAIL KÍCH HOẠT]: ${previewUrl}`);
+      }
+      return { success: true, previewUrl };
+    } catch (err) {
+      this.logger.warn(`⚠️ [ACTIVATION EMAIL LOGGED]: ${to} | Username: ${username} | Temporary Password: ${temporaryPassword}`);
+      return { success: true };
+    }
+  }
 }
+

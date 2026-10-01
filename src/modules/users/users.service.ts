@@ -3,11 +3,13 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { BCRYPT_SALT_ROUNDS } from '../../common/constants/auth.constant';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
+import { MailService } from '../mail/mail.service';
 import {
   CreateUserDto,
   QueryUsersDto,
@@ -34,7 +36,7 @@ export class UsersService implements OnModuleInit {
   private users: Map<string, UserEntity> = new Map();
   private sessionRevoker?: (userId: string) => void;
 
-  constructor() {
+  constructor(@Optional() private readonly mailService?: MailService) {
     this.seedInitialUsersSync();
   }
 
@@ -189,7 +191,7 @@ export class UsersService implements OnModuleInit {
    */
   async findAll(query: QueryUsersDto): Promise<PaginatedUsersResult> {
     const page = Math.max(1, Number(query.page || 1));
-    const limit = Math.max(1, Number(query.limit || 10));
+    const limit = Math.max(1, Number(query.limit || 20));
     const search = query.search?.trim().toLowerCase();
     const role = query.role;
     const status = query.status;
@@ -203,7 +205,7 @@ export class UsersService implements OnModuleInit {
           u.fullName.toLowerCase().includes(search) ||
           u.username.toLowerCase().includes(search) ||
           u.email.toLowerCase().includes(search) ||
-          u.phone.includes(search),
+          u.phone.toLowerCase().includes(search),
       );
     }
 
@@ -265,24 +267,34 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Tạo mới tài khoản nhân sự (POST /api/users)
+   * Tạo mới tài khoản nhân sự (POST /api/users - SN-13):
+   * - Kiểm tra trùng lặp username hoặc email: Trả về BadRequestException kèm thông báo cụ thể
+   * - Tự động sinh mật khẩu tạm an toàn nếu không nhập
+   * - Mã hóa mật khẩu bằng bcrypt
+   * - Gửi email kích hoạt tài khoản kèm mật khẩu tạm thời cho nhân viên mới
    */
   async create(dto: CreateUserDto): Promise<CreateUserResult> {
     const username = dto.username.trim().toLowerCase();
     const email = dto.email.trim().toLowerCase();
 
-    // Kiểm tra trùng username hoặc email
+    // 1. Kiểm tra trùng lặp username hoặc email trong hệ thống
     for (const u of this.users.values()) {
       if (u.username.toLowerCase() === username) {
-        throw new BadRequestException(`Tên đăng nhập "${dto.username}" đã tồn tại trong hệ thống.`);
+        throw new BadRequestException(
+          `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Tên đăng nhập "${dto.username}" đã được sử dụng.`,
+        );
       }
       if (u.email.toLowerCase() === email) {
-        throw new BadRequestException(`Địa chỉ email "${dto.email}" đã được đăng ký.`);
+        throw new BadRequestException(
+          `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Địa chỉ email "${dto.email}" đã được đăng ký.`,
+        );
       }
     }
 
-    // Mật khẩu khởi tạo: sử dụng mật khẩu admin nhập hoặc tự sinh mặc định
-    const rawPassword = dto.password?.trim() || 'Loha@2026';
+    // 2. Mật khẩu khởi tạo: sử dụng mật khẩu admin nhập hoặc tự sinh mật khẩu tạm ngẫu nhiên an toàn
+    const rawPassword =
+      dto.password?.trim() ||
+      `Loha@${Math.floor(100000 + Math.random() * 900000)}`;
     const passwordHash = bcrypt.hashSync(rawPassword, BCRYPT_SALT_ROUNDS);
 
     const newUser = new UserEntity({
@@ -303,14 +315,39 @@ export class UsersService implements OnModuleInit {
 
     this.users.set(newUser.id, newUser);
 
+    // 3. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
+    if (this.mailService) {
+      try {
+        await this.mailService.sendAccountActivationEmail({
+          to: newUser.email,
+          fullName: newUser.fullName,
+          username: newUser.username,
+          temporaryPassword: rawPassword,
+          role: newUser.role,
+          assignedWarehouse: newUser.assignedWarehouse,
+        });
+      } catch (err) {
+        // Ghi log cảnh báo nhưng không làm gián đoạn việc tạo user
+        console.warn(
+          `[USERS_SERVICE] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
+          err,
+        );
+      }
+    } else {
+      console.log(
+        `✉️ [ACCOUNT ACTIVATION SIMULATION] Đã kích hoạt tài khoản: ${newUser.fullName} (${newUser.email}) | Username: ${newUser.username} | Mật khẩu tạm: ${rawPassword}`,
+      );
+    }
+
     return {
       user: newUser.toSafeUser(),
-      temporaryPassword: dto.password ? undefined : rawPassword,
+      temporaryPassword: rawPassword,
     };
   }
 
   /**
-   * Cập nhật thông tin người dùng (PATCH /api/users/:id)
+   * Cập nhật thông tin người dùng (PATCH /api/users/:id - SN-13):
+   * - Kiểm tra trùng lặp email và username đối với các user khác
    */
   async update(id: string, dto: UpdateUserDto): Promise<SafeUser> {
     const user = await this.findById(id);
@@ -318,11 +355,25 @@ export class UsersService implements OnModuleInit {
       throw new NotFoundException(`Không tìm thấy người dùng có ID: ${id}`);
     }
 
+    if (dto.username) {
+      const username = dto.username.trim().toLowerCase();
+      for (const u of this.users.values()) {
+        if (u.id !== id && u.username.toLowerCase() === username) {
+          throw new BadRequestException(
+            `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Tên đăng nhập "${dto.username}" đã thuộc về người dùng khác.`,
+          );
+        }
+      }
+      user.username = username;
+    }
+
     if (dto.email) {
       const email = dto.email.trim().toLowerCase();
       for (const u of this.users.values()) {
         if (u.id !== id && u.email.toLowerCase() === email) {
-          throw new BadRequestException(`Địa chỉ email "${dto.email}" đã thuộc về người dùng khác.`);
+          throw new BadRequestException(
+            `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Địa chỉ email "${dto.email}" đã thuộc về người dùng khác.`,
+          );
         }
       }
       user.email = email;
