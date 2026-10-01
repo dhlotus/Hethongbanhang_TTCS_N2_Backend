@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AuthService } from './auth.service';
 import {
   AuthMessageResponseDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   LoginResponseDto,
@@ -99,5 +100,23 @@ export class AuthController {
     @Body() resetPasswordDto: ResetPasswordDto,
   ): Promise<AuthMessageResponseDto> {
     return this.authService.resetPassword(resetPasswordDto);
+  }
+
+  /**
+   * Endpoint đổi mật khẩu tài khoản khi đang đăng nhập (SN-9)
+   * Yêu cầu xác thực qua Bearer Token
+   * POST /auth/change-password
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  async changePassword(
+    @CurrentUser() currentUser: ICurrentUser,
+    @Body() changePasswordDto: ChangePasswordDto,
+  ): Promise<AuthMessageResponseDto> {
+    return this.authService.changePassword(
+      currentUser.userId,
+      changePasswordDto,
+    );
   }
 }

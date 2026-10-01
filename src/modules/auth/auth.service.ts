@@ -22,6 +22,7 @@ import { AUTH_CONSTANTS } from './constants/auth.constant';
 import * as crypto from 'crypto';
 import {
   AuthMessageResponseDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   IAuthUserInfo,
   LoginDto,
@@ -486,6 +487,66 @@ export class AuthService {
     return {
       success: true,
       message: 'Đặt lại mật khẩu thành công! Vui lòng đăng nhập với mật khẩu mới.',
+    };
+  }
+
+  /**
+   * Đổi mật khẩu tài khoản khi đang đăng nhập (SN-9): POST /auth/change-password
+   * Yêu cầu kiểm tra currentPassword, hash bcrypt mật khẩu mới và thu hồi toàn bộ session cũ.
+   */
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+  ): Promise<AuthMessageResponseDto> {
+    if (!userId) {
+      throw new UnauthorizedException('Phiên đăng nhập không hợp lệ hoặc đã hết hạn.');
+    }
+
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('Tài khoản người dùng không tồn tại trên hệ thống.');
+    }
+
+    // 1. Kiểm tra mật khẩu hiện tại có chính xác hay không
+    const isCurrentPasswordValid = await bcrypt.compare(
+      dto.currentPassword,
+      user.passwordHash,
+    );
+
+    if (!isCurrentPasswordValid) {
+      throw new UnauthorizedException('Mật khẩu hiện tại không chính xác.');
+    }
+
+    // 2. Không cho phép mật khẩu mới trùng với mật khẩu hiện tại
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException(
+        'Mật khẩu mới không được trùng với mật khẩu hiện tại.',
+      );
+    }
+
+    // 3. Validate mật khẩu mới (tối thiểu 8 ký tự, có cả chữ cái và chữ số)
+    if (
+      dto.newPassword.length < 8 ||
+      !/[A-Za-z]/.test(dto.newPassword) ||
+      !/\d/.test(dto.newPassword)
+    ) {
+      throw new BadRequestException(
+        'Mật khẩu mới phải có tối thiểu 8 ký tự và chứa cả chữ cái lẫn chữ số.',
+      );
+    }
+
+    // 4. Mã hóa mật khẩu mới bằng bcrypt
+    const newPasswordHash = await bcrypt.hash(dto.newPassword, 10);
+
+    // 5. Cập nhật mật khẩu mới vào database
+    await this.usersService.updatePassword(user.id, newPasswordHash);
+
+    // 6. Bảo mật phiên (Session Revocation): Thu hồi toàn bộ Refresh Tokens của user này
+    this.revokeAllSessionsByUserId(user.id);
+
+    return {
+      success: true,
+      message: 'Đổi mật khẩu thành công! Vui lòng đăng nhập lại với mật khẩu mới.',
     };
   }
 }
