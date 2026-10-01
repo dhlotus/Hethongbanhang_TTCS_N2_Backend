@@ -1,4 +1,7 @@
-// Khung Controller: PriceBooksController
+import { Controller } from '@nestjs/common';
+import { PriceBooksService } from './price-books.service';
+
+@Controller('price-books')
 export class PriceBooksController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly priceBooksService: PriceBooksService) {}
 }

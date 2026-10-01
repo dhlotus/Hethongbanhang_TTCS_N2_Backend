@@ -1,8 +1,10 @@
+import { Module } from '@nestjs/common';
 import { PriceBooksController } from './price-books.controller';
 import { PriceBooksService } from './price-books.service';
 
-export class PriceBooksModule {
-  controllers = [PriceBooksController];
-  providers = [PriceBooksService];
-  exports = [PriceBooksService];
-}
+@Module({
+  controllers: [PriceBooksController],
+  providers: [PriceBooksService],
+  exports: [PriceBooksService],
+})
+export class PriceBooksModule {}

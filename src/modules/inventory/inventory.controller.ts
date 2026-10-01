@@ -1,4 +1,7 @@
-// Khung Controller: InventoryController
+import { Controller } from '@nestjs/common';
+import { InventoryService } from './inventory.service';
+
+@Controller('inventory')
 export class InventoryController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly inventoryService: InventoryService) {}
 }

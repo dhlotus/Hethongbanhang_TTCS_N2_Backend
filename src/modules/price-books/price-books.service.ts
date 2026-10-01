@@ -1,4 +1,4 @@
-// Khung Service: PriceBooksService
-export class PriceBooksService {
-  // Business logic sẽ được triển khai trong từng Sprint
-}
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class PriceBooksService {}

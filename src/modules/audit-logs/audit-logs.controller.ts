@@ -1,4 +1,7 @@
-// Khung Controller: AuditLogsController
+import { Controller } from '@nestjs/common';
+import { AuditLogsService } from './audit-logs.service';
+
+@Controller('audit-logs')
 export class AuditLogsController {
-  // Endpoints sẽ được triển khai trong từng Sprint
+  constructor(private readonly auditLogsService: AuditLogsService) {}
 }
