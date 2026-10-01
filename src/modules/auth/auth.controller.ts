@@ -21,6 +21,7 @@ import {
   LogoutResponseDto,
   RefreshTokenDto,
   ResetPasswordDto,
+  ResetPasswordWithCodeDto,
   TokenResponseDto,
 } from './dto';
 import { ICurrentUser } from './interfaces/current-user.interface';
@@ -100,6 +101,19 @@ export class AuthController {
     @Body() resetPasswordDto: ResetPasswordDto,
   ): Promise<AuthMessageResponseDto> {
     return this.authService.resetPassword(resetPasswordDto);
+  }
+
+  /**
+   * Endpoint đặt lại mật khẩu bằng mã cấp từ Quản trị viên (SN-10 Extension)
+   * POST /auth/reset-password-with-code
+   */
+  @Public()
+  @Post('reset-password-with-code')
+  @HttpCode(HttpStatus.OK)
+  async resetPasswordWithCode(
+    @Body() dto: ResetPasswordWithCodeDto,
+  ): Promise<AuthMessageResponseDto> {
+    return this.authService.resetPasswordWithCode(dto);
   }
 
   /**

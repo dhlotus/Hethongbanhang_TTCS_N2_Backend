@@ -6,3 +6,4 @@ export * from './forgot-password.dto';
 export * from './reset-password.dto';
 export * from './change-password.dto';
 export * from './auth-message.dto';
+export * from './reset-password-with-code.dto';

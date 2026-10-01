@@ -31,6 +31,7 @@ import {
   LogoutResponseDto,
   RefreshTokenDto,
   ResetPasswordDto,
+  ResetPasswordWithCodeDto,
   TokenResponseDto,
 } from './dto';
 import { RefreshTokenEntity } from './entities/refresh-token.entity';
@@ -92,6 +93,11 @@ export class AuthService {
     }
     if (this.usersService && typeof this.usersService.onModuleInit === 'function') {
       void this.usersService.onModuleInit();
+    }
+    if (this.usersService && typeof this.usersService.registerSessionRevoker === 'function') {
+      this.usersService.registerSessionRevoker((userId: string) => {
+        this.revokeAllSessionsByUserId(userId);
+      });
     }
   }
 
@@ -488,6 +494,20 @@ export class AuthService {
       success: true,
       message: 'Đặt lại mật khẩu thành công! Vui lòng đăng nhập với mật khẩu mới.',
     };
+  }
+
+  /**
+   * Đặt lại mật khẩu tài khoản bằng mã cấp từ Quản trị viên (SN-10 Extension)
+   * POST /auth/reset-password-with-code
+   */
+  async resetPasswordWithCode(
+    dto: ResetPasswordWithCodeDto,
+  ): Promise<AuthMessageResponseDto> {
+    return this.usersService.resetPasswordWithCode(
+      dto.identifier,
+      dto.resetCode,
+      dto.newPassword,
+    );
   }
 
   /**
