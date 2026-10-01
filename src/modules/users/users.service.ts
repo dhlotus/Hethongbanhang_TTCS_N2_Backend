@@ -25,6 +25,17 @@ export class UsersService implements OnModuleInit {
 
     const initialUsers: Array<Partial<UserEntity>> = [
       {
+        id: 'usr-admin-pduc',
+        email: 'phucducha12@gmail.com',
+        username: 'phucducha12',
+        fullName: 'Nguyễn Phúc Đức (Quản Trị Viên)',
+        role: UserRole.ADMIN,
+        status: UserStatus.ACTIVE,
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
         id: 'usr-admin-001',
         email: 'admin@loha.vn',
         username: 'admin',
@@ -109,8 +120,23 @@ export class UsersService implements OnModuleInit {
     }
   }
 
+  private static readonly EMAIL_ALIASES: Record<string, string> = {
+    'quantrihethong@loha.vn': 'admin@loha.vn',
+    'nhanvienkinhdoanh@loha.vn': 'sales@loha.vn',
+    'quanlykinhdoanh@loha.vn': 'salesmanager@loha.vn',
+    'thukho@loha.vn': 'warehouse@loha.vn',
+    'quanlykho@loha.vn': 'warehousemanager@loha.vn',
+    'ketoan@loha.vn': 'accountant@loha.vn',
+    'ketoancongno@loha.vn': 'accountant@loha.vn',
+    'daily@loha.vn': 'dealer@loha.vn',
+    'khachhang@loha.vn': 'dealer@loha.vn',
+  };
+
   async findByEmailOrUsername(identifier: string): Promise<UserEntity | null> {
-    const normalizedIdentifier = identifier.trim().toLowerCase();
+    const rawNormalized = identifier.trim().toLowerCase();
+    const normalizedIdentifier =
+      UsersService.EMAIL_ALIASES[rawNormalized] || rawNormalized;
+
     for (const user of this.users.values()) {
       if (
         user.email.toLowerCase() === normalizedIdentifier ||
@@ -145,6 +171,20 @@ export class UsersService implements OnModuleInit {
     if (!user) {
       return;
     }
+    user.failedAttempts = 0;
+    user.lockedUntil = null;
+    user.updatedAt = new Date();
+  }
+
+  /**
+   * Cập nhật mật khẩu mới cho người dùng và mở khóa tài khoản nếu có
+   */
+  async updatePassword(userId: string, newPasswordHash: string): Promise<void> {
+    const user = this.users.get(userId);
+    if (!user) {
+      return;
+    }
+    user.passwordHash = newPasswordHash;
     user.failedAttempts = 0;
     user.lockedUntil = null;
     user.updatedAt = new Date();

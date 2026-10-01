@@ -1,6 +1,9 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
+  NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -14,19 +17,33 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
 import { jwtConfig } from '../../config/jwt.config';
 import { UsersService } from '../users/users.service';
+import { MailService } from '../mail/mail.service';
 import { AUTH_CONSTANTS } from './constants/auth.constant';
+import * as crypto from 'crypto';
 import {
+  AuthMessageResponseDto,
+  ForgotPasswordDto,
   IAuthUserInfo,
   LoginDto,
   LoginResponseDto,
   LogoutDto,
   LogoutResponseDto,
   RefreshTokenDto,
+  ResetPasswordDto,
   TokenResponseDto,
 } from './dto';
 import { RefreshTokenEntity } from './entities/refresh-token.entity';
 import { ICurrentUser } from './interfaces/current-user.interface';
 import { IJwtPayload } from './interfaces/jwt-payload.interface';
+
+export interface IResetPasswordToken {
+  token: string;
+  userId: string;
+  email: string;
+  expiresAt: Date;
+  isUsed: boolean;
+  createdAt: Date;
+}
 
 const DUMMY_HASH =
   '$2b$10$Ep9Wv7.Xp3JmP0g1o5m.I.2p9n7j3x9kF8abc1234567890123456';
@@ -43,19 +60,34 @@ export class AuthService {
    */
   private readonly blacklistedTokens = new Set<string>();
 
+  /**
+   * Bộ nhớ lưu trữ token đặt lại mật khẩu tạm thời (Hiệu lực 30 phút, chỉ dùng 1 lần)
+   */
+  private readonly resetPasswordTokens = new Map<string, IResetPasswordToken>();
+
   private readonly usersService: UsersService;
   private readonly jwtService: JwtService;
+  private readonly mailService: MailService;
 
   constructor(
-    arg1: JwtService | UsersService,
-    arg2?: JwtService | UsersService,
+    usersService: UsersService,
+    jwtService: JwtService,
+    mailService?: MailService,
+  );
+  constructor(jwtService: JwtService);
+  constructor(
+    @Inject(UsersService) arg1: UsersService | JwtService,
+    @Inject(JwtService) @Optional() arg2?: JwtService | UsersService,
+    @Inject(MailService) @Optional() arg3?: MailService,
   ) {
     if (arg1 instanceof JwtService) {
       this.jwtService = arg1;
       this.usersService = (arg2 as UsersService) ?? new UsersService();
+      this.mailService = arg3 ?? new MailService();
     } else {
-      this.usersService = arg1;
+      this.usersService = arg1 ?? new UsersService();
       this.jwtService = (arg2 as JwtService) ?? new JwtService();
+      this.mailService = arg3 ?? new MailService();
     }
     if (this.usersService && typeof this.usersService.onModuleInit === 'function') {
       void this.usersService.onModuleInit();
@@ -327,5 +359,133 @@ export class AuthService {
     }
     const session = this.tokenSessionStore.get(token);
     return session ? session.isRevoked : false;
+  }
+
+  /**
+   * Yêu cầu đặt lại mật khẩu qua email (SN-8): POST /auth/forgot-password
+   * Anti-enumeration: Luôn trả về phản hồi thành công chung chung dù email có tồn tại hay không.
+   */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<AuthMessageResponseDto> {
+    const rawEmail = (dto.email || '').trim().toLowerCase();
+    const user = await this.usersService.findByEmailOrUsername(rawEmail);
+
+    const genericSuccessMessage =
+      'Nếu địa chỉ email tồn tại trên hệ thống, chúng tôi đã gửi liên kết đặt lại mật khẩu. Vui lòng kiểm tra hộp thư (kể cả thư mục spam).';
+
+    if (!user) {
+      throw new NotFoundException(
+        'Địa chỉ email này chưa được đăng ký trong hệ thống!',
+      );
+    }
+
+    if (user.status === UserStatus.INACTIVE) {
+      throw new BadRequestException(
+        'Tài khoản này hiện đang bị tạm khóa. Vui lòng liên hệ quản trị viên!',
+      );
+    }
+
+    // Hủy bỏ các token reset cũ chưa dùng của user này
+    for (const [key, item] of this.resetPasswordTokens.entries()) {
+      if (item.userId === user.id && !item.isUsed) {
+        this.resetPasswordTokens.delete(key);
+      }
+    }
+
+    // Sinh token ngẫu nhiên bảo mật 64 hex characters (32 bytes)
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // Hiệu lực 30 phút
+
+    this.resetPasswordTokens.set(token, {
+      token,
+      userId: user.id,
+      email: user.email,
+      expiresAt,
+      isUsed: false,
+      createdAt: new Date(),
+    });
+
+    const frontendUrl = process.env.APP_FRONTEND_URL || 'http://localhost:5173';
+    const resetUrl = `${frontendUrl}/auth/reset-password?token=${token}`;
+
+    console.log(`\n=============================================================================`);
+    console.log(`[EMAIL DISPATCH] Đang gửi thư đặt lại mật khẩu cho: ${user.email}`);
+    console.log(`Địa chỉ liên kết: ${resetUrl}`);
+    console.log(`Mã Token (Hiệu lực 30 phút, chỉ dùng 1 lần): ${token}`);
+    console.log(`Thời điểm hết hạn: ${expiresAt.toISOString()}`);
+
+    // Gửi email thật qua MailService (SMTP Gmail / Server nội bộ hoặc Ethereal)
+    try {
+      const mailResult = await this.mailService.sendResetPasswordEmail({
+        to: user.email,
+        fullName: user.fullName,
+        resetLink: resetUrl,
+        token,
+      });
+
+      if (mailResult.previewUrl) {
+        console.log(`🌐 Xem nội dung email trực quan tại: ${mailResult.previewUrl}`);
+      }
+    } catch (mailError) {
+      console.error(`[MAIL ERROR] Lỗi khi gửi email:`, mailError);
+    }
+
+    console.log(`=============================================================================\n`);
+
+    return {
+      success: true,
+      message: genericSuccessMessage,
+    };
+  }
+
+  /**
+   * Đặt lại mật khẩu mới bằng token qua email (SN-8): POST /auth/reset-password
+   * Kiểm tra token hợp lệ, thời hạn 30 phút, chưa dùng; cập nhật mật khẩu và thu hồi toàn bộ session cũ.
+   */
+  async resetPassword(dto: ResetPasswordDto): Promise<AuthMessageResponseDto> {
+    const rawToken = (dto.token || '').trim();
+    if (!rawToken) {
+      throw new BadRequestException('Mã xác thực token không hợp lệ.');
+    }
+
+    const tokenRecord = this.resetPasswordTokens.get(rawToken);
+    if (!tokenRecord) {
+      throw new BadRequestException(
+        'Liên kết đặt lại mật khẩu không hợp lệ hoặc không tồn tại. Vui lòng gửi lại yêu cầu mới.',
+      );
+    }
+
+    if (tokenRecord.isUsed) {
+      throw new BadRequestException(
+        'Liên kết đặt lại mật khẩu này đã được sử dụng. Mỗi liên kết chỉ được dùng một lần.',
+      );
+    }
+
+    if (tokenRecord.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException(
+        'Liên kết đặt lại mật khẩu đã hết hạn (chỉ có hiệu lực trong vòng 30 phút). Vui lòng gửi lại yêu cầu mới.',
+      );
+    }
+
+    const user = await this.usersService.findById(tokenRecord.userId);
+    if (!user) {
+      throw new BadRequestException('Tài khoản người dùng không còn tồn tại trên hệ thống.');
+    }
+
+    // 1. Mã hóa mật khẩu mới bằng bcrypt
+    const newPasswordHash = await bcrypt.hash(dto.newPassword, 10);
+
+    // 2. Cập nhật mật khẩu và reset trạng thái khóa
+    await this.usersService.updatePassword(user.id, newPasswordHash);
+
+    // 3. Đánh dấu token đã sử dụng (chỉ dùng 1 lần)
+    tokenRecord.isUsed = true;
+
+    // 4. Thu hồi toàn bộ phiên đăng nhập cũ trên mọi thiết bị
+    this.revokeAllSessionsByUserId(user.id);
+
+    return {
+      success: true,
+      message: 'Đặt lại mật khẩu thành công! Vui lòng đăng nhập với mật khẩu mới.',
+    };
   }
 }

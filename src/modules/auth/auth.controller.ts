@@ -12,11 +12,14 @@ import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AuthService } from './auth.service';
 import {
+  AuthMessageResponseDto,
+  ForgotPasswordDto,
   LoginDto,
   LoginResponseDto,
   LogoutDto,
   LogoutResponseDto,
   RefreshTokenDto,
+  ResetPasswordDto,
   TokenResponseDto,
 } from './dto';
 import { ICurrentUser } from './interfaces/current-user.interface';
@@ -70,5 +73,31 @@ export class AuthController {
   @Get('me')
   getProfile(@CurrentUser() currentUser: ICurrentUser): ICurrentUser {
     return currentUser;
+  }
+
+  /**
+   * Endpoint yêu cầu gửi email đặt lại mật khẩu (SN-8)
+   * POST /auth/forgot-password
+   */
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(
+    @Body() forgotPasswordDto: ForgotPasswordDto,
+  ): Promise<AuthMessageResponseDto> {
+    return this.authService.forgotPassword(forgotPasswordDto);
+  }
+
+  /**
+   * Endpoint đặt lại mật khẩu mới bằng token qua email (SN-8)
+   * POST /auth/reset-password
+   */
+  @Public()
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(
+    @Body() resetPasswordDto: ResetPasswordDto,
+  ): Promise<AuthMessageResponseDto> {
+    return this.authService.resetPassword(resetPasswordDto);
   }
 }
