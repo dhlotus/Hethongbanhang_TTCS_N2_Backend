@@ -130,9 +130,13 @@ export class AuthService {
 
     // Kiểm tra trạng thái tài khoản bị khóa bởi Admin
     if (user.status === UserStatus.LOCKED) {
-      throw new UnauthorizedException(
-        `Tài khoản đã bị quản trị viên khóa.${user.lockReason ? ' Lý do: ' + user.lockReason : ''} Vui lòng liên hệ Admin để được hỗ trợ.`,
-      );
+      const reasonText = user.lockReason ? ` Lý do: ${user.lockReason}.` : '';
+      throw new UnauthorizedException({
+        message: `Tài khoản đã bị quản trị viên khóa.${reasonText} Vui lòng liên hệ Admin để được hỗ trợ.`,
+        isLocked: true,
+        lockReason: user.lockReason || 'Theo quyết định của Quản trị viên',
+        status: 'LOCKED',
+      });
     }
 
     // Kiểm tra trạng thái tài khoản kích hoạt

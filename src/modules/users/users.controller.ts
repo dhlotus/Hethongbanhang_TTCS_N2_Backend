@@ -24,8 +24,10 @@ import {
 } from './dto';
 import { SafeUser } from './entities/user.entity';
 import {
+  AssignedCustomerItem,
   CreateUserResult,
   PaginatedUsersResult,
+  UpdateUserStatusResult,
   UsersService,
 } from './users.service';
 
@@ -82,7 +84,20 @@ export class UsersController {
   }
 
   /**
-   * Khóa hoặc Mở khóa tài khoản nhân sự (Thu hồi toàn bộ phiên đăng nhập khi khóa)
+   * Lấy danh sách đại lý do nhân sự phụ trách kèm cảnh báo bàn giao (SN-15)
+   * GET /api/users/:id/assigned-customers
+   */
+  @Get(':id/assigned-customers')
+  async getAssignedCustomers(@Param('id') id: string): Promise<{
+    customers: AssignedCustomerItem[];
+    total: number;
+    warning?: string;
+  }> {
+    return this.usersService.getAssignedCustomersResult(id);
+  }
+
+  /**
+   * Khóa hoặc Mở khóa tài khoản nhân sự (Thu hồi toàn bộ phiên đăng nhập khi khóa & Cảnh báo bàn giao)
    * PATCH /api/users/:id/status
    */
   @Patch(':id/status')
@@ -90,7 +105,7 @@ export class UsersController {
     @Param('id') id: string,
     @Body() dto: UpdateUserStatusDto,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<SafeUser> {
+  ): Promise<UpdateUserStatusResult> {
     return this.usersService.updateStatus(id, dto, currentUser);
   }
 

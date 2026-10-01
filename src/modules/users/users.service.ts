@@ -31,10 +31,83 @@ export interface CreateUserResult {
   temporaryPassword?: string;
 }
 
+export interface AssignedCustomerItem {
+  id: string;
+  code: string;
+  name: string;
+  region: string;
+  phone?: string;
+  email?: string;
+  status: string;
+  salesRepId: string;
+}
+
+export interface UpdateUserStatusResult extends SafeUser {
+  user: SafeUser;
+  assignedCustomers: AssignedCustomerItem[];
+  assignedCustomersCount: number;
+  handoverWarning?: string;
+}
+
 @Injectable()
 export class UsersService implements OnModuleInit {
   private users: Map<string, UserEntity> = new Map();
   private sessionRevoker?: (userId: string) => void;
+
+  private customers: Map<string, AssignedCustomerItem> = new Map([
+    [
+      '55555555-0000-0000-0000-000000000001',
+      {
+        id: '55555555-0000-0000-0000-000000000001',
+        code: 'DL-MK-001',
+        name: 'Đại Lý Cửa Hàng Minh Khang',
+        region: 'Miền Nam',
+        phone: '0907000007',
+        email: 'dealer@loha.vn',
+        status: 'ACTIVE',
+        salesRepId: 'usr-sales-002',
+      },
+    ],
+    [
+      '55555555-0000-0000-0000-000000000002',
+      {
+        id: '55555555-0000-0000-0000-000000000002',
+        code: 'DL-AB-002',
+        name: 'Đại Lý Bán Buôn An Bình',
+        region: 'Miền Bắc',
+        phone: '0907000017',
+        email: 'daily@loha.vn',
+        status: 'ACTIVE',
+        salesRepId: 'usr-sales-002',
+      },
+    ],
+    [
+      '55555555-0000-0000-0000-000000000003',
+      {
+        id: '55555555-0000-0000-0000-000000000003',
+        code: 'DL-HT-003',
+        name: 'Tạp Hóa Phân Phối Hưng Thịnh',
+        region: 'Tây Nam Bộ',
+        phone: '0909112233',
+        email: 'hungthinh@gmail.com',
+        status: 'LOCKED',
+        salesRepId: 'usr-sales-002',
+      },
+    ],
+    [
+      '55555555-0000-0000-0000-000000000004',
+      {
+        id: '55555555-0000-0000-0000-000000000004',
+        code: 'DL-TH-004',
+        name: 'Đại Lý Phân Phối Thuận Hòa',
+        region: 'Đông Nam Bộ',
+        phone: '0918223344',
+        email: 'thuanhoa@loha.vn',
+        status: 'ACTIVE',
+        salesRepId: 'usr-salesmgr-003',
+      },
+    ],
+  ]);
 
   constructor(@Optional() private readonly mailService?: MailService) {
     this.seedInitialUsersSync();
@@ -478,20 +551,70 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Khóa hoặc Mở khóa tài khoản (PATCH /api/users/:id/status)
-   * Khi khóa: Thu hồi toàn bộ Refresh Token / Session đang hoạt động
+   * Lấy danh sách đại lý phụ trách của nhân sự (SN-15)
+   */
+  getAssignedCustomers(userId: string): AssignedCustomerItem[] {
+    const user = this.users.get(userId);
+    const targetIds = new Set<string>([userId.toLowerCase()]);
+    if (user) {
+      targetIds.add(user.username.toLowerCase());
+      if (user.username.toLowerCase() === 'sales') {
+        targetIds.add('usr-sales-002');
+      }
+      if (user.username.toLowerCase() === 'salesmanager') {
+        targetIds.add('usr-salesmgr-003');
+      }
+    }
+
+    return Array.from(this.customers.values()).filter((c) =>
+      targetIds.has(c.salesRepId.toLowerCase()),
+    );
+  }
+
+  /**
+   * Trả về kết quả truy vấn đại lý phụ trách kèm cảnh báo bàn giao (SN-15)
+   */
+  getAssignedCustomersResult(userId: string): {
+    customers: AssignedCustomerItem[];
+    total: number;
+    warning?: string;
+  } {
+    const customers = this.getAssignedCustomers(userId);
+    const warning =
+      customers.length > 0
+        ? `Nhân sự này đang phụ trách ${customers.length} đại lý. Sau khi khóa, hệ thống khuyến nghị bạn thực hiện chuyển giao địa bàn cho nhân viên kinh doanh khác.`
+        : undefined;
+
+    return {
+      customers,
+      total: customers.length,
+      warning,
+    };
+  }
+
+  /**
+   * Khóa hoặc Mở khóa tài khoản (PATCH /api/users/:id/status - SN-15)
+   * - Bắt buộc nhập lý do khi khóa tài khoản (ném 400 Bad Request nếu bỏ trống)
+   * - Quản trị viên không thể tự khóa tài khoản của chính mình
+   * - Khi khóa: Thu hồi toàn bộ Refresh Token / Session đang hoạt động tức thì
+   * - Kiểm tra đại lý phụ trách khi khóa nhân sự kinh doanh và trả về cảnh báo bàn giao
    */
   async updateStatus(
     id: string,
     dto: UpdateUserStatusDto,
     currentAdmin?: { userId?: string; email?: string; username?: string } | string,
-  ): Promise<SafeUser> {
+  ): Promise<UpdateUserStatusResult> {
     const user = await this.findById(id);
     if (!user) {
       throw new NotFoundException(`Không tìm thấy người dùng có ID: ${id}`);
     }
 
-    // Không cho phép quản trị viên tự khóa tài khoản của chính mình (kiểm tra theo ID, Email, hoặc Username)
+    // 1. Kiểm tra lý do khóa tài khoản bắt buộc (SN-15)
+    if (dto.status === UserStatus.LOCKED && (!dto.reason || !dto.reason.trim())) {
+      throw new BadRequestException('Bắt buộc phải nhập lý do khi khóa tài khoản.');
+    }
+
+    // 2. Không cho phép quản trị viên tự khóa tài khoản của chính mình (kiểm tra theo ID, Email, hoặc Username)
     const adminId = typeof currentAdmin === 'string' ? currentAdmin : currentAdmin?.userId;
     const adminEmail = typeof currentAdmin === 'object' ? currentAdmin?.email?.toLowerCase() : undefined;
     const adminUsername = typeof currentAdmin === 'object' ? currentAdmin?.username?.toLowerCase() : undefined;
@@ -506,7 +629,7 @@ export class UsersService implements OnModuleInit {
     }
 
     user.status = dto.status;
-    user.lockReason = dto.reason.trim();
+    user.lockReason = dto.reason ? dto.reason.trim() : null;
     user.updatedAt = new Date();
 
     if (dto.status === UserStatus.LOCKED) {
@@ -515,10 +638,26 @@ export class UsersService implements OnModuleInit {
     } else if (dto.status === UserStatus.ACTIVE) {
       user.failedAttempts = 0;
       user.lockedUntil = null;
+      user.lockReason = null;
     }
 
     this.users.set(user.id, user);
-    return user.toSafeUser();
+
+    // 3. Kiểm tra đại lý do nhân sự phụ trách khi khóa (SN-15)
+    const assignedCustomers = this.getAssignedCustomers(user.id);
+    const handoverWarning =
+      dto.status === UserStatus.LOCKED && assignedCustomers.length > 0
+        ? `Nhân sự này đang phụ trách ${assignedCustomers.length} đại lý. Sau khi khóa, hệ thống khuyến nghị bạn thực hiện chuyển giao địa bàn cho nhân viên kinh doanh khác.`
+        : undefined;
+
+    const safeUser = user.toSafeUser();
+    return {
+      ...safeUser,
+      user: safeUser,
+      assignedCustomers,
+      assignedCustomersCount: assignedCustomers.length,
+      handoverWarning,
+    };
   }
 
   /**
