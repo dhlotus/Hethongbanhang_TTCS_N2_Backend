@@ -209,9 +209,9 @@ export class UsersService implements OnModuleInit {
       );
     }
 
-    // 2. Lọc theo Vai trò
+    // 2. Lọc theo Vai trò (Hỗ trợ kiểm tra cả trong mảng roles đa vai trò)
     if (role) {
-      userList = userList.filter((u) => u.role === role);
+      userList = userList.filter((u) => u.roles?.includes(role) || u.role === role);
     }
 
     // 3. Lọc theo Trạng thái
@@ -267,10 +267,11 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Tạo mới tài khoản nhân sự (POST /api/users - SN-13):
+   * Tạo mới tài khoản nhân sự (POST /api/users - SN-13 & SN-14):
+   * - Hỗ trợ Đa vai trò (Multi-role): gán mảng roles
+   * - Ràng buộc cứng: Nhân sự thuộc vai trò kho bắt buộc phải gắn với ít nhất một kho
    * - Kiểm tra trùng lặp username hoặc email: Trả về BadRequestException kèm thông báo cụ thể
    * - Tự động sinh mật khẩu tạm an toàn nếu không nhập
-   * - Mã hóa mật khẩu bằng bcrypt
    * - Gửi email kích hoạt tài khoản kèm mật khẩu tạm thời cho nhân viên mới
    */
   async create(dto: CreateUserDto): Promise<CreateUserResult> {
@@ -291,7 +292,28 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    // 2. Mật khẩu khởi tạo: sử dụng mật khẩu admin nhập hoặc tự sinh mật khẩu tạm ngẫu nhiên an toàn
+    // 2. Xác định danh sách vai trò (Hỗ trợ Đa vai trò - SN-14)
+    let roles: UserRole[];
+    if (dto.roles && dto.roles.length > 0) {
+      roles = Array.from(new Set(dto.roles));
+    } else if (dto.role) {
+      roles = [dto.role];
+    } else {
+      throw new BadRequestException('Vai trò người dùng không được để trống.');
+    }
+
+    // 3. Ràng buộc cứng: Nhân sự thuộc vai trò kho bắt buộc phải gắn với ít nhất một kho
+    const isWarehouseStaff =
+      roles.includes(UserRole.WAREHOUSE_KEEPER) ||
+      roles.includes(UserRole.WAREHOUSE_MANAGER);
+
+    if (isWarehouseStaff && (!dto.assignedWarehouse || !dto.assignedWarehouse.trim())) {
+      throw new BadRequestException(
+        'Nhân sự thuộc vai trò kho (Thủ kho / Quản lý kho) bắt buộc phải được gắn với ít nhất một kho cụ thể.',
+      );
+    }
+
+    // 4. Mật khẩu khởi tạo: sử dụng mật khẩu admin nhập hoặc tự sinh mật khẩu tạm ngẫu nhiên an toàn
     const rawPassword =
       dto.password?.trim() ||
       `Loha@${Math.floor(100000 + Math.random() * 900000)}`;
@@ -303,7 +325,8 @@ export class UsersService implements OnModuleInit {
       email,
       fullName: dto.fullName.trim(),
       phone: dto.phone?.trim() || '',
-      role: dto.role,
+      role: roles[0],
+      roles,
       status: UserStatus.ACTIVE,
       assignedWarehouse: dto.assignedWarehouse?.trim(),
       passwordHash,
@@ -315,7 +338,7 @@ export class UsersService implements OnModuleInit {
 
     this.users.set(newUser.id, newUser);
 
-    // 3. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
+    // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
     if (this.mailService) {
       try {
         await this.mailService.sendAccountActivationEmail({
@@ -323,11 +346,10 @@ export class UsersService implements OnModuleInit {
           fullName: newUser.fullName,
           username: newUser.username,
           temporaryPassword: rawPassword,
-          role: newUser.role,
+          role: roles.join(', '),
           assignedWarehouse: newUser.assignedWarehouse,
         });
       } catch (err) {
-        // Ghi log cảnh báo nhưng không làm gián đoạn việc tạo user
         console.warn(
           `[USERS_SERVICE] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
           err,
@@ -346,15 +368,63 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Cập nhật thông tin người dùng (PATCH /api/users/:id - SN-13):
+   * Cập nhật thông tin người dùng (PATCH /api/users/:id - SN-13 & SN-14):
+   * - Hỗ trợ cập nhật Đa vai trò (roles array)
+   * - Bảo mật Admin: Chặn tuyệt đối hành động tự loại bỏ vai trò ADMIN của chính mình
+   * - Ràng buộc cứng: Nhân sự thuộc vai trò kho bắt buộc phải gắn với ít nhất một kho cụ thể
    * - Kiểm tra trùng lặp email và username đối với các user khác
    */
-  async update(id: string, dto: UpdateUserDto): Promise<SafeUser> {
+  async update(
+    id: string,
+    dto: UpdateUserDto,
+    currentAdmin?: { userId?: string; email?: string; username?: string; roles?: string[] } | string,
+  ): Promise<SafeUser> {
     const user = await this.findById(id);
     if (!user) {
       throw new NotFoundException(`Không tìm thấy người dùng có ID: ${id}`);
     }
 
+    // 1. Kiểm tra Admin tự thu hồi quyền quản trị của chính mình
+    const adminId = typeof currentAdmin === 'string' ? currentAdmin : currentAdmin?.userId;
+    const adminEmail = typeof currentAdmin === 'object' ? currentAdmin?.email?.toLowerCase() : undefined;
+    const adminUsername = typeof currentAdmin === 'object' ? currentAdmin?.username?.toLowerCase() : undefined;
+
+    const isSelf =
+      (adminId && (id === adminId || user.id === adminId)) ||
+      (adminEmail && user.email.toLowerCase() === adminEmail) ||
+      (adminUsername && user.username.toLowerCase() === adminUsername);
+
+    let targetRoles: UserRole[] | undefined = undefined;
+    if (dto.roles && dto.roles.length > 0) {
+      targetRoles = Array.from(new Set(dto.roles));
+    } else if (dto.role) {
+      targetRoles = [dto.role];
+    }
+
+    if (isSelf && targetRoles) {
+      if (!targetRoles.includes(UserRole.ADMIN)) {
+        throw new BadRequestException('Bạn không thể tự thu hồi quyền Quản trị hệ thống của chính mình.');
+      }
+    }
+
+    // 2. Ràng buộc cứng: Nhân sự thuộc vai trò kho bắt buộc gắn với ít nhất 1 kho cụ thể
+    const effectiveRoles = targetRoles || user.roles || [user.role];
+    const isWarehouseStaff =
+      effectiveRoles.includes(UserRole.WAREHOUSE_KEEPER) ||
+      effectiveRoles.includes(UserRole.WAREHOUSE_MANAGER);
+
+    const effectiveWarehouse =
+      dto.assignedWarehouse !== undefined
+        ? dto.assignedWarehouse.trim()
+        : user.assignedWarehouse;
+
+    if (isWarehouseStaff && (!effectiveWarehouse || !effectiveWarehouse.trim())) {
+      throw new BadRequestException(
+        'Nhân sự thuộc vai trò kho (Thủ kho / Quản lý kho) bắt buộc phải được gắn với ít nhất một kho cụ thể.',
+      );
+    }
+
+    // 3. Kiểm tra trùng lặp username
     if (dto.username) {
       const username = dto.username.trim().toLowerCase();
       for (const u of this.users.values()) {
@@ -367,6 +437,7 @@ export class UsersService implements OnModuleInit {
       user.username = username;
     }
 
+    // 4. Kiểm tra trùng lặp email
     if (dto.email) {
       const email = dto.email.trim().toLowerCase();
       for (const u of this.users.values()) {
@@ -387,8 +458,9 @@ export class UsersService implements OnModuleInit {
       user.phone = dto.phone.trim();
     }
 
-    if (dto.role) {
-      user.role = dto.role;
+    if (targetRoles) {
+      user.roles = targetRoles;
+      user.role = targetRoles[0];
     }
 
     if (dto.assignedWarehouse !== undefined) {

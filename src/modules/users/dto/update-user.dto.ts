@@ -29,6 +29,10 @@ export class UpdateUserDto {
   role?: UserRole;
 
   @IsOptional()
+  @IsEnum(UserRole, { each: true, message: 'Vai trò trong danh sách không hợp lệ trong 7 vai trò hệ thống' })
+  roles?: UserRole[];
+
+  @IsOptional()
   @IsString({ message: 'Kho phụ trách phải là chuỗi' })
   assignedWarehouse?: string;
 

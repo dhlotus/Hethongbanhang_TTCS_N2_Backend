@@ -76,8 +76,9 @@ export class UsersController {
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
+    @CurrentUser() currentUser: ICurrentUser,
   ): Promise<SafeUser> {
-    return this.usersService.update(id, dto);
+    return this.usersService.update(id, dto, currentUser);
   }
 
   /**

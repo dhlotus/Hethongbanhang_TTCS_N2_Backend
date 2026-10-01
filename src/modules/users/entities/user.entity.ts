@@ -8,6 +8,7 @@ export interface SafeUser {
   fullName: string;
   phone: string;
   role: UserRole;
+  roles: UserRole[];
   status: UserStatus;
   assignedWarehouse?: string;
   lockReason?: string | null;
@@ -25,6 +26,7 @@ export class UserEntity {
   phone: string;
   passwordHash: string;
   role: UserRole;
+  roles: UserRole[];
   status: UserStatus;
   assignedWarehouse?: string;
   lockReason?: string | null;
@@ -42,7 +44,19 @@ export class UserEntity {
     this.fullName = partial.fullName ?? '';
     this.phone = partial.phone ?? '';
     this.passwordHash = partial.passwordHash ?? '';
-    this.role = partial.role ?? UserRole.CUSTOMER;
+
+    // Hỗ trợ Đa vai trò (Multi-role - SN-14)
+    if (partial.roles && partial.roles.length > 0) {
+      this.roles = Array.from(new Set(partial.roles));
+      this.role = this.roles[0];
+    } else if (partial.role) {
+      this.role = partial.role;
+      this.roles = [partial.role];
+    } else {
+      this.role = UserRole.CUSTOMER;
+      this.roles = [UserRole.CUSTOMER];
+    }
+
     this.status = partial.status ?? UserStatus.ACTIVE;
     this.assignedWarehouse = partial.assignedWarehouse;
     this.lockReason = partial.lockReason ?? null;
@@ -65,6 +79,7 @@ export class UserEntity {
       fullName: this.fullName,
       phone: this.phone,
       role: this.role,
+      roles: this.roles,
       status: this.status,
       assignedWarehouse: this.assignedWarehouse,
       lockReason: this.lockReason,

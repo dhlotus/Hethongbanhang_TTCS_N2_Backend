@@ -25,9 +25,13 @@ export class CreateUserDto {
   @IsString({ message: 'Số điện thoại phải là chuỗi ký tự' })
   phone?: string;
 
-  @IsNotEmpty({ message: 'Vai trò người dùng không được để trống' })
+  @IsOptional()
   @IsEnum(UserRole, { message: 'Vai trò không hợp lệ trong 7 vai trò hệ thống' })
-  role: UserRole;
+  role?: UserRole;
+
+  @IsOptional()
+  @IsEnum(UserRole, { each: true, message: 'Vai trò trong danh sách không hợp lệ trong 7 vai trò hệ thống' })
+  roles?: UserRole[];
 
   @IsOptional()
   @IsString({ message: 'Kho phụ trách phải là chuỗi' })
