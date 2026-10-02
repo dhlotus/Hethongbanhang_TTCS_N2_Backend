@@ -5,4 +5,6 @@ export interface ICurrentUser {
   email: string;
   roles: UserRole[];
   username?: string;
+  avatarUrl?: string | null;
 }
+

@@ -6,11 +6,19 @@ import {
   Optional,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { BCRYPT_SALT_ROUNDS } from '../../common/constants/auth.constant';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
 import { MailService } from '../mail/mail.service';
 import {
+  AVATAR_MESSAGES,
+  AVATAR_URL_PREFIX,
+} from './constants/avatar.constant';
+import {
+  AvatarResponseDto,
   CreateUserDto,
   QueryUsersDto,
   UpdateUserDto,
@@ -778,4 +786,99 @@ export class UsersService implements OnModuleInit {
     user.lockedUntil = null;
     user.updatedAt = new Date();
   }
+
+  /**
+   * Tải lên và cập nhật ảnh đại diện người dùng (SN-144):
+   * - Lưu trữ file ảnh an toàn trong thư mục uploads/avatars/
+   * - Sinh tên file duy nhất (UUID/Timestamp + Hash) tránh trùng lặp và lộ tên gốc
+   * - Tự động xóa file ảnh đại diện cũ trên đĩa nếu có để tránh rác dung lượng máy chủ
+   * - Cập nhật avatarUrl trong UserEntity và cơ sở dữ liệu
+   */
+  async uploadAvatar(
+    userId: string,
+    file: Express.Multer.File,
+  ): Promise<AvatarResponseDto> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new NotFoundException(AVATAR_MESSAGES.USER_NOT_FOUND);
+    }
+
+    // 1. Đảm bảo thư mục lưu trữ uploads/avatars luôn tồn tại
+    const uploadDir = path.join(process.cwd(), 'uploads', 'avatars');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    // 2. Tạo tên file ngẫu nhiên, duy nhất
+    const ext = path.extname(file.originalname || '').toLowerCase() || '.png';
+    const randomHash = crypto.randomBytes(8).toString('hex');
+    const uniqueFileName = `avatar-${userId}-${Date.now()}-${randomHash}${ext}`;
+    const targetFilePath = path.join(uploadDir, uniqueFileName);
+
+    // 3. Ghi file từ memory buffer xuống đĩa lưu trữ
+    await fs.promises.writeFile(targetFilePath, file.buffer);
+
+    // 4. Nếu user đã có avatar cũ trước đó, tiến hành xóa file ảnh cũ để dọn dẹp bộ nhớ
+    if (user.avatarUrl) {
+      try {
+        const oldFilename = path.basename(user.avatarUrl);
+        const oldFilePath = path.join(uploadDir, oldFilename);
+        if (fs.existsSync(oldFilePath)) {
+          await fs.promises.unlink(oldFilePath);
+        }
+      } catch (error) {
+        console.warn(
+          `[UsersService] Không thể xóa file avatar cũ (${user.avatarUrl}):`,
+          error,
+        );
+      }
+    }
+
+    // 5. Cập nhật đường dẫn avatarUrl vào thực thể người dùng
+    const avatarUrl = `${AVATAR_URL_PREFIX}${uniqueFileName}`;
+    user.avatarUrl = avatarUrl;
+    user.updatedAt = new Date();
+    this.users.set(user.id, user);
+
+    return {
+      statusCode: 200,
+      message: AVATAR_MESSAGES.UPLOAD_SUCCESS,
+      data: {
+        avatarUrl,
+      },
+    };
+  }
+
+  /**
+   * Xóa ảnh đại diện đưa về mặc định
+   */
+  async removeAvatar(userId: string): Promise<SafeUser> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new NotFoundException(AVATAR_MESSAGES.USER_NOT_FOUND);
+    }
+
+    if (user.avatarUrl) {
+      try {
+        const uploadDir = path.join(process.cwd(), 'uploads', 'avatars');
+        const oldFilename = path.basename(user.avatarUrl);
+        const oldFilePath = path.join(uploadDir, oldFilename);
+        if (fs.existsSync(oldFilePath)) {
+          await fs.promises.unlink(oldFilePath);
+        }
+      } catch (error) {
+        console.warn(
+          `[UsersService] Không thể xóa file avatar (${user.avatarUrl}):`,
+          error,
+        );
+      }
+    }
+
+    user.avatarUrl = null;
+    user.updatedAt = new Date();
+    this.users.set(user.id, user);
+
+    return user.toSafeUser();
+  }
 }
+

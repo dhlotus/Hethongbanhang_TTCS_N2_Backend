@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -9,20 +10,26 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import * as multer from 'multer';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { UploadedAvatarFile } from './decorators/uploaded-avatar-file.decorator';
 import {
+  AvatarResponseDto,
   CreateUserDto,
   QueryUsersDto,
   UpdateUserDto,
   UpdateUserStatusDto,
 } from './dto';
 import { SafeUser } from './entities/user.entity';
+import { AvatarValidationPipe } from './pipes/avatar-validation.pipe';
 import {
   AssignedCustomerItem,
   CreateUserResult,
@@ -41,6 +48,49 @@ import {
 @Roles(UserRole.ADMIN)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  /**
+   * Tải lên ảnh đại diện của người dùng đang đăng nhập (SN-144)
+   * POST /api/users/me/avatar
+   * - Hỗ trợ cả trường 'file' hoặc 'avatar' trong multipart/form-data
+   * - Phân quyền: Mọi người dùng đã đăng nhập (cả 7 vai trò) đều được đổi ảnh đại diện cá nhân
+   */
+  @Post('me/avatar')
+  @Roles(...Object.values(UserRole))
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'file', maxCount: 1 },
+        { name: 'avatar', maxCount: 1 },
+      ],
+      {
+        storage: multer.memoryStorage(),
+        limits: {
+          fileSize: 10 * 1024 * 1024,
+        },
+      },
+    ),
+  )
+  async uploadAvatar(
+    @CurrentUser() currentUser: ICurrentUser,
+    @UploadedAvatarFile(new AvatarValidationPipe()) file: Express.Multer.File,
+  ): Promise<AvatarResponseDto> {
+    return this.usersService.uploadAvatar(currentUser.userId, file);
+  }
+
+  /**
+   * Xóa ảnh đại diện cá nhân, đưa về mặc định
+   * DELETE /api/users/me/avatar
+   */
+  @Delete('me/avatar')
+  @Roles(...Object.values(UserRole))
+  @HttpCode(HttpStatus.OK)
+  async removeAvatar(
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<SafeUser> {
+    return this.usersService.removeAvatar(currentUser.userId);
+  }
 
   /**
    * Lấy danh sách người dùng phân trang, tìm kiếm và lọc
