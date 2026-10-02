@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UploadedAvatarFile } from '../users/decorators/uploaded-avatar-file.decorator';
 import { AvatarResponseDto } from '../users/dto/avatar-response.dto';
 import { AvatarValidationPipe } from '../users/pipes/avatar-validation.pipe';
+import { SafeUser } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import {
@@ -83,8 +84,8 @@ export class AuthController {
    */
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  getProfile(@CurrentUser() currentUser: ICurrentUser): ICurrentUser {
-    return currentUser;
+  async getProfile(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
+    return this.usersService.findSafeById(currentUser.userId);
   }
 
   /**

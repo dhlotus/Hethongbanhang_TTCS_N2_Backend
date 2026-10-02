@@ -102,6 +102,16 @@ export class UsersController {
   }
 
   /**
+   * Lấy thông tin tài khoản của chính mình (SN-18)
+   * GET /api/users/me
+   */
+  @Get('me')
+  @Roles(...Object.values(UserRole))
+  async getMe(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
+    return this.usersService.findSafeById(currentUser.userId);
+  }
+
+  /**
    * Lấy thông tin chi tiết một người dùng
    * GET /api/users/:id
    */

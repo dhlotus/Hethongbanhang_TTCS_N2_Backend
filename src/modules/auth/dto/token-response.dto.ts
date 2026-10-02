@@ -7,6 +7,7 @@ export interface IAuthUserInfo {
   role?: string;
   status?: string;
   assignedWarehouse?: string;
+  avatarUrl?: string | null;
 }
 
 export class TokenResponseDto {
