@@ -5,11 +5,16 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseFilePipe,
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Express } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -23,6 +28,7 @@ import {
   UpdateUserStatusDto,
 } from './dto';
 import { SafeUser } from './entities/user.entity';
+import type { ExcelImportReport } from './interfaces/excel-import.interface';
 import {
   AssignedCustomerItem,
   CreateUserResult,
@@ -68,6 +74,50 @@ export class UsersController {
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateUserDto): Promise<CreateUserResult> {
     return this.usersService.create(dto);
+  }
+
+  /**
+   * Import tài khoản hàng loạt từ file Excel (SN-16 / Bulk Import)
+   * POST /api/users/import-excel
+   *
+   * Quy trình: Upload file .xlsx → Validate từng dòng → Tạo tài khoản → Trả báo cáo tổng kết
+   * Chỉ Admin mới được phép thực hiện (kế thừa guard cấp controller).
+   */
+  @Post('import-excel')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 10 * 1024 * 1024 }, // Giới hạn 10MB
+      fileFilter: (
+        _req: Express.Request,
+        file: Express.Multer.File,
+        callback: (error: Error | null, acceptFile: boolean) => void,
+      ) => {
+        const ALLOWED_MIME_TYPES = [
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+          'application/vnd.ms-excel', // .xls
+        ];
+        if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+          callback(null, true);
+        } else {
+          callback(
+            new Error('Chỉ chấp nhận file Excel (.xlsx hoặc .xls). File không hợp lệ bị từ chối.'),
+            false,
+          );
+        }
+      },
+    }),
+  )
+  async importExcel(
+    @UploadedFile(
+      new ParseFilePipe({
+        fileIsRequired: true,
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+      }),
+    )
+    file: Express.Multer.File,
+  ): Promise<ExcelImportReport> {
+    return this.usersService.importFromExcel(file.buffer);
   }
 
   /**

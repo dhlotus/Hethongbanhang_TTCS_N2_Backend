@@ -240,5 +240,40 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Hoàn thành 100% yêu cầu Subtask SN-112, 13/13 test cases pass.
   - 🚀 Sẵn sàng cho các task tiếp theo của Sprint 1 (RBAC Roles Guard chi tiết theo 7 vai trò, Module Users/Quản lý tài khoản).
 
-
-
+### [Sprint 2] - SN-16: [BE] Xây dựng API xử lý tệp Excel, validate dữ liệu từng dòng, tạo tài khoản hàng loạt và trả về báo cáo tổng kết
+- **Thời gian hoàn thành:** 2026-10-02
+- **Mã Jira / US:** SN-16 (Sprint 2 - User Story: "Là Quản trị hệ thống, tôi muốn nhập danh sách người dùng hàng loạt từ tệp Excel, để tạo tài khoản cho cả đội kinh doanh trong vài phút.")
+- **Mục tiêu:** Cung cấp endpoint nhận tệp Excel (`.xlsx`, `.xls`), phân tích cú pháp dữ liệu dạng bảng, validate từng trường dữ liệu theo business rules, kiểm tra trùng lặp in-file và in-system, khởi tạo tài khoản hàng loạt theo cơ chế non-blocking batch, gửi email kích hoạt tài khoản và trả về báo cáo chi tiết (`ExcelImportReport`).
+- **Danh sách file thay đổi / tạo mới:**
+  - `src/modules/users/interfaces/excel-import.interface.ts` (Tạo mới: Interfaces `ExcelUserRow`, `ExcelImportSuccessItem`, `ExcelImportFailureItem`, `ExcelImportReport` - Zero any, định kiểu chặt chẽ).
+  - `src/modules/users/utils/excel-import.util.ts` (Tạo mới: Hàm tiện ích đọc buffer Excel qua thư viện `xlsx`, chuẩn hóa vai trò `normalizeRole`, validate nghiệp vụ từng dòng `validateExcelRow`).
+  - `src/modules/users/users.service.ts` (Cập nhật: Bổ sung method `importFromExcel(fileBuffer)` cùng các private helpers `createFromExcelRow()`, `checkInFileConflict()`, `checkSystemConflict()`, `buildFailureItem()`, `buildImportReport()`).
+  - `src/modules/users/users.controller.ts` (Cập nhật: Thêm endpoint `POST /api/users/import-excel` tích hợp `FileInterceptor`, `ParseFilePipe`, `JwtAuthGuard`, `RolesGuard(UserRole.ADMIN)`).
+  - `src/modules/users/users.module.ts` (Cập nhật: Đăng ký `MulterModule.register(memoryStorage())` xử lý upload file an toàn trong RAM).
+  - `users_import_sample.xlsx` (Tạo mới: Tệp Excel mẫu 10 dòng phục vụ kiểm thử gồm 7 dòng hợp lệ và 3 dòng vi phạm nghiệp vụ).
+  - `test/user-import-excel-sn16.spec.ts` (Tạo mới: Kịch bản kiểm thử tự động 24 test cases cho toàn bộ luồng import Excel).
+- **Chi tiết kỹ thuật:**
+  - *Endpoint*: `POST /api/users/import-excel` (multipart/form-data, field name: `file`, giới hạn tối đa 10MB, chỉ chấp nhận đuôi `.xlsx` / `.xls`).
+  - *Authentication & Authorization*: `@UseGuards(JwtAuthGuard, RolesGuard)` - Chỉ tài khoản quản trị viên tối cao `ADMIN` mới được phép truy cập.
+  - *Quy tắc kiểm tra hợp lệ từng dòng (Validation Rules)*:
+    - Họ và tên: Bắt buộc, độ dài tối thiểu 2 ký tự.
+    - Tên đăng nhập: Bắt buộc, từ 3-30 ký tự alphanumeric/dấu gạch dưới.
+    - Email: Bắt buộc, chuẩn regex RFC 5322.
+    - Vai trò: Hỗ trợ linh hoạt cả Enum code (`ADMIN`, `SALES_REP`, `WAREHOUSE_KEEPER`, `ACCOUNTANT`,...) lẫn tên hiển thị Tiếng Việt thông dụng ("Thủ kho", "Nhân viên kinh doanh", "Kế toán", "Quản lý kho",...).
+    - Ràng buộc nghiệp vụ kho: Các tài khoản vai trò kho (`WAREHOUSE_KEEPER`, `WAREHOUSE_MANAGER`) bắt buộc phải có thông tin `assignedWarehouse` (Kho phụ trách).
+    - Mật khẩu: Tự chọn; nếu để trống tự sinh mật khẩu ngẫu nhiên an toàn định dạng `Loha@<6_chữ_số>`. Toàn bộ mật khẩu đều được băm bằng `bcrypt` (10 salt rounds) trước khi lưu trữ.
+    - Chống trùng lặp: Kiểm tra trùng username/email ngay giữa các dòng trong cùng tệp Excel (in-file) và trùng với tài khoản đã tồn tại trong hệ thống (in-system).
+  - *Cơ chế xử lý lỗi từng dòng (Fault-Tolerant Batch Processing)*: Dòng gặp lỗi không làm dừng hoặc huỷ bỏ toàn bộ tiến trình. Các dòng hợp lệ vẫn được tạo thành công vào hệ thống.
+  - *Báo cáo tổng kết (`ExcelImportReport`)*: Trả về cấu trúc JSON gồm: `totalRows`, `successCount`, `failureCount`, `skippedCount`, mảng `successItems` (thông tin user an toàn và `temporaryPassword`), mảng `failureItems` (chỉ số dòng `rowIndex`, `rawData`, thông báo lỗi chi tiết `reason`) và tóm tắt `summary`.
+  - *Tự động gửi email kích hoạt*: Tích hợp `MailService` gửi thư thông báo tài khoản kèm thông tin đăng nhập trong background, lỗi gửi mail được try-catch riêng không làm hỏng tiến trình import.
+  - *Code Convention*: Tuân thủ 100% CODE_CONVENTION.docx (quy tắc đặt tên `kebab-case`, Zero `any`, typed tường minh, DRY, tài liệu hóa JSDoc đầy đủ).
+- **Kết quả kiểm thử thực tế:**
+  - Đã thực hiện kiểm thử tự động với tệp 10 dòng:
+    - ✅ **7 tài khoản tạo thành công**: Gồm các vai trò Kinh doanh, Thủ kho, Quản lý kho, Kế toán; mật khẩu được mã hóa an toàn và thư kích hoạt gửi thành công qua Ethereal Mail.
+    - ❌ **3 dòng lỗi được phát hiện và báo cáo chính xác**:
+      - Dòng 9: Thiếu họ và tên (*"Họ và tên không được để trống và phải có ít nhất 2 ký tự"*).
+      - Dòng 10: Trùng tên đăng nhập hệ thống (*"Tên đăng nhập 'admin' đã tồn tại trong hệ thống"*).
+      - Dòng 11: Lỗi kép (*"Email không đúng định dạng" | "Nhân sự thuộc vai trò kho bắt buộc phải có 'Kho phụ trách'"*).
+- **Trạng thái & Lưu ý cho task kế tiếp:**
+  - ✅ Hoàn thành 100% yêu cầu Subtask SN-16.
+  - 🚀 Sẵn sàng tích hợp giao diện Upload Excel trên Frontend (Module Quản lý người dùng).
