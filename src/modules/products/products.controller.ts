@@ -5,7 +5,9 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
+  Put,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -61,5 +63,30 @@ export class ProductsController {
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() createDto: CreateProductDto): Promise<ProductEntity> {
     return this.productsService.create(createDto);
+  }
+
+  /**
+   * Cập nhật thông tin sản phẩm (PATCH /products/:id)
+   * Quyền: Chỉ ADMIN và SALES_MANAGER
+   */
+  @Patch(':id')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async update(
+    @Param('id') id: string,
+    @Body() updateDto: Partial<CreateProductDto>,
+  ): Promise<ProductEntity> {
+    return this.productsService.update(id, updateDto);
+  }
+
+  /**
+   * Cập nhật thông tin sản phẩm (PUT /products/:id)
+   */
+  @Put(':id')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async updatePut(
+    @Param('id') id: string,
+    @Body() updateDto: Partial<CreateProductDto>,
+  ): Promise<ProductEntity> {
+    return this.productsService.update(id, updateDto);
   }
 }

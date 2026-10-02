@@ -152,6 +152,23 @@ export class ProductsService implements OnModuleInit {
     return newProduct;
   }
 
+  async update(idOrSku: string, dto: Partial<CreateProductDto>): Promise<ProductEntity> {
+    const product = await this.findById(idOrSku);
+    if (dto.name !== undefined) product.name = dto.name.trim();
+    if (dto.category !== undefined) product.category = dto.category.trim();
+    if (dto.baseUnit !== undefined) product.baseUnit = dto.baseUnit.trim();
+    if (dto.price !== undefined) product.price = Number(dto.price);
+    if (dto.costPrice !== undefined) product.costPrice = Number(dto.costPrice);
+    if (dto.barcode !== undefined) product.barcode = dto.barcode?.trim();
+    if (dto.description !== undefined) product.description = dto.description?.trim();
+    if (product.price > 0 && product.costPrice !== undefined) {
+      product.margin = Number((((product.price - product.costPrice) / product.price) * 100).toFixed(2));
+    }
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return product;
+  }
+
   async updateStock(idOrSku: string, deltaQuantity: number): Promise<ProductEntity> {
     const product = await this.findById(idOrSku);
     product.stockQuantity += deltaQuantity;

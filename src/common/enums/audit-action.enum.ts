@@ -1,0 +1,8 @@
+export enum AuditAction {
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+  APPROVE = 'APPROVE',
+  CANCEL = 'CANCEL',
+  STOCK_ADJUST = 'STOCK_ADJUST',
+}
