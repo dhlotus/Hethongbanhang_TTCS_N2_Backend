@@ -30,7 +30,9 @@ export class InventoryService {
       warehouse: string;
     }>
   > {
-    const products = await this.productsService.findAll();
+    const { data: products } = await this.productsService.findAll({
+      limit: 1000,
+    });
     return products.map((p) => ({
       sku: p.sku,
       name: p.name,

@@ -150,7 +150,7 @@ async function runTests(): Promise<void> {
   // -------------------------------------------------------------
   console.log('\n--- 3. Kiểm thử Bảo mật dữ liệu nhạy cảm (Cost Price / Margin Sanitization) ---');
 
-  const rawProducts = await productsService.findAll();
+  const { data: rawProducts } = await productsService.findAll();
   assert(rawProducts.length > 0, 'Dữ liệu sản phẩm gốc có sẵn trong hệ thống');
   assert(typeof rawProducts[0].costPrice === 'number' && rawProducts[0].costPrice > 0, 'Sản phẩm gốc trong DB chứa giá vốn costPrice');
   assert(typeof rawProducts[0].margin === 'number', 'Sản phẩm gốc trong DB chứa biên lợi nhuận margin');

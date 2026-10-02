@@ -240,5 +240,36 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Hoàn thành 100% yêu cầu Subtask SN-112, 13/13 test cases pass.
   - 🚀 Sẵn sàng cho các task tiếp theo của Sprint 1 (RBAC Roles Guard chi tiết theo 7 vai trò, Module Users/Quản lý tài khoản).
 
-
-
+### [Sprint 1 & 2] - SN-138 / SN-139 / SN-20: [BE] Phân hệ Quản lý Sản phẩm & SKU Hàng hóa (API Contract Khớp Frontend)
+- **Thời gian hoàn thành:** 2026-10-02
+- **Mã Jira / US:** SN-138 / SN-139 / SN-20 (Phân hệ Quản lý Sản phẩm, Danh mục ngành hàng đa cấp, SKU, Giá vốn & Bảo mật thương mại)
+- **Mục tiêu:** Xây dựng bộ API quản lý sản phẩm hoàn chỉnh theo API Contract đã thống nhất với Frontend: hỗ trợ tìm kiếm đa tiêu chí, phân trang dữ liệu chuẩn, thêm mới SKU với tính toán biên lợi nhuận tự động, cập nhật linh hoạt, và ràng buộc toàn vẹn dữ liệu nghiêm ngặt khi xóa (chặn xóa sản phẩm đã có giao dịch kho hoặc đơn hàng).
+- **Danh sách file thay đổi / tạo mới:**
+  - `src/modules/products/entities/product.entity.ts` (Cập nhật: Bổ sung các trường `parentCategory`, `subCategory`, `packagingSpec`, `imageUrl`, `hasTransactions`, tự động đồng bộ cấu trúc cây ngành hàng).
+  - `src/modules/products/interfaces/product.interface.ts` (Tạo mới: Interfaces `PaginatedProductsResult`, `DeleteProductResult`).
+  - `src/modules/products/dto/create-product.dto.ts` (Cập nhật: DTO thêm SKU chuẩn hóa in hoa, kiểm tra price > 0, costPrice >= 0).
+  - `src/modules/products/dto/update-product.dto.ts` (Tạo mới: DTO cập nhật linh hoạt từng phần cho SKU).
+  - `src/modules/products/dto/query-products.dto.ts` (Tạo mới: DTO tìm kiếm từ khóa, lọc ngành hàng cha/con, trạng thái và phân trang page/limit).
+  - `src/modules/products/dto/index.ts` (Cập nhật: Export toàn bộ DTOs của module products).
+  - `src/modules/products/products.service.ts` (Cập nhật: Cung cấp đầy đủ các phương thức `findAll`, `findById`, `create`, `update`, `delete`, `updateStock`).
+  - `src/modules/products/products.controller.ts` (Cập nhật: Khai báo 5 endpoints: `GET /api/products`, `GET /api/products/:id`, `POST /api/products`, `PATCH /api/products/:id`, `DELETE /api/products/:id`).
+  - `src/modules/inventory/inventory.service.ts` (Cập nhật: Điều chỉnh gọi `productsService.findAll()` tương thích phân trang).
+  - `test/product-crud-sn138.spec.ts` (Tạo mới: Bộ kiểm thử tự động 32 test cases kiểm tra 100% các kịch bản API Contract).
+  - `test/rbac-roles-cost-price.spec.ts` (Cập nhật: Điều chỉnh tương thích kiểu trả về phân trang của products service).
+- **Chi tiết kỹ thuật:**
+  - *GET /api/products*: Phân trang với `page` (default 1), `limit` (default 20), tìm kiếm từ khóa theo `sku`, `name`, `barcode`, `description`, lọc theo `parentCategory`, `subCategory`, `status`. Trả về định dạng chuẩn `{ data, total, page, limit, totalPages }`.
+  - *Bảo mật bí mật kinh doanh (SN-10)*: Tích hợp `CostPriceSanitizerInterceptor` trên toàn bộ controller:
+    - `ADMIN` và `SALES_MANAGER`: Được phép truy xuất đầy đủ `costPrice` và `margin`.
+    - `SALES_REP`, `WAREHOUSE_KEEPER`, `CUSTOMER`, `ACCOUNTANT`: Máy chủ tự động bóc tách và loại bỏ hoàn toàn `costPrice` và `margin` khỏi mảng kết quả.
+  - *POST /api/products*: Kiểm tra tính duy nhất của SKU (chuỗi in hoa không khoảng trắng); nếu trùng lặp ném 400 Bad Request kèm thông báo chuẩn: `"Mã SKU đã tồn tại trên hệ thống"`. Tự động tính biên lợi nhuận %: `((price - costPrice) / price) * 100`.
+  - *PATCH /api/products/:id*: Hỗ trợ cập nhật từng phần, kiểm tra chống trùng SKU với các sản phẩm khác, tự động tính lại biên lợi nhuận khi có biến động giá.
+  - *DELETE /api/products/:id (Ràng buộc cứng toàn vẹn dữ liệu)*:
+    - Nếu `hasTransactions === true`: Từ chối xóa (`400 Bad Request`) với thông báo: `"Sản phẩm đã phát sinh giao dịch kho hoặc đơn hàng. Không thể xóa, chỉ được phép chuyển trạng thái sang Ngừng kinh doanh"`.
+    - Nếu `hasTransactions === false`: Xóa an toàn khỏi hệ thống, trả về `{ success: true, message: "Đã xóa sản phẩm thành công", deletedId }`.
+- **Kết quả kiểm thử thực tế:**
+  - Chạy `test/product-crud-sn138.spec.ts`: **32/32 test cases PASS (100%)**.
+  - Chạy `test/rbac-roles-cost-price.spec.ts`: **25/25 test cases PASS (100%)**.
+  - Kiểm tra TypeScript (`npx tsc --noEmit`): **0 errors**.
+- **Trạng thái & Lưu ý cho task kế tiếp:**
+  - ✅ Hoàn thành 100% yêu cầu API Contract phía Backend và đã đồng bộ tương thích với Frontend.
+  - 🚀 Đã sẵn sàng mở Pull Request vào nhánh `develop`.

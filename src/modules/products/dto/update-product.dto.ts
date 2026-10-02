@@ -1,6 +1,5 @@
 import {
   IsIn,
-  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -9,17 +8,17 @@ import {
 } from 'class-validator';
 
 /**
- * DTO Thêm mới SKU sản phẩm (POST /api/products)
+ * DTO Cập nhật thông tin sản phẩm (PATCH /api/products/:id)
  * Tuân thủ chuẩn API Contract SN-138 / SN-139 / SN-20
  */
-export class CreateProductDto {
-  @IsNotEmpty({ message: 'Mã SKU không được để trống' })
+export class UpdateProductDto {
+  @IsOptional()
   @IsString({ message: 'Mã SKU phải là chuỗi ký tự' })
-  sku: string;
+  sku?: string;
 
-  @IsNotEmpty({ message: 'Tên sản phẩm không được để trống' })
+  @IsOptional()
   @IsString({ message: 'Tên sản phẩm phải là chuỗi ký tự' })
-  name: string;
+  name?: string;
 
   @IsOptional()
   @IsString({ message: 'Danh mục cha phải là chuỗi ký tự' })
@@ -33,18 +32,18 @@ export class CreateProductDto {
   @IsString({ message: 'Ngành hàng phải là chuỗi ký tự' })
   category?: string;
 
-  @IsNotEmpty({ message: 'Đơn vị cơ sở không được để trống' })
+  @IsOptional()
   @IsString({ message: 'Đơn vị cơ sở phải là chuỗi ký tự' })
-  baseUnit: string;
+  baseUnit?: string;
 
   @IsOptional()
   @IsString({ message: 'Quy cách đóng gói phải là chuỗi ký tự' })
   packagingSpec?: string;
 
-  @IsNotEmpty({ message: 'Giá bán không được để trống' })
+  @IsOptional()
   @IsNumber({}, { message: 'Giá bán phải là số hợp lệ' })
   @IsPositive({ message: 'Giá bán phải là số dương lớn hơn 0' })
-  price: number;
+  price?: number;
 
   @IsOptional()
   @IsNumber({}, { message: 'Giá vốn phải là số hợp lệ' })
@@ -58,7 +57,7 @@ export class CreateProductDto {
   status?: 'ACTIVE' | 'INACTIVE';
 
   @IsOptional()
-  @IsNumber({}, { message: 'Số lượng tồn đầu phải là số' })
+  @IsNumber({}, { message: 'Số lượng tồn phải là số' })
   @Min(0, { message: 'Số lượng tồn không được âm' })
   stockQuantity?: number;
 
