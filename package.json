@@ -28,6 +28,7 @@
     "nodemailer": "^10.0.13",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
@@ -40,6 +41,7 @@
     "@types/nodemailer": "^8.0.2",
     "@types/passport": "^1.0.17",
     "@types/passport-jwt": "^4.0.1",
+    "@types/pg": "^8.23.1",
     "source-map-support": "^0.5.21",
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",

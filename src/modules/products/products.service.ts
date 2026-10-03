@@ -3,7 +3,9 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
+import { DatabaseService } from '../../database/database.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
 import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
@@ -42,13 +44,71 @@ export class ProductsService implements OnModuleInit {
     'LH-OLD-COFFEE-CAN',
   ]);
 
-  constructor() {
+  constructor(@Optional() private readonly dbService?: DatabaseService) {
     this.seedInitialProducts();
   }
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     if (this.products.size === 0) {
       this.seedInitialProducts();
+    }
+    if (this.dbService?.isConnected()) {
+      await this.loadProductsFromDatabase();
+    }
+  }
+
+  /**
+   * Tải danh mục sản phẩm từ cơ sở dữ liệu PostgreSQL (nếu đã kết nối)
+   */
+  private async loadProductsFromDatabase(): Promise<void> {
+    try {
+      const rows = await this.dbService!.query<{
+        id: string;
+        sku: string;
+        name: string;
+        category_id: number;
+        category_name?: string;
+        base_unit: string;
+        cost_price: string | number;
+        status: string;
+        image_url?: string;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at, c.name as category_name
+         FROM products p
+         LEFT JOIN categories c ON p.category_id = c.id;`,
+      );
+
+      for (const row of rows) {
+        const existing = Array.from(this.products.values()).find(
+          (p) => p.sku.toUpperCase() === row.sku.toUpperCase() || p.id === row.id,
+        );
+        if (!existing) {
+          const catName = row.category_name || 'Đồ uống & Nước giải khát';
+          const costPrice = Number(row.cost_price) || 0;
+          const entity = new ProductEntity({
+            id: row.id,
+            sku: row.sku,
+            name: row.name,
+            category: catName,
+            parentCategory: catName,
+            subCategory: catName,
+            baseUnit: row.base_unit,
+            costPrice,
+            price: Math.round(costPrice * 1.35),
+            stockQuantity: 100,
+            status: (row.status as ProductStatus) || ProductStatus.ACTIVE,
+            imageUrl: row.image_url,
+            hasTransactions: false,
+            createdAt: new Date(row.created_at),
+            updatedAt: new Date(row.updated_at),
+          });
+          this.products.set(entity.id, entity);
+        }
+      }
+    } catch {
+      // Fallback êm ái nếu có lỗi truy vấn
     }
   }
 
@@ -446,6 +506,31 @@ export class ProductsService implements OnModuleInit {
     });
 
     this.products.set(newProduct.id, newProduct);
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `INSERT INTO products (sku, name, category_id, base_unit, cost_price, status, image_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (sku) DO UPDATE SET
+             name = EXCLUDED.name,
+             cost_price = EXCLUDED.cost_price,
+             updated_at = CURRENT_TIMESTAMP;`,
+          [
+            newProduct.sku,
+            newProduct.name,
+            1,
+            newProduct.baseUnit,
+            newProduct.costPrice,
+            newProduct.status,
+            newProduct.imageUrl || null,
+          ],
+        );
+      } catch {
+        // Fallback
+      }
+    }
+
     return newProduct;
   }
 
@@ -560,6 +645,30 @@ export class ProductsService implements OnModuleInit {
 
     product.updatedAt = new Date();
     this.products.set(product.id, product);
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE products 
+           SET name = COALESCE($1, name),
+               base_unit = COALESCE($2, base_unit),
+               cost_price = COALESCE($3, cost_price),
+               status = COALESCE($4, status),
+               image_url = COALESCE($5, image_url),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE sku = $6;`,
+          [
+            dto.name ? dto.name.trim() : null,
+            dto.baseUnit ? dto.baseUnit.trim() : null,
+            dto.costPrice !== undefined ? Number(dto.costPrice) : null,
+            dto.status || null,
+            dto.imageUrl ? dto.imageUrl.trim() : null,
+            product.sku,
+          ],
+        );
+      } catch {}
+    }
+
     return product;
   }
 
@@ -581,6 +690,16 @@ export class ProductsService implements OnModuleInit {
     }
 
     this.products.delete(product.id);
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `DELETE FROM products WHERE sku = $1;`,
+          [product.sku],
+        );
+      } catch {}
+    }
+
     return {
       success: true,
       message: `Đã xóa thành công sản phẩm [${product.sku}] khỏi danh mục.`,
