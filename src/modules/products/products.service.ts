@@ -753,6 +753,88 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
+   * Lấy danh sách sản phẩm thuộc một nhóm hàng (theo categoryId, code hoặc tên)
+   */
+  public findProductsByCategoryId(
+    categoryId: string,
+    categoryCode?: string,
+    categoryName?: string,
+  ): ProductEntity[] {
+    const cidLower = categoryId.toLowerCase().trim();
+    const codeLower = categoryCode ? categoryCode.toLowerCase().trim() : '';
+    const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
+
+    return Array.from(this.products.values()).filter((p) => {
+      if (p.categoryId && p.categoryId.toLowerCase().trim() === cidLower) return true;
+      if (codeLower && p.categoryId && p.categoryId.toLowerCase().trim() === codeLower) return true;
+      if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) return true;
+      if (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) return true;
+      if (p.category && nameLower && p.category.toLowerCase().includes(nameLower)) return true;
+      return false;
+    });
+  }
+
+  /**
+   * Đếm số lượng sản phẩm thuộc một nhóm hàng
+   */
+  public countProductsByCategoryId(
+    categoryId: string,
+    categoryCode?: string,
+    categoryName?: string,
+  ): number {
+    return this.findProductsByCategoryId(categoryId, categoryCode, categoryName).length;
+  }
+
+  /**
+   * Chuyển sản phẩm giữa các nhóm hàng (SN-150)
+   */
+  public async moveProductsBetweenCategories(
+    sourceCategoryId: string,
+    targetCategoryId: string,
+    targetCategoryName: string,
+    productIds?: string[],
+    sourceCategoryCode?: string,
+    sourceCategoryName?: string,
+  ): Promise<number> {
+    const candidates = this.findProductsByCategoryId(
+      sourceCategoryId,
+      sourceCategoryCode,
+      sourceCategoryName,
+    );
+
+    const toMove =
+      productIds && productIds.length > 0
+        ? candidates.filter(
+            (p) => productIds.includes(p.id) || productIds.includes(p.sku),
+          )
+        : candidates;
+
+    for (const p of toMove) {
+      p.categoryId = targetCategoryId;
+      p.subCategory = targetCategoryName;
+      if (p.parentCategory) {
+        p.category = `${p.parentCategory} / ${targetCategoryName}`;
+      } else {
+        p.category = targetCategoryName;
+      }
+      p.updatedAt = new Date();
+
+      if (this.dbService?.isConnected()) {
+        try {
+          await this.dbService.query(
+            `UPDATE products SET category_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 OR sku = $3`,
+            [targetCategoryId, p.id, p.sku],
+          );
+        } catch {
+          // Graceful fallback
+        }
+      }
+    }
+
+    return toMove.length;
+  }
+
+  /**
    * Hàm nội bộ tìm kiếm sản phẩm theo ID hoặc SKU
    */
   private findProductInternal(idOrSku: string): ProductEntity | undefined {

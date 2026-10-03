@@ -12,6 +12,7 @@ export class ProductEntity {
   parentCategory: string;
   subCategory: string;
   category: string;
+  categoryId?: string;
   baseUnit: string;
   packagingSpec?: string;
   price: number;

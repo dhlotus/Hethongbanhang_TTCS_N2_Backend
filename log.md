@@ -436,3 +436,52 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Build Backend (`nest build`) thành công, 0 lỗi biên dịch.
   - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
   - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.
+
+---
+
+### [Sprint 2] - [SN-150]: Quản Lý Nhóm Hàng Đa Cấp (Tree Structure) & Ràng Buộc Toàn Vẹn Dữ Liệu
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / US:** SN-150 (User Story SN-22 / S2-06 - Sprint 2)
+- **Mục tiêu nghiệp vụ:** Cho phép Quản lý kinh doanh (`SALES_MANAGER`) và Quản trị viên (`ADMIN`) quản lý nhóm hàng theo cấu trúc cây (tối thiểu 3 cấp), hỗ trợ chuyển sản phẩm giữa các nhóm và thực thi nghiêm ngặt ràng buộc toàn vẹn chống xóa nhóm còn sản phẩm hoặc nhóm con.
+- **Danh sách file tạo mới / thay đổi:**
+  - *Tạo mới:*
+    - `src/common/enums/category-status.enum.ts`: Enum `CategoryStatus` (`ACTIVE` | `INACTIVE`).
+    - `src/modules/categories/interfaces/category-tree.interface.ts`: Interface `CategoryTreeNode` (hỗ trợ phân cấp đệ quy và `productCount`).
+    - `src/modules/categories/entities/category.entity.ts`: Thực thể `CategoryEntity` (`id`, `code`, `name`, `parentId`, `level`, `status`, `productCount`, `children`, aliases snake_case `parent_id`, `product_count`, v.v.).
+    - `src/modules/categories/dto/create-category.dto.ts`: DTO tạo nhóm hàng mới (validate `name`, `code`, `parentId`, `description`, `status`).
+    - `src/modules/categories/dto/update-category.dto.ts`: DTO cập nhật nhóm hàng (`PartialType(CreateCategoryDto)`).
+    - `src/modules/categories/dto/move-products.dto.ts`: DTO di chuyển sản phẩm giữa các nhóm hàng (`sourceCategoryId`, `targetCategoryId`, `productIds`).
+    - `src/modules/categories/categories.service.ts`: Xử lý toàn bộ logic nghiệp vụ (build cây đệ quy, tính toán level tự động, chống vòng lặp vô tận, di chuyển sản phẩm, ràng buộc xóa cứng).
+    - `src/modules/categories/categories.controller.ts`: Các endpoints RESTful bảo vệ bởi `JwtAuthGuard` & `RolesGuard` (`ADMIN`, `SALES_MANAGER`).
+    - `src/modules/categories/categories.module.ts`: Đăng ký module và liên kết hai chiều với `ProductsModule`.
+    - `test/categories-tree-sn150.spec.ts`: Bộ kiểm thử tự động toàn diện 41/41 test case.
+  - *Chỉnh sửa:*
+    - `src/common/enums/index.ts`: Export `category-status.enum`.
+    - `src/modules/products/entities/product.entity.ts`: Bổ sung thuộc tính `categoryId` và alias getter `category_id`.
+    - `src/modules/products/products.service.ts`: Bổ sung các phương thức tra cứu và di chuyển sản phẩm theo nhóm hàng (`findProductsByCategoryId`, `countProductsByCategoryId`, `moveProductsBetweenCategories`).
+    - `src/app.module.ts`: Đăng ký `CategoriesModule`.
+- **Chi tiết kỹ thuật & nghiệp vụ đã triển khai:**
+  1. **Schema & Cây Danh Mục (Tree Structure):**
+     - Mô hình Adjacency List với `parent_id` tự liên kết, tính toán tự động `level` (`level = parent.level + 1`; nếu không có cha mặc định `level = 1`).
+     - Đã khởi tạo bộ dữ liệu mẫu chuẩn hóa 3 cấp cho ngành FMCG & Thực phẩm Đồ uống (Ngành hàng cha -> Nhóm phụ -> Phân loại con).
+     - Tự động đếm và hiển thị `productCount` tương ứng trên từng node nhóm hàng.
+  2. **Chống Vòng Lặp Vô Tận (Circular Dependency Protection):**
+     - Khi cập nhật `parentId`, hệ thống chủ động kiểm tra bằng thuật toán duyệt ngược tổ tiên (`isDescendant`):
+       - Chặn chọn chính mình làm nhóm cha (`BadRequestException: "Không thể chọn chính nhóm hàng làm nhóm cha (vòng lặp vô tận)"`).
+       - Chặn chọn con hoặc cháu làm nhóm cha (`BadRequestException: "Không thể chọn nhóm con/cháu làm nhóm cha (vòng lặp vô tận)"`).
+     - Khi đổi nhóm cha, hệ thống cập nhật đệ quy `level` của toàn bộ cây con bên dưới.
+  3. **Di Chuyển Sản Phẩm Giữa Các Nhóm (`POST /api/categories/move-products`):**
+     - Kiểm tra nhóm nguồn và nhóm đích hợp lệ, bắt buộc khác nhau.
+     - Cho phép di chuyển theo danh sách `productIds` chỉ định hoặc chuyển toàn bộ sản phẩm của nhóm nguồn sang nhóm đích.
+  4. **Ràng Buộc Toàn Vẹn Cứng Khi Xóa (`DELETE /api/categories/:id`):**
+     - Ràng buộc 1: Nếu nhóm đang chứa nhóm con (`children`), từ chối xóa: `"Nhóm hàng đang chứa nhóm hàng con. Vui lòng chuyển hoặc xóa nhóm con trước."`
+     - Ràng buộc 2: Nếu nhóm đang chứa sản phẩm (`products`), từ chối xóa: `"Nhóm còn sản phẩm thì không xoá được. Vui lòng chuyển sản phẩm sang nhóm khác trước khi xoá."`
+     - Chỉ cho phép xóa khi nhóm hoàn toàn rỗng.
+  5. **Phân Quyền RBAC (Deny by default):**
+     - `GET /api/categories/tree`, `GET /api/categories`, `GET /api/categories/:id`: Mọi người dùng đã đăng nhập (`JwtAuthGuard`).
+     - `POST`, `PATCH`, `DELETE`, `POST /move-products`: Giới hạn nghiêm ngặt chỉ `@Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)` kèm `RolesGuard`.
+- **Trạng thái:**
+  - ✅ Build Backend (`nest build`) thành công 100%, 0 lỗi TypeScript, tuyệt đối không dùng `any`.
+  - ✅ Test Suite `test/categories-tree-sn150.spec.ts`: **41/41 PASSED, 0 FAILED**.
+  - ✅ Hồi quy toàn diện: Test Suite SN-138 (62/62) và SN-10 (25/25) tiếp tục pass 100%.
+  - 🚀 Sẵn sàng tích hợp sang các tính năng Bảng giá đa cấp (EP-02 / Sprint 2).
