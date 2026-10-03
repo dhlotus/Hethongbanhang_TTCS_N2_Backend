@@ -112,11 +112,11 @@ export class CreateProductDto {
   @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
     return value !== undefined ? value : obj.stock_quantity;
   })
-  stockQuantity?: number = 0;
+  stockQuantity?: number;
 
   @IsOptional()
   @IsEnum(ProductStatus, { message: 'Trạng thái phải là ACTIVE hoặc INACTIVE' })
-  status?: ProductStatus = ProductStatus.ACTIVE;
+  status?: ProductStatus;
 
   @IsOptional()
   @IsString({ message: 'Đường dẫn ảnh imageUrl phải là chuỗi ký tự' })
