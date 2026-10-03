@@ -17,6 +17,17 @@ import {
   UpdateUserStatusDto,
 } from './dto';
 import { SafeUser, UserEntity } from './entities/user.entity';
+import type {
+  ExcelImportFailureItem,
+  ExcelImportReport,
+  ExcelImportSuccessItem,
+  ExcelUserRow,
+} from './interfaces/excel-import.interface';
+import {
+  normalizeRole,
+  parseExcelBuffer,
+  validateExcelRow,
+} from './utils/excel-import.util';
 
 export interface PaginatedUsersResult {
   data: SafeUser[];
@@ -777,5 +788,213 @@ export class UsersService implements OnModuleInit {
     user.failedAttempts = 0;
     user.lockedUntil = null;
     user.updatedAt = new Date();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // IMPORT EXCEL HÀNG LOẠT (SN-16 / Bulk Import)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Xử lý import tài khoản hàng loạt từ file Excel.
+   *
+   * Quy trình:
+   * 1. Parse buffer → mảng ExcelUserRow thô
+   * 2. Validate từng dòng (định dạng + ràng buộc nghiệp vụ)
+   * 3. Kiểm tra trùng lặp username/email với dữ liệu hiện có VÀ trong cùng file
+   * 4. Tạo tài khoản hàng loạt cho các dòng hợp lệ
+   * 5. Trả về báo cáo tổng kết đầy đủ
+   *
+   * @param fileBuffer - Buffer của file .xlsx hoặc .xls được upload
+   * @returns ExcelImportReport - Báo cáo tổng kết chi tiết
+   */
+  async importFromExcel(fileBuffer: Buffer): Promise<ExcelImportReport> {
+    const rows = parseExcelBuffer(fileBuffer);
+
+    const successItems: ExcelImportSuccessItem[] = [];
+    const failureItems: ExcelImportFailureItem[] = [];
+
+    // Tập hợp theo dõi trùng lặp trong nội bộ file (để phát hiện trùng ngay trên Excel)
+    const seenUsernamesInFile = new Set<string>();
+    const seenEmailsInFile = new Set<string>();
+
+    for (const row of rows) {
+      // Bước 1: Validate định dạng và ràng buộc nghiệp vụ
+      const validationErrors = validateExcelRow(row);
+      if (validationErrors.length > 0) {
+        failureItems.push(this.buildFailureItem(row, validationErrors.join(' | ')));
+        continue;
+      }
+
+      const username = row.username!.trim().toLowerCase();
+      const email = row.email!.trim().toLowerCase();
+
+      // Bước 2: Kiểm tra trùng lặp trong nội bộ file Excel
+      const inFileConflict = this.checkInFileConflict(username, email, seenUsernamesInFile, seenEmailsInFile);
+      if (inFileConflict) {
+        failureItems.push(this.buildFailureItem(row, inFileConflict));
+        continue;
+      }
+
+      // Bước 3: Kiểm tra trùng lặp với dữ liệu hiện có trong hệ thống
+      const systemConflict = this.checkSystemConflict(username, email);
+      if (systemConflict) {
+        failureItems.push(this.buildFailureItem(row, systemConflict));
+        continue;
+      }
+
+      // Bước 4: Tạo tài khoản
+      try {
+        const result = await this.createFromExcelRow(row);
+        seenUsernamesInFile.add(username);
+        seenEmailsInFile.add(email);
+        successItems.push({
+          rowIndex: row.rowIndex,
+          user: result.user,
+          temporaryPassword: result.temporaryPassword,
+        });
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Lỗi không xác định khi tạo tài khoản.';
+        failureItems.push(this.buildFailureItem(row, errorMessage));
+      }
+    }
+
+    return this.buildImportReport(rows.length, successItems, failureItems);
+  }
+
+  /**
+   * Kiểm tra trùng lặp username hoặc email trong cùng một file Excel
+   * (Phát hiện trùng giữa các dòng với nhau trước khi insert)
+   */
+  private checkInFileConflict(
+    username: string,
+    email: string,
+    seenUsernames: Set<string>,
+    seenEmails: Set<string>,
+  ): string | null {
+    if (seenUsernames.has(username)) {
+      return `Tên đăng nhập "${username}" bị trùng lặp trong file Excel.`;
+    }
+    if (seenEmails.has(email)) {
+      return `Email "${email}" bị trùng lặp trong file Excel.`;
+    }
+    return null;
+  }
+
+  /**
+   * Kiểm tra trùng lặp username hoặc email với dữ liệu đang có trong hệ thống
+   */
+  private checkSystemConflict(username: string, email: string): string | null {
+    for (const existingUser of this.users.values()) {
+      if (existingUser.username.toLowerCase() === username) {
+        return `Tên đăng nhập "${username}" đã tồn tại trong hệ thống.`;
+      }
+      if (existingUser.email.toLowerCase() === email) {
+        return `Email "${email}" đã được đăng ký trong hệ thống.`;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Tạo một UserEntity từ dữ liệu dòng Excel đã qua validate.
+   * Tái sử dụng lại logic của phương thức create() để đảm bảo DRY.
+   */
+  private async createFromExcelRow(
+    row: ExcelUserRow,
+  ): Promise<{ user: SafeUser; temporaryPassword: string }> {
+    const resolvedRole = normalizeRole(row.role)!;
+    const rawPassword = row.password?.trim() || `Loha@${Math.floor(100000 + Math.random() * 900000)}`;
+    const passwordHash = await bcrypt.hash(rawPassword, BCRYPT_SALT_ROUNDS);
+
+    const newUser = new UserEntity({
+      id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      username: row.username!.trim().toLowerCase(),
+      email: row.email!.trim().toLowerCase(),
+      fullName: row.fullName!.trim(),
+      phone: row.phone?.trim() ?? '',
+      role: resolvedRole,
+      roles: [resolvedRole],
+      status: UserStatus.ACTIVE,
+      assignedWarehouse: row.assignedWarehouse?.trim(),
+      passwordHash,
+      failedAttempts: 0,
+      lockedUntil: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    this.users.set(newUser.id, newUser);
+
+    // Gửi email kích hoạt tài khoản nếu MailService khả dụng
+    if (this.mailService) {
+      try {
+        await this.mailService.sendAccountActivationEmail({
+          to: newUser.email,
+          fullName: newUser.fullName,
+          username: newUser.username,
+          temporaryPassword: rawPassword,
+          role: resolvedRole,
+          assignedWarehouse: newUser.assignedWarehouse,
+        });
+      } catch (mailErr) {
+        // Lỗi gửi mail không được làm hỏng luồng tạo tài khoản hàng loạt
+        console.warn(
+          `[EXCEL_IMPORT] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
+          mailErr,
+        );
+      }
+    }
+
+    return {
+      user: newUser.toSafeUser(),
+      temporaryPassword: rawPassword,
+    };
+  }
+
+  /**
+   * Tạo ExcelImportFailureItem chuẩn từ một dòng lỗi và lý do lỗi
+   */
+  private buildFailureItem(row: ExcelUserRow, reason: string): ExcelImportFailureItem {
+    return {
+      rowIndex: row.rowIndex,
+      rawData: {
+        fullName: row.fullName,
+        username: row.username,
+        email: row.email,
+        phone: row.phone,
+        role: row.role,
+        assignedWarehouse: row.assignedWarehouse,
+      },
+      reason,
+    };
+  }
+
+  /**
+   * Tổng hợp báo cáo import Excel sau khi xử lý toàn bộ các dòng
+   */
+  private buildImportReport(
+    totalRows: number,
+    successItems: ExcelImportSuccessItem[],
+    failureItems: ExcelImportFailureItem[],
+  ): ExcelImportReport {
+    const successCount = successItems.length;
+    const failureCount = failureItems.length;
+    const skippedCount = totalRows - successCount - failureCount;
+
+    const summary =
+      `Đã xử lý ${totalRows} dòng dữ liệu: ` +
+      `✅ ${successCount} tài khoản tạo thành công, ` +
+      `❌ ${failureCount} dòng lỗi` +
+      (skippedCount > 0 ? `, ⏭️ ${skippedCount} dòng bỏ qua (trống).` : '.');
+
+    return {
+      totalRows,
+      successCount,
+      failureCount,
+      skippedCount,
+      successItems,
+      failureItems,
+      summary,
+    };
   }
 }
