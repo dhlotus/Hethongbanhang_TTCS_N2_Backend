@@ -240,5 +240,100 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Hoàn thành 100% yêu cầu Subtask SN-112, 13/13 test cases pass.
   - 🚀 Sẵn sàng cho các task tiếp theo của Sprint 1 (RBAC Roles Guard chi tiết theo 7 vai trò, Module Users/Quản lý tài khoản).
 
+### [Sprint 1] - [SN-144]: Xây Dựng API Upload Ảnh Đại Diện (Avatar Upload)
+- **Thời gian hoàn thành:** 2026-10-02
+- **Mã Jira / US:** SN-144 (Parent: SN-18 - Upload ảnh đại diện)
+- **Mục tiêu:** Xây dựng API tải lên và cập nhật ảnh đại diện người dùng, kiểm duyệt nghiêm ngặt định dạng (JPG/PNG), giới hạn dung lượng tối đa 2MB, sinh tên file ngẫu nhiên duy nhất tránh trùng lặp/lộ tên gốc, lưu trữ tại thư mục cục bộ phục vụ static file và tự động dọn dẹp ảnh cũ.
+- **Danh sách file thay đổi / tạo mới:**
+  - `src/modules/users/constants/avatar.constant.ts` (Tạo mới: Hằng số `MAX_AVATAR_SIZE = 2MB`, `ALLOWED_AVATAR_MIME_TYPES`, `ALLOWED_AVATAR_EXTENSIONS`, thông báo lỗi chuẩn)
+  - `src/modules/users/dto/avatar-response.dto.ts` (Tạo mới: DTO phản hồi trả về `statusCode`, `message`, `data: { avatarUrl }`)
+  - `src/modules/users/dto/index.ts` (Cập nhật: Barrel export `AvatarResponseDto`)
+  - `src/modules/users/decorators/uploaded-avatar-file.decorator.ts` (Tạo mới: Custom Decorator `@UploadedAvatarFile()` trích xuất linh hoạt file từ form-data với trường `file` hoặc `avatar`)
+  - `src/modules/users/pipes/avatar-validation.pipe.ts` (Tạo mới: Validation Pipe kiểm tra bắt buộc có file, dung lượng <= 2MB, định dạng chuẩn JPG/PNG)
+  - `src/modules/users/entities/user.entity.ts` (Cập nhật: Bổ sung trường `avatarUrl` vào `SafeUser` và `UserEntity`, hỗ trợ `toSafeUser()`)
+  - `src/modules/auth/interfaces/current-user.interface.ts` (Cập nhật: Thêm `avatarUrl` vào `ICurrentUser`)
+  - `src/modules/auth/strategies/jwt.strategy.ts` (Cập nhật: Trích xuất `avatarUrl` đồng bộ vào `req.user` khi giải mã token)
+  - `src/modules/users/users.service.ts` (Cập nhật: Thêm hàm `uploadAvatar` ghi đĩa, dọn dẹp file cũ trên server và cập nhật DB; thêm hàm `removeAvatar`)
+  - `src/modules/users/users.controller.ts` (Cập nhật: Thêm route `POST /api/users/me/avatar` và `DELETE /api/users/me/avatar` cho cả 7 vai trò người dùng)
+  - `src/modules/auth/auth.controller.ts` (Cập nhật: Thêm route `POST /api/auth/avatar` alias thuận tiện cho frontend)
+  - `src/common/decorators/current-user.decorator.ts` (Cập nhật: Bổ sung kiểu `null` cho return type decorator)
+  - `src/common/filters/http-exception.filter.ts` (Cập nhật: Bắt và chuẩn hóa `MulterError` về HTTP 400 Bad Request)
+  - `src/main.ts` (Cập nhật: Đảm bảo thư mục `uploads/avatars` luôn tồn tại và cấu hình `app.useStaticAssets` phục vụ static file tại `/uploads/` & `/api/uploads/`)
+  - `.gitignore` (Cập nhật: Bỏ qua các file ảnh upload thực tế nhưng giữ nguyên thư mục qua `.gitkeep`)
+  - `uploads/avatars/.gitkeep` (Tạo mới: Giữ thư mục uploads/avatars trên Git)
+  - `test/avatar-upload-sn144.spec.ts` (Tạo mới: Test suite tích hợp kiểm thử toàn diện 20/20 test cases pass)
+- **Chi tiết kỹ thuật:**
+  - *Endpoints:*
+    - `POST /api/users/me/avatar` & `POST /api/auth/avatar`: Protected bởi `JwtAuthGuard`, nhận `multipart/form-data` chứa trường `file` hoặc `avatar`.
+    - `DELETE /api/users/me/avatar`: Xóa ảnh đại diện cá nhân và xóa file vật lý trên đĩa.
+  - *Cơ chế Validation:*
+    - File bắt buộc: Nếu không đính kèm file ném `BadRequestException('Vui lòng chọn file ảnh để tải lên.')`.
+    - Định dạng: Chỉ chấp nhận `image/jpeg`, `image/png` (đuôi `.jpg`, `.jpeg`, `.png`), nếu sai ném `BadRequestException('Chỉ chấp nhận file ảnh định dạng JPG hoặc PNG')`.
+    - Dung lượng: Tối đa 2MB (`2,097,152 bytes`), nếu vượt quá ném `BadRequestException('Dung lượng ảnh không được vượt quá 2MB')`.
+  - *Lưu trữ & Bảo mật:*
+    - Tên file sinh ngẫu nhiên theo công thức `avatar-${userId}-${Date.now()}-${randomHash}${ext}` để tránh trùng lặp, chống lộ tên file gốc nhạy cảm và chống browser caching sai lệch.
+    - Tự động kiểm tra và xóa file avatar cũ trên đĩa cứng trước khi gán avatar mới nhằm giải phóng bộ nhớ lưu trữ server.
+    - Cập nhật trường `avatarUrl` dạng URL tương đối `/uploads/avatars/xxxx.png`, đồng bộ vào `SafeUser` và session của user.
+  - *Phân quyền RBAC:*
+    - Route `me/avatar` áp dụng `@Roles(...Object.values(UserRole))` cho phép tất cả 7 vai trò người dùng (ADMIN, SALES_REP, SALES_MANAGER, WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ACCOUNTANT, CUSTOMER) đều được quyền cập nhật ảnh đại diện của chính mình.
+- **Trạng thái & Lưu ý cho task kế tiếp:**
+  - ✅ Hoàn thành 100% yêu cầu Subtask SN-144, 20/20 test cases pass, 0 lỗi biên dịch TypeScript.
+  - 🚀 Sẵn sàng tích hợp sang Frontend (gọi API upload ảnh đại diện).
 
+### [Sprint 1] - [SN-144 / SN-145 Hotfix]: Đồng Bộ Data Contract Upload Avatar & Bảo Toàn Profile State
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / US:** SN-144, SN-145 (Parent: SN-18 - Upload ảnh đại diện)
+- **Vấn đề xử lý:** Khắc phục lỗi mất thông tin người dùng (Họ tên, Email, Role hiển thị `—`) sau khi upload avatar thành công do ghi đè state; khắc phục lỗi 404 khi F5/reload trang do thiếu route `GET /api/users/me`; khắc phục lỗi hiển thị ảnh do thiếu proxy `/uploads` ở Vite.
+- **Danh sách file thay đổi:**
+  - *Backend:*
+    - `src/modules/auth/dto/token-response.dto.ts`: Bổ sung `avatarUrl?: string | null` vào `IAuthUserInfo`.
+    - `src/modules/auth/auth.service.ts`: Gán `avatarUrl` trong `userInfo` khi login và refresh token.
+    - `src/modules/auth/auth.controller.ts`: Endpoint `GET /api/auth/me` trả về `SafeUser` đầy đủ từ database qua `findSafeById`.
+    - `src/modules/users/users.controller.ts`: Thêm route `GET /api/users/me` trước `:id` trả về `SafeUser` của người dùng hiện tại.
+  - *Frontend:*
+    - `src/services/users.service.ts`: Định nghĩa interface `AvatarUploadResponse` chuẩn theo DTO của Backend, sửa return type của `uploadAvatar`.
+    - `src/utils/avatar.ts`: Tạo mới tiện ích `resolveAvatarUrl()` chuẩn hóa đường dẫn tương đối `/uploads/...` thành URL backend hợp lệ.
+    - `src/pages/profile-page.tsx`: Áp dụng Merge state bảo toàn thông tin `user` sau khi upload và khi fetch profile; dùng `resolveAvatarUrl` cho thẻ `<img>`.
+    - `src/layouts/header.tsx`: Dùng `resolveAvatarUrl(avatarUrl)` cho thẻ `<img>` avatar ở Header.
+    - `src/components/avatar-upload-modal.tsx`: Dùng `resolveAvatarUrl` cho thumbnail preview hiện tại.
+    - `vite.config.ts`: Bổ sung proxy `/uploads` trỏ về backend `http://localhost:3000`.
+- **Trạng thái:**
+  - ✅ Type-check và Build thành công 100% ở cả Backend (`nest build`) và Frontend (`tsc -b && vite build`), 0 lỗi biên dịch.
+  - ✅ Sẵn sàng kiểm thử giao diện thực tế.
 
+### [Sprint 1] - [SN-145 Extension]: Đồng Bộ Hiển Thị Avatar Toàn Diện (Sidebar & Bảng Quản Lý Người Dùng)
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / US:** SN-145 (Parent: SN-18 - Upload ảnh đại diện)
+- **Vấn đề xử lý:** Khắc phục tình trạng Sidebar User Widget góc dưới bên trái vẫn hiển thị avatar chữ cái mặc định ("N") sau khi đổi ảnh; khắc phục Bảng Quản lý Người dùng (`/users`) luôn hiển thị chữ cái cho tất cả nhân sự thay vì hiển thị ảnh đại diện thật của đồng nghiệp/bản thân.
+- **Danh sách file thay đổi:**
+  - `src/types/user.ts`: Bổ sung `avatarUrl?: string | null` vào interface `UserManagementItem`.
+  - `src/layouts/sidebar.tsx`: Lắng nghe sự kiện `avatar-updated` và `storage`, hiển thị ảnh đại diện với `resolveAvatarUrl()`, bổ sung click chuyển nhanh tới `/profile`.
+  - `src/pages/users-page.tsx`: Cột Nhân sự kiểm tra và render ảnh đại diện qua `resolveAvatarUrl()` (kèm fallback chữ cái), tự động fetch lại danh sách khi có sự kiện đổi avatar.
+- **Trạng thái:**
+  - ✅ Build Frontend và Backend thành công 100%, 0 lỗi TypeScript.
+  - ✅ Đảm bảo tính nhất quán trên toàn bộ ứng dụng (Header, Sidebar, Profile, User Table).
+
+### [Sprint 1] - [PERSISTENCE-01]: Cấu Hình Bền Vững Dữ Liệu Avatar Khi Restart Server
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / US:** Yêu cầu ngoài sprint (Persistence Configuration)
+- **Vấn đề xử lý:**
+  - Backend sử dụng **In-memory Map** làm nơi lưu trữ tạm thời (chưa kết nối PostgreSQL thực sự qua TypeORM).
+  - Khi restart server (`nest start --watch`), toàn bộ dữ liệu user bao gồm `avatarUrl` bị mất vì seed function khởi tạo lại Map với `avatarUrl: null`.
+  - Tuy nhiên, file ảnh avatar vật lý vẫn tồn tại bền vững trên đĩa tại `uploads/avatars/` (nằm ngoài `dist/`, dùng `process.cwd()`).
+- **Giải pháp kỹ thuật:**
+  - Thêm hàm `restoreAvatarsFromDisk()` vào `UsersService`, được gọi tự động sau `seedInitialUsersSync()`.
+  - Hàm này quét thư mục `uploads/avatars/`, parse tên file theo pattern `avatar-{userId}-{timestamp}-{hash}.{ext}`, match userId với Map hiện tại.
+  - Nếu 1 user có nhiều file avatar (do upload nhiều lần), chọn file mới nhất dựa trên `mtime` (thời gian chỉnh sửa cuối).
+  - Gán lại `avatarUrl` cho user entity trong Map, đảm bảo avatar hiển thị đúng ngay khi server khởi động lại.
+- **Kiểm tra cấu hình khác:**
+  - ✅ `synchronize: false` đã được đặt đúng trong `src/database/database.config.ts`.
+  - ✅ `main.ts` sử dụng `process.cwd()` cho static assets (ngoài `dist/`), không có seed function ở bootstrap.
+  - ✅ `.gitignore` đã cấu hình đúng: `uploads/*` + `!uploads/**/.gitkeep`.
+  - ✅ `.gitkeep` tồn tại ở cả `uploads/` và `uploads/avatars/`.
+- **Danh sách file thay đổi:**
+  - `src/modules/users/users.service.ts`: Thêm hàm `restoreAvatarsFromDisk()` và gọi trong `seedInitialUsersSync()`.
+  - `uploads/.gitkeep`: Tạo mới.
+- **Trạng thái:**
+  - ✅ Build Backend (`nest build`) thành công, 0 lỗi biên dịch.
+  - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
+  - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.

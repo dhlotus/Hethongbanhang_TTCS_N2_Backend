@@ -6,10 +6,18 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import * as multer from 'multer';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { UploadedAvatarFile } from '../users/decorators/uploaded-avatar-file.decorator';
+import { AvatarResponseDto } from '../users/dto/avatar-response.dto';
+import { AvatarValidationPipe } from '../users/pipes/avatar-validation.pipe';
+import { SafeUser } from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import {
   AuthMessageResponseDto,
@@ -28,7 +36,10 @@ import { ICurrentUser } from './interfaces/current-user.interface';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly usersService: UsersService,
+  ) {}
 
   /**
    * Endpoint đăng nhập cấp phát Access Token & Refresh Token
@@ -73,8 +84,36 @@ export class AuthController {
    */
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  getProfile(@CurrentUser() currentUser: ICurrentUser): ICurrentUser {
-    return currentUser;
+  async getProfile(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
+    return this.usersService.findSafeById(currentUser.userId);
+  }
+
+  /**
+   * Endpoint tải lên ảnh đại diện tài khoản đang đăng nhập (SN-144)
+   * POST /api/auth/avatar
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('avatar')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'file', maxCount: 1 },
+        { name: 'avatar', maxCount: 1 },
+      ],
+      {
+        storage: multer.memoryStorage(),
+        limits: {
+          fileSize: 10 * 1024 * 1024,
+        },
+      },
+    ),
+  )
+  async uploadAvatar(
+    @CurrentUser() currentUser: ICurrentUser,
+    @UploadedAvatarFile(new AvatarValidationPipe()) file: Express.Multer.File,
+  ): Promise<AvatarResponseDto> {
+    return this.usersService.uploadAvatar(currentUser.userId, file);
   }
 
   /**
