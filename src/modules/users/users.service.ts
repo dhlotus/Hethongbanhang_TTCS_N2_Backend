@@ -22,9 +22,11 @@ import {
   CreateUserDto,
   QueryUsersDto,
   UpdateUserDto,
+  UpdateProfileDto,
   UpdateUserStatusDto,
 } from './dto';
 import { SafeUser, UserEntity } from './entities/user.entity';
+import { UserField, UserRepository } from './user.repository';
 
 export interface PaginatedUsersResult {
   data: SafeUser[];
@@ -117,12 +119,16 @@ export class UsersService implements OnModuleInit {
     ],
   ]);
 
-  constructor(@Optional() private readonly mailService?: MailService) {
-    this.seedInitialUsersSync();
+  constructor(
+    @Optional() private readonly mailService?: MailService,
+    @Optional() private readonly userRepository?: UserRepository,
+  ) {
+    // Các unit test cũ khởi tạo service trực tiếp; ứng dụng luôn inject repository.
+    if (!this.userRepository) this.seedInitialUsersSync();
   }
 
   async onModuleInit(): Promise<void> {
-    if (this.users.size === 0) {
+    if (!this.userRepository && this.users.size === 0) {
       this.seedInitialUsersSync();
     }
   }
@@ -359,7 +365,7 @@ export class UsersService implements OnModuleInit {
     const role = query.role;
     const status = query.status;
 
-    let userList = Array.from(this.users.values());
+    let userList = await this.getUsers();
 
     // 1. Lọc theo từ khóa tìm kiếm (Tên, username, email, phone)
     if (search) {
@@ -406,6 +412,10 @@ export class UsersService implements OnModuleInit {
     const normalizedIdentifier =
       UsersService.EMAIL_ALIASES[rawNormalized] || rawNormalized;
 
+    if (this.userRepository) {
+      return this.userRepository.findByIdentifier(normalizedIdentifier);
+    }
+
     for (const user of this.users.values()) {
       if (
         user.email.toLowerCase() === normalizedIdentifier ||
@@ -418,7 +428,43 @@ export class UsersService implements OnModuleInit {
   }
 
   async findById(id: string): Promise<UserEntity | null> {
+    if (this.userRepository) return this.userRepository.findById(id);
     return this.users.get(id) ?? null;
+  }
+
+  private async getUsers(): Promise<UserEntity[]> {
+    return this.userRepository
+      ? this.userRepository.findAll()
+      : Array.from(this.users.values());
+  }
+
+  private async saveUser(user: UserEntity, fields: UserField[]): Promise<UserEntity> {
+    if (this.userRepository) return this.userRepository.update(user, fields);
+    user.updatedAt = new Date();
+    this.users.set(user.id, user);
+    return user;
+  }
+
+  async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeUser> {
+    const user = await this.findById(id);
+    if (!user) {
+      throw new NotFoundException(`Không tìm thấy người dùng có ID: ${id}`);
+    }
+    if (dto.fullName === undefined && dto.phone === undefined) {
+      throw new BadRequestException('Cần cung cấp họ tên hoặc số điện thoại để cập nhật');
+    }
+
+    // Chỉ gán các trường liên lạc, không dùng luồng cập nhật quyền của admin.
+    if (dto.fullName !== undefined) {
+      user.fullName = dto.fullName;
+    }
+    if (dto.phone !== undefined) {
+      user.phone = dto.phone.replace(/^\+84/, '0');
+    }
+    const fields: UserField[] = [];
+    if (dto.fullName !== undefined) fields.push('fullName');
+    if (dto.phone !== undefined) fields.push('phone');
+    return (await this.saveUser(user, fields)).toSafeUser();
   }
 
   async findSafeById(id: string): Promise<SafeUser> {
@@ -442,7 +488,7 @@ export class UsersService implements OnModuleInit {
     const email = dto.email.trim().toLowerCase();
 
     // 1. Kiểm tra trùng lặp username hoặc email trong hệ thống
-    for (const u of this.users.values()) {
+    for (const u of await this.getUsers()) {
       if (u.username.toLowerCase() === username) {
         throw new BadRequestException(
           `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Tên đăng nhập "${dto.username}" đã được sử dụng.`,
@@ -483,7 +529,7 @@ export class UsersService implements OnModuleInit {
     const passwordHash = bcrypt.hashSync(rawPassword, BCRYPT_SALT_ROUNDS);
 
     const newUser = new UserEntity({
-      id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: crypto.randomUUID(),
       username,
       email,
       fullName: dto.fullName.trim(),
@@ -499,7 +545,11 @@ export class UsersService implements OnModuleInit {
       updatedAt: new Date(),
     });
 
-    this.users.set(newUser.id, newUser);
+    if (this.userRepository) {
+      await this.userRepository.create(newUser);
+    } else {
+      this.users.set(newUser.id, newUser);
+    }
 
     // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
     if (this.mailService) {
@@ -590,7 +640,7 @@ export class UsersService implements OnModuleInit {
     // 3. Kiểm tra trùng lặp username
     if (dto.username) {
       const username = dto.username.trim().toLowerCase();
-      for (const u of this.users.values()) {
+      for (const u of await this.getUsers()) {
         if (u.id !== id && u.username.toLowerCase() === username) {
           throw new BadRequestException(
             `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Tên đăng nhập "${dto.username}" đã thuộc về người dùng khác.`,
@@ -603,7 +653,7 @@ export class UsersService implements OnModuleInit {
     // 4. Kiểm tra trùng lặp email
     if (dto.email) {
       const email = dto.email.trim().toLowerCase();
-      for (const u of this.users.values()) {
+      for (const u of await this.getUsers()) {
         if (u.id !== id && u.email.toLowerCase() === email) {
           throw new BadRequestException(
             `Tên đăng nhập hoặc email đã tồn tại trên hệ thống: Địa chỉ email "${dto.email}" đã thuộc về người dùng khác.`,
@@ -634,17 +684,27 @@ export class UsersService implements OnModuleInit {
       user.passwordHash = bcrypt.hashSync(dto.password.trim(), BCRYPT_SALT_ROUNDS);
     }
 
-    user.updatedAt = new Date();
-    this.users.set(user.id, user);
+    const fields = this.getAdminUpdateFields(dto);
+    return (await this.saveUser(user, fields)).toSafeUser();
+  }
 
-    return user.toSafeUser();
+  private getAdminUpdateFields(dto: UpdateUserDto): UserField[] {
+    const fields: UserField[] = [];
+    if (dto.username) fields.push('username');
+    if (dto.email) fields.push('email');
+    if (dto.fullName) fields.push('fullName');
+    if (dto.phone !== undefined) fields.push('phone');
+    if (dto.roles?.length || dto.role) fields.push('roles');
+    if (dto.assignedWarehouse !== undefined) fields.push('assignedWarehouse');
+    if (dto.password) fields.push('passwordHash');
+    return fields;
   }
 
   /**
    * Lấy danh sách đại lý phụ trách của nhân sự (SN-15)
    */
-  getAssignedCustomers(userId: string): AssignedCustomerItem[] {
-    const user = this.users.get(userId);
+  getAssignedCustomers(userId: string, account?: UserEntity | null): AssignedCustomerItem[] {
+    const user = account ?? this.users.get(userId);
     const targetIds = new Set<string>([userId.toLowerCase()]);
     if (user) {
       targetIds.add(user.username.toLowerCase());
@@ -664,12 +724,12 @@ export class UsersService implements OnModuleInit {
   /**
    * Trả về kết quả truy vấn đại lý phụ trách kèm cảnh báo bàn giao (SN-15)
    */
-  getAssignedCustomersResult(userId: string): {
+  async getAssignedCustomersResult(userId: string): Promise<{
     customers: AssignedCustomerItem[];
     total: number;
     warning?: string;
-  } {
-    const customers = this.getAssignedCustomers(userId);
+  }> {
+    const customers = this.getAssignedCustomers(userId, await this.findById(userId));
     const warning =
       customers.length > 0
         ? `Nhân sự này đang phụ trách ${customers.length} đại lý. Sau khi khóa, hệ thống khuyến nghị bạn thực hiện chuyển giao địa bàn cho nhân viên kinh doanh khác.`
@@ -722,19 +782,17 @@ export class UsersService implements OnModuleInit {
     user.lockReason = dto.reason ? dto.reason.trim() : null;
     user.updatedAt = new Date();
 
-    if (dto.status === UserStatus.LOCKED) {
-      // Tự động thu hồi toàn bộ token và phiên đăng nhập của user này
-      this.revokeSessions(user.id);
-    } else if (dto.status === UserStatus.ACTIVE) {
+    if (dto.status === UserStatus.ACTIVE) {
       user.failedAttempts = 0;
       user.lockedUntil = null;
       user.lockReason = null;
     }
 
-    this.users.set(user.id, user);
+    await this.saveUser(user, ['status', 'lockReason', 'failedAttempts', 'lockedUntil']);
+    if (dto.status === UserStatus.LOCKED) this.revokeSessions(user.id);
 
     // 3. Kiểm tra đại lý do nhân sự phụ trách khi khóa (SN-15)
-    const assignedCustomers = this.getAssignedCustomers(user.id);
+    const assignedCustomers = this.getAssignedCustomers(user.id, user);
     const handoverWarning =
       dto.status === UserStatus.LOCKED && assignedCustomers.length > 0
         ? `Nhân sự này đang phụ trách ${assignedCustomers.length} đại lý. Sau khi khóa, hệ thống khuyến nghị bạn thực hiện chuyển giao địa bàn cho nhân viên kinh doanh khác.`
@@ -767,7 +825,7 @@ export class UsersService implements OnModuleInit {
     user.resetCode = resetCode;
     user.resetCodeCreatedAt = new Date();
     user.updatedAt = new Date();
-    this.users.set(user.id, user);
+    await this.saveUser(user, ['resetCode', 'resetCodeCreatedAt']);
 
     return {
       resetCode,
@@ -821,7 +879,9 @@ export class UsersService implements OnModuleInit {
     user.failedAttempts = 0;
     user.lockedUntil = null;
     user.updatedAt = new Date();
-    this.users.set(user.id, user);
+    await this.saveUser(user, [
+      'passwordHash', 'resetCode', 'resetCodeCreatedAt', 'failedAttempts', 'lockedUntil',
+    ]);
 
     // Thu hồi toàn bộ phiên đăng nhập cũ
     this.revokeSessions(user.id);
@@ -837,27 +897,27 @@ export class UsersService implements OnModuleInit {
     failedAttempts: number,
     lockedUntil: Date | null,
   ): Promise<void> {
-    const user = this.users.get(userId);
+    const user = await this.findById(userId);
     if (!user) {
       return;
     }
     user.failedAttempts = failedAttempts;
     user.lockedUntil = lockedUntil;
-    user.updatedAt = new Date();
+    await this.saveUser(user, ['failedAttempts', 'lockedUntil']);
   }
 
   async resetFailedAttempts(userId: string): Promise<void> {
-    const user = this.users.get(userId);
+    const user = await this.findById(userId);
     if (!user) {
       return;
     }
     user.failedAttempts = 0;
     user.lockedUntil = null;
-    user.updatedAt = new Date();
+    await this.saveUser(user, ['failedAttempts', 'lockedUntil']);
   }
 
   async updatePassword(userId: string, newPasswordHash: string): Promise<void> {
-    const user = this.users.get(userId);
+    const user = await this.findById(userId);
     if (!user) {
       return;
     }
@@ -866,7 +926,9 @@ export class UsersService implements OnModuleInit {
     user.resetCodeCreatedAt = null;
     user.failedAttempts = 0;
     user.lockedUntil = null;
-    user.updatedAt = new Date();
+    await this.saveUser(user, [
+      'passwordHash', 'resetCode', 'resetCodeCreatedAt', 'failedAttempts', 'lockedUntil',
+    ]);
   }
 
   /**
@@ -900,10 +962,21 @@ export class UsersService implements OnModuleInit {
     // 3. Ghi file từ memory buffer xuống đĩa lưu trữ
     await fs.promises.writeFile(targetFilePath, file.buffer);
 
+    const oldAvatarUrl = user.avatarUrl;
+    const avatarUrl = `${AVATAR_URL_PREFIX}${uniqueFileName}`;
+    user.avatarUrl = avatarUrl;
+    try {
+      await this.saveUser(user, ['avatarUrl']);
+    } catch (error: unknown) {
+      user.avatarUrl = oldAvatarUrl;
+      await fs.promises.unlink(targetFilePath).catch(() => undefined);
+      throw error;
+    }
+
     // 4. Nếu user đã có avatar cũ trước đó, tiến hành xóa file ảnh cũ để dọn dẹp bộ nhớ
-    if (user.avatarUrl) {
+    if (oldAvatarUrl) {
       try {
-        const oldFilename = path.basename(user.avatarUrl);
+        const oldFilename = path.basename(oldAvatarUrl);
         const oldFilePath = path.join(uploadDir, oldFilename);
         if (fs.existsSync(oldFilePath)) {
           await fs.promises.unlink(oldFilePath);
@@ -915,12 +988,6 @@ export class UsersService implements OnModuleInit {
         );
       }
     }
-
-    // 5. Cập nhật đường dẫn avatarUrl vào thực thể người dùng
-    const avatarUrl = `${AVATAR_URL_PREFIX}${uniqueFileName}`;
-    user.avatarUrl = avatarUrl;
-    user.updatedAt = new Date();
-    this.users.set(user.id, user);
 
     return {
       statusCode: 200,
@@ -940,10 +1007,13 @@ export class UsersService implements OnModuleInit {
       throw new NotFoundException(AVATAR_MESSAGES.USER_NOT_FOUND);
     }
 
-    if (user.avatarUrl) {
+    const oldAvatarUrl = user.avatarUrl;
+    user.avatarUrl = null;
+    const savedUser = await this.saveUser(user, ['avatarUrl']);
+    if (oldAvatarUrl) {
       try {
         const uploadDir = path.join(process.cwd(), 'uploads', 'avatars');
-        const oldFilename = path.basename(user.avatarUrl);
+        const oldFilename = path.basename(oldAvatarUrl);
         const oldFilePath = path.join(uploadDir, oldFilename);
         if (fs.existsSync(oldFilePath)) {
           await fs.promises.unlink(oldFilePath);
@@ -956,11 +1026,7 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    user.avatarUrl = null;
-    user.updatedAt = new Date();
-    this.users.set(user.id, user);
-
-    return user.toSafeUser();
+    return savedUser.toSafeUser();
   }
 }
 

@@ -1,4 +1,6 @@
 # KIẾN TRÚC CƠ SỞ DỮ LIỆU POSTGRESQL - HỆ THỐNG LOHA SALES
+> SN-17: xem [hướng dẫn kết nối ứng dụng và lưu hồ sơ](../../docs/sn-17-profile.md).
+> Sau khi cài schema bên dưới, chạy `npm run db:migrate` để thêm migration 008.
 > **Phiên bản:** 1.0.0  
 > **Hệ quản trị:** PostgreSQL 14+  
 > **Kiến trúc:** B2B Distribution & Warehouse Management System (9 Epics Cốt lõi)
