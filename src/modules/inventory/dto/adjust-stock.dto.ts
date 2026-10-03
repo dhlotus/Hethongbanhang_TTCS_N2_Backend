@@ -16,4 +16,12 @@ export class AdjustStockDto {
   @IsOptional()
   @IsString()
   warehouseLocation?: string;
+
+  @IsOptional()
+  @IsString()
+  unitId?: string;
+
+  @IsOptional()
+  @IsString()
+  unitName?: string;
 }
