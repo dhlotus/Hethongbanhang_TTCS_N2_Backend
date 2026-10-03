@@ -538,3 +538,84 @@ Trên Git / GitHub Pull Request #5 có 4 file xung đột cần xử lý khi mer
    - Khi chuyển từ In-Memory Map sang PostgreSQL, có thể cân nhắc tùy chọn Transaction (All-or-Nothing) hoặc Partial Import tùy theo yêu cầu cụ thể của từng nghiệp vụ doanh nghiệp.
 
 
+
+---
+
+## SN-147-FE | Xây dựng giao diện Import Tài khoản Hàng loạt từ Excel
+
+> **Loại:** Frontend Feature
+> **Thực hiện bởi:** Antigravity AI (hỗ trợ lập trình)
+> **Ngày hoàn thành:** 2026-10-04 (UTC+7)
+> **Branch liên quan:** BE: `SN-147-api-xu-ly-tep-excel` | FE: `feat/SN-147-giao-dien-import-excel`
+> **Phụ thuộc:** SN-147 Backend (đã hoàn thành và merge)
+
+---
+
+#### 📌 1. Mục tiêu
+
+Xây dựng giao diện Frontend tương ứng với API `POST /api/users/import-excel` (SN-147 BE), cho phép Admin tải lên file Excel để tạo tài khoản nhân sự hàng loạt và xem báo cáo kết quả chi tiết từng dòng.
+
+---
+
+#### 📌 2. Danh sách File Tạo Mới / Thay Đổi
+
+| File | Trạng thái | Mô tả |
+|------|-----------|-------|
+| `src/types/user.ts` | Sửa | Thêm `ImportRowResult`, `ExcelImportReport`, `ExcelImportResponse` — mapping chính xác với `ImportUsersReportDto` của BE |
+| `src/services/users.service.ts` | Sửa | Thêm `importUsersFromExcel(file: File)` gọi `POST /users/import-excel` với multipart/form-data |
+| `src/components/excel-import-modal.tsx` | Tạo mới | Component modal 3 bước: Chọn/kéo thả file → Upload + Progress bar → Báo cáo tổng kết |
+| `src/pages/users-page.tsx` | Sửa | Thêm nút Import Excel vào toolbar, state `importModalOpen`, render `ExcelImportModal` |
+
+---
+
+#### 📌 3. Chi tiết Kỹ thuật
+
+**Types đồng bộ với BE (`src/types/user.ts`):**
+- `ImportRowResult`: khớp với BE interface — `status: 'SUCCESS'|'FAILED'`, `errors: string[]`, `createdUser`, `temporaryPassword`, `rawData`
+- `ExcelImportReport`: field `failedCount` (không phải `failCount`), `results: ImportRowResult[]`, `summary`
+- `ExcelImportResponse`: wrapper `{ statusCode, message, data }`
+
+**Service (`src/services/users.service.ts`):**
+- `formData.append('file', file)` — field name `'file'` khớp với `FileInterceptor('file')` của BE Controller
+
+**Component `ExcelImportModal` (`src/components/excel-import-modal.tsx`):**
+- Bước 1: Drag & Drop hoặc click duyệt, validate client (size ≤ 5MB, .xlsx/.xls), hướng dẫn 7 cột
+- Bước 2: Progress bar giả lập, không cho đóng modal khi đang upload
+- Bước 3: 3 thẻ stats + banner trạng thái + bảng thành công (copy mật khẩu tạm) + bảng lỗi chi tiết
+- Sub-components: `SuccessTable`, `ErrorTable`, `ResultPanel` (PascalCase, tuân thủ convention)
+- Sau import: `onImportSuccess()` → `fetchUsers()` tự động reload danh sách
+
+**Tích hợp `UsersPage`:**
+- Nút Import Excel (emerald) đặt giữa Làm mới và Thêm nhân sự mới
+
+---
+
+#### 📌 4. Lỗi Phát hiện & Sửa (Review)
+
+| Lỗi | Mô tả | Cách sửa |
+|-----|-------|----------|
+| Type mismatch: `failCount` vs `failedCount` | FE dùng `failCount`, BE trả `failedCount` | Sửa FE type thành `failedCount` |
+| Type mismatch: `successItems[]` vs `results[]` | FE expect flat array, BE gộp vào `results[]` | Dùng `results.filter(r => r.status === 'SUCCESS')` |
+| Type mismatch: errors object vs string[] | FE expect `{row, field, message}`, BE trả `string[]` | Sửa FE type, render `<li>` từ `string[]` |
+| Thiếu accept `.xls` | Modal chỉ accept `.xlsx`, BE accept cả `.xls` | Thêm `.xls` vào input accept và validate logic |
+
+---
+
+#### 📌 5. Kết quả Kiểm tra
+
+- `tsc --noEmit` Backend: 0 lỗi
+- `tsc --noEmit` Frontend: 0 lỗi
+- Strict TypeScript (no `any`): Tuân thủ
+- File kebab-case: `excel-import-modal.tsx`
+- Component PascalCase: `ExcelImportModal`, `SuccessTable`, `ErrorTable`, `ResultPanel`
+- Hàm camelCase + động từ: `handleUpload`, `handleDrop`, `handleSelectFile`, `validateFile`
+- Gọi API qua service (không fetch trực tiếp trong component): Tuân thủ
+
+---
+
+#### 📌 6. Ghi chú cho Task Kế tiếp
+
+1. Chưa có file `public/templates/users-import-template.xlsx` — cần tạo file mẫu 7 cột + dữ liệu mẫu để người dùng tải về.
+2. Nút Import Excel hiện hiển thị cho mọi vai trò. Cân nhắc ẩn với non-ADMIN (BE đã guard, chỉ là UX).
+3. Nếu muốn progress bar chính xác có thể dùng `onUploadProgress` của Axios.
+
