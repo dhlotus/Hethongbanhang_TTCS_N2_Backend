@@ -6,6 +6,10 @@ import {
 } from '@nestjs/common';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ProductEntity } from './entities/product.entity';
+import { ImportProductItemDto, PreviewImportResult, ConfirmImportResult } from './dto/import-product.dto';
+import * as ExcelJS from 'exceljs';
+import { Response } from 'express';
+
 
 @Injectable()
 export class ProductsService implements OnModuleInit {
@@ -178,5 +182,186 @@ export class ProductsService implements OnModuleInit {
     product.updatedAt = new Date();
     this.products.set(product.id, product);
     return product;
+  }
+
+  async generateImportTemplate(res: Response): Promise<void> {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Danh mục sản phẩm');
+
+    // Headers
+    sheet.columns = [
+      { header: 'Mã SKU (*)', key: 'sku', width: 20 },
+      { header: 'Tên sản phẩm (*)', key: 'name', width: 30 },
+      { header: 'Ngành hàng (*)', key: 'category', width: 20 },
+      { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15 },
+      { header: 'Giá bán (*)', key: 'price', width: 15 },
+      { header: 'Giá vốn (*)', key: 'costPrice', width: 15 },
+      { header: 'Tồn kho ban đầu', key: 'stockQuantity', width: 15 },
+      { header: 'Mã vạch', key: 'barcode', width: 20 },
+      { header: 'Mô tả', key: 'description', width: 30 },
+    ];
+
+    // Example row
+    sheet.addRow({
+      sku: 'SP-001',
+      name: 'Sản phẩm mẫu',
+      category: 'Hàng hóa',
+      baseUnit: 'Cái',
+      price: 100000,
+      costPrice: 80000,
+      stockQuantity: 10,
+      barcode: '8931234567890',
+      description: 'Đây là dòng dữ liệu mẫu, hãy xóa dòng này trước khi nhập',
+    });
+
+    // Style the header
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=Template_Nhap_SanPham.xlsx',
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+
+  async previewImport(file: Express.Multer.File): Promise<PreviewImportResult> {
+    if (!file) {
+      throw new BadRequestException('Vui lòng tải lên tệp Excel');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    try {
+      await workbook.xlsx.load(file.buffer);
+    } catch (error) {
+      throw new BadRequestException('Tệp không đúng định dạng Excel');
+    }
+
+    const sheet = workbook.worksheets[0];
+    if (!sheet) {
+      throw new BadRequestException('Tệp Excel không có dữ liệu');
+    }
+
+    const previewData: ImportProductItemDto[] = [];
+    let validCount = 0;
+    let invalidCount = 0;
+
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Skip header
+
+      const sku = row.getCell(1).text?.trim();
+      const name = row.getCell(2).text?.trim();
+      const category = row.getCell(3).text?.trim();
+      const baseUnit = row.getCell(4).text?.trim();
+      const price = Number(row.getCell(5).value) || 0;
+      const costPrice = Number(row.getCell(6).value) || 0;
+      const stockQuantity = Number(row.getCell(7).value) || 0;
+      const barcode = row.getCell(8).text?.trim();
+      const description = row.getCell(9).text?.trim();
+
+      // Skip totally empty rows
+      if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
+
+      const errors: string[] = [];
+      
+      if (!sku) errors.push('Mã SKU không được để trống');
+      if (!name) errors.push('Tên sản phẩm không được để trống');
+      if (!category) errors.push('Ngành hàng không được để trống');
+      if (!baseUnit) errors.push('Đơn vị tính không được để trống');
+      if (price <= 0) errors.push('Giá bán phải lớn hơn 0');
+      if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
+
+      const existingProduct = Array.from(this.products.values()).find(
+        (p) => p.sku.toLowerCase() === sku?.toLowerCase(),
+      );
+
+      const status = existingProduct ? 'UPDATE' : 'NEW';
+
+      if (errors.length > 0) {
+        invalidCount++;
+      } else {
+        validCount++;
+      }
+
+      previewData.push({
+        row: rowNumber,
+        sku: sku || '',
+        name: name || '',
+        category: category || '',
+        baseUnit: baseUnit || '',
+        price,
+        costPrice,
+        stockQuantity,
+        barcode,
+        description,
+        status,
+        errors,
+        isValid: errors.length === 0,
+      });
+    });
+
+    return {
+      total: previewData.length,
+      valid: validCount,
+      invalid: invalidCount,
+      data: previewData,
+    };
+  }
+
+  async confirmImport(items: ImportProductItemDto[]): Promise<ConfirmImportResult> {
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+
+    for (const item of items) {
+      try {
+        if (!item.isValid) {
+          errorCount++;
+          errors.push(`Dòng ${item.row}: Dữ liệu không hợp lệ`);
+          continue;
+        }
+
+        if (item.status === 'UPDATE') {
+          await this.update(item.sku, {
+            name: item.name,
+            category: item.category,
+            baseUnit: item.baseUnit,
+            price: item.price,
+            costPrice: item.costPrice,
+            barcode: item.barcode,
+            description: item.description,
+          });
+        } else {
+          await this.create({
+            sku: item.sku,
+            name: item.name,
+            category: item.category,
+            baseUnit: item.baseUnit,
+            price: item.price,
+            costPrice: item.costPrice,
+            stockQuantity: item.stockQuantity,
+            barcode: item.barcode,
+            description: item.description,
+          });
+        }
+        successCount++;
+      } catch (err: any) {
+        errorCount++;
+        errors.push(`Dòng ${item.row}: ${err.message}`);
+      }
+    }
+
+    return {
+      success: successCount,
+      error: errorCount,
+      errorDetails: errors,
+    };
   }
 }
