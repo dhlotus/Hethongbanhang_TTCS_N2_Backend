@@ -436,3 +436,51 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Build Backend (`nest build`) thành công, 0 lỗi biên dịch.
   - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
   - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.
+
+### [Sprint 2] - [SN-25]: Quản Lý Nhà Cung Cấp & Ràng Buộc Phiếu Nhập Kho (Supplier Management)
+- **Thời gian hoàn thành:** 2026-10-04
+- **Mã Jira / US:** SN-25 (EP-02: Danh mục Sản phẩm & Bảng giá, EP-05: Kho & Tồn kho)
+- **Trạng thái:** ✅ Hoàn thành 100% (Backend: 0 errors `nest build`; Frontend: 0 errors `tsc -b && vite build`)
+- **Danh sách file thay đổi / tạo mới:**
+  - *Backend (`HTBH_Backend`):*
+    - `src/common/enums/supplier-status.enum.ts` (Tạo mới: Enum `SupplierStatus` với `ACTIVE`, `INACTIVE`)
+    - `src/common/enums/index.ts` (Cập nhật: Export `SupplierStatus`)
+    - `src/modules/suppliers/entities/supplier.entity.ts` (Tạo mới: Entity Supplier, hỗ trợ camelCase và snake_case với `toJSON()`, `hasReceipts`)
+    - `src/modules/suppliers/dto/create-supplier.dto.ts` (Tạo mới: DTO tạo NCC với validation, auto uppercase code, không khoảng trắng)
+    - `src/modules/suppliers/dto/update-supplier.dto.ts` (Tạo mới: DTO cập nhật `PartialType(CreateSupplierDto)`)
+    - `src/modules/suppliers/dto/update-supplier-status.dto.ts` (Tạo mới: DTO chuyển trạng thái)
+    - `src/modules/suppliers/dto/get-suppliers-filter.dto.ts` (Tạo mới: DTO phân trang, tìm kiếm đa trường và lọc trạng thái)
+    - `src/modules/suppliers/dto/index.ts` (Tạo mới: Barrel export DTOs)
+    - `src/modules/suppliers/interfaces/paginated-suppliers.interface.ts` (Tạo mới: Interface `PaginatedSuppliersResponse`)
+    - `src/modules/suppliers/interfaces/index.ts` (Tạo mới: Barrel export interfaces)
+    - `src/modules/suppliers/suppliers.service.ts` (Tạo mới: Nghiệp vụ CRUD, dữ liệu seed tương thích DB, kiểm tra trùng mã NCC, kiểm tra ràng buộc phiếu nhập kho)
+    - `src/modules/suppliers/suppliers.controller.ts` (Tạo mới: 6 Endpoints RESTful chuẩn hóa, phân quyền JwtAuthGuard và RolesGuard)
+    - `src/modules/suppliers/suppliers.module.ts` (Tạo mới: Đóng gói module Suppliers)
+    - `src/app.module.ts` (Cập nhật: Đăng ký `SuppliersModule`)
+    - `test/suppliers-sn25.spec.ts` (Tạo mới: Test suite kiểm thử toàn diện CRUD và ràng buộc phiếu nhập kho)
+  - *Frontend (`HTBH_Frontend`):*
+    - `src/types/supplier.ts` (Tạo mới: Định nghĩa kiểu dữ liệu `Supplier`, `SupplierQueryParams`, `CreateSupplierPayload`, `UpdateSupplierPayload`)
+    - `src/services/suppliers.service.ts` (Tạo mới: API Client Axios gọi RESTful API của Backend, kèm fallback offline)
+    - `src/components/supplier-form-modal.tsx` (Tạo mới: Modal form thêm mới và chỉnh sửa nhà cung cấp, client-side validation, gợi ý điều khoản thanh toán)
+    - `src/pages/suppliers-page.tsx` (Tạo mới: Giao diện Quản lý Nhà cung cấp hoàn chỉnh, bảng dữ liệu, badge trạng thái, toggle active/inactive, modal cảnh báo chặn xóa khi có phiếu nhập)
+    - `src/routes/index.tsx` (Cập nhật: Đăng ký route `/inventory/suppliers` được bảo vệ bởi RoleGuard)
+    - `src/utils/navigation-config.ts` (Cập nhật: Tích hợp menu Nhà cung cấp vào Sidebar cho WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN)
+- **Chi tiết kỹ thuật:**
+  - *Schema & Data Structure:*
+    - Entity `Supplier` với các trường: `id`, `code` (unique, uppercase), `name`, `taxCode`/`tax_code`, `contactName`/`contact_name`, `phone`, `email`, `address`, `paymentTerms`/`payment_terms`, `status` (`ACTIVE`/`INACTIVE`), `notes`, `hasReceipts`, `createdAt`, `updatedAt`.
+  - *Danh sách Endpoints API Backend:*
+    - `GET /api/suppliers`: Lấy danh sách NCC phân trang, tìm kiếm đa trường (Mã, Tên, MST, SĐT, Email), lọc trạng thái.
+    - `GET /api/suppliers/:id`: Chi tiết NCC theo ID hoặc Mã code.
+    - `POST /api/suppliers`: Thêm mới NCC, chặn trùng mã code, tự động sinh mã `NCC-xxx` nếu để trống.
+    - `PUT /api/suppliers/:id`: Cập nhật thông tin NCC, kiểm tra tính duy nhất khi đổi mã code.
+    - `PATCH /api/suppliers/:id/status`: Toggle hoặc gán trạng thái `ACTIVE`/`INACTIVE`.
+    - `DELETE /api/suppliers/:id`: Xóa NCC có kiểm tra ràng buộc phiếu nhập kho.
+  - *Cơ chế Xử lý Ràng buộc Xóa (Import Receipt Constraint):*
+    - Kiểm tra xem Supplier đã từng phát sinh trong bất kỳ Phiếu nhập kho (`goods_receipts` / `suppliersWithReceipts`) hay chưa.
+    - Nếu ĐÃ CÓ phiếu nhập: Ném HTTP 400 `BadRequestException` với thông báo rõ ràng: `"Nhà cung cấp đã phát sinh phiếu nhập kho. Không thể xóa, vui lòng chuyển trạng thái sang Ngừng hoạt động (Inactive)."`.
+    - Trên giao diện: Hiển thị Dialog cảnh báo màu cam với nội dung giải thích bảo toàn thẻ kho, cung cấp nút chuyển nhanh sang Inactive thay vì xóa.
+    - Nếu CHƯA CÓ phiếu nhập: Cho phép xóa an toàn và cập nhật danh sách real-time.
+- **Trạng thái & Lưu ý:**
+  - ✅ Biên dịch Backend `npm run build`: 0 lỗi TypeScript (`Found 0 errors`).
+  - ✅ Biên dịch Frontend `npm run build`: 0 lỗi Vite/React.
+  - 🚀 Hoàn thành trọn vẹn task SN-25 theo đúng quy chuẩn dự án.
