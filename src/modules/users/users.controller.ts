@@ -26,6 +26,7 @@ import {
   CreateUserDto,
   QueryUsersDto,
   UpdateUserDto,
+  UpdateProfileDto,
   UpdateUserStatusDto,
 } from './dto';
 import { SafeUser } from './entities/user.entity';
@@ -102,13 +103,22 @@ export class UsersController {
   }
 
   /**
-   * Lấy thông tin tài khoản của chính mình (SN-18)
+   * Lấy thông tin tài khoản của chính mình (SN-17)
    * GET /api/users/me
    */
   @Get('me')
   @Roles(...Object.values(UserRole))
   async getMe(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
     return this.usersService.findSafeById(currentUser.userId);
+  }
+
+  @Patch('me')
+  @Roles(...Object.values(UserRole))
+  async updateMe(
+    @CurrentUser() currentUser: ICurrentUser,
+    @Body() dto: UpdateProfileDto,
+  ): Promise<SafeUser> {
+    return this.usersService.updateProfile(currentUser.userId, dto);
   }
 
   /**
