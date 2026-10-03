@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
   UseInterceptors,
@@ -81,6 +82,19 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async update(
+    @Param('id') id: string,
+    @Body() updateDto: UpdateProductDto,
+  ): Promise<ProductEntity> {
+    return this.productsService.update(id, updateDto);
+  }
+
+  /**
+   * Cập nhật thông tin sản phẩm (Hỗ trợ PUT /products/:id)
+   */
+  @Put(':id')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async updatePut(
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
   ): Promise<ProductEntity> {

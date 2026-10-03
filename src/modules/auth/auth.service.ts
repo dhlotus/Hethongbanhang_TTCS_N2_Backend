@@ -191,6 +191,7 @@ export class AuthService {
       role: user.role,
       status: user.status,
       assignedWarehouse: user.assignedWarehouse,
+      avatarUrl: user.avatarUrl ?? null,
     };
 
     const tokens = await this.generateTokens(userInfo);
@@ -258,6 +259,7 @@ export class AuthService {
           role: userAccount.role,
           status: userAccount.status,
           assignedWarehouse: userAccount.assignedWarehouse,
+          avatarUrl: userAccount.avatarUrl ?? null,
         }
       : {
           id: payload.sub,
@@ -265,6 +267,7 @@ export class AuthService {
           fullName: payload.username ?? '',
           email: payload.email,
           roles: payload.roles ?? (payload.role ? [payload.role] : []),
+          avatarUrl: null,
         };
 
     // 5. Cơ chế Refresh Token Rotation: Thu hồi token cũ để chống tấn công Replay Attack
