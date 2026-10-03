@@ -41,6 +41,9 @@ export class ProductEntity {
 
     if (parent) this.parentCategory = parent;
     if (sub) this.subCategory = sub;
+    if (!this.categoryId && partial.category_id) {
+      this.categoryId = partial.category_id as string;
+    }
 
     // Chuẩn hóa category theo định dạng: ${parentCategory} / ${subCategory}
     if (!this.category && (this.parentCategory || this.subCategory)) {
@@ -87,7 +90,10 @@ export class ProductEntity {
     if (!this.updatedAt) this.updatedAt = new Date();
   }
 
-  // Alias getters cho snake_case tương thích schema database
+  get category_id(): string | undefined {
+    return this.categoryId;
+  }
+
   get parent_category(): string {
     return this.parentCategory;
   }
@@ -132,6 +138,8 @@ export class ProductEntity {
       id: this.id,
       sku: this.sku,
       name: this.name,
+      categoryId: this.categoryId,
+      category_id: this.categoryId,
       parentCategory: this.parentCategory,
       parent_category: this.parentCategory,
       subCategory: this.subCategory,

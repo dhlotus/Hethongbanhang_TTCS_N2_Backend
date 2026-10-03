@@ -32,6 +32,13 @@ export class CreateProductDto {
   )
   name: string;
 
+  @IsOptional()
+  @IsString({ message: 'Mã nhóm hàng (categoryId) phải là chuỗi ký tự' })
+  @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
+    return value ?? obj.category_id;
+  })
+  categoryId?: string;
+
   @IsNotEmpty({ message: 'Danh mục chính (parentCategory) không được để trống' })
   @IsString({ message: 'Danh mục chính phải là chuỗi ký tự' })
   @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {

@@ -38,6 +38,10 @@ export class GetProductsFilterDto {
   category?: string;
 
   @IsOptional()
+  @IsString({ message: 'Mã nhóm hàng (categoryId) phải là chuỗi ký tự' })
+  categoryId?: string;
+
+  @IsOptional()
   @IsEnum(ProductStatus, { message: 'Trạng thái phải là ACTIVE hoặc INACTIVE' })
   status?: ProductStatus;
 }

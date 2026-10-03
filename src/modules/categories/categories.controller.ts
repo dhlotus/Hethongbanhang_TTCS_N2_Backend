@@ -63,6 +63,16 @@ export class CategoriesController {
   }
 
   /**
+   * Lấy danh sách sản phẩm thuộc một nhóm hàng (và toàn bộ các phân loại con của nhóm đó)
+   * GET /api/categories/:id/products
+   * Quyền: Mọi vai trò đã xác thực
+   */
+  @Get(':id/products')
+  async getProductsByCategory(@Param('id') id: string) {
+    return this.categoriesService.getProductsByCategoryId(id);
+  }
+
+  /**
    * Tạo nhóm hàng mới
    * POST /api/categories
    * Quyền: ADMIN, SALES_MANAGER

@@ -65,13 +65,21 @@ export class CategoriesService implements OnModuleInit {
         .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
         .map(buildNode);
 
-      const productCount = this.productsService
-        ? this.productsService.countProductsByCategoryId(
+      const directCount = this.productsService
+        ? this.productsService.countDirectProductsByCategoryId(
             cat.id,
             cat.code,
             cat.name,
+            children.length > 0,
           )
         : (cat.productCount ?? 0);
+
+      const childrenCount = children.reduce(
+        (sum, child) => sum + (child.productCount || 0),
+        0,
+      );
+
+      const productCount = directCount + childrenCount;
 
       return {
         id: cat.id,
@@ -105,11 +113,13 @@ export class CategoriesService implements OnModuleInit {
     const list = Array.from(this.categories.values());
     for (const cat of list) {
       if (this.productsService) {
-        cat.productCount = this.productsService.countProductsByCategoryId(
-          cat.id,
+        const descendantIds = this.getDescendantIds(cat.id);
+        const targetIds = [cat.id, ...descendantIds];
+        cat.productCount = this.productsService.findProductsByBranch(
+          targetIds,
           cat.code,
           cat.name,
-        );
+        ).length;
       }
     }
     return list.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
@@ -128,11 +138,13 @@ export class CategoriesService implements OnModuleInit {
     }
 
     if (this.productsService) {
-      category.productCount = this.productsService.countProductsByCategoryId(
-        category.id,
+      const descendantIds = this.getDescendantIds(category.id);
+      const targetIds = [category.id, ...descendantIds];
+      category.productCount = this.productsService.findProductsByBranch(
+        targetIds,
         category.code,
         category.name,
-      );
+      ).length;
     }
 
     // Gán danh sách nhóm con trực tiếp
@@ -141,6 +153,37 @@ export class CategoriesService implements OnModuleInit {
     );
 
     return category;
+  }
+
+  /**
+   * Lấy danh sách sản phẩm thuộc một nhóm hàng và toàn bộ nhóm con/cháu bên dưới
+   * GET /api/categories/:id/products
+   */
+  async getProductsByCategoryId(idOrCode: string): Promise<any[]> {
+    const category = await this.findById(idOrCode);
+    if (!this.productsService) return [];
+    const descendantIds = this.getDescendantIds(category.id);
+    const targetIds = [category.id, ...descendantIds];
+    return this.productsService.findProductsByBranch(
+      targetIds,
+      category.code,
+      category.name,
+    );
+  }
+
+  /**
+   * Lấy danh sách ID của tất cả nhóm hàng con và cháu phân cấp đệ quy
+   */
+  public getDescendantIds(categoryId: string): string[] {
+    const results: string[] = [];
+    const directChildren = Array.from(this.categories.values()).filter(
+      (c) => c.parentId === categoryId,
+    );
+    for (const child of directChildren) {
+      results.push(child.id);
+      results.push(...this.getDescendantIds(child.id));
+    }
+    return results;
   }
 
   /**

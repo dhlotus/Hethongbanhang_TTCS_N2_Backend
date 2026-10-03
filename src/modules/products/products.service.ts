@@ -121,6 +121,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-001',
         sku: 'LH-MILK-900G',
         name: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        categoryId: 'cat-milk-powder',
         parentCategory: 'Sữa & Chế phẩm sữa',
         subCategory: 'Sữa bột công thức',
         category: 'Sữa & Chế phẩm sữa / Sữa bột công thức',
@@ -141,6 +142,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-002',
         sku: 'LH-NUT-180ML',
         name: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        categoryId: 'cat-milk-nut',
         parentCategory: 'Sữa & Chế phẩm sữa',
         subCategory: 'Sữa hạt organic',
         category: 'Sữa & Chế phẩm sữa / Sữa hạt organic',
@@ -161,6 +163,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-003',
         sku: 'LH-NEST-70ML',
         name: 'Nước Yến Sào Chưng Đường Phèn Loha Nest 70ml',
+        categoryId: 'cat-nest-ready',
         parentCategory: 'Nước yến & Bổ dưỡng',
         subCategory: 'Nước yến chưng sẵn',
         category: 'Nước yến & Bổ dưỡng / Nước yến chưng sẵn',
@@ -181,6 +184,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-004',
         sku: 'LH-CEREAL-500G',
         name: 'Ngũ Cốc Dinh Dưỡng Hạt Mầm Loha Meal 500g',
+        categoryId: 'cat-cereal-sprout',
         parentCategory: 'Ngũ cốc & Hạt dinh dưỡng',
         subCategory: 'Ngũ cốc hạt mầm',
         category: 'Ngũ cốc & Hạt dinh dưỡng / Ngũ cốc hạt mầm',
@@ -198,6 +202,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-005',
         sku: 'LH-COLLAGEN-50ML',
         name: 'Nước Uống Collagen Đông Trùng Hạ Thảo 50ml',
+        categoryId: 'cat-supp-collagen',
         parentCategory: 'Thực phẩm chức năng',
         subCategory: 'Collagen & Chống lão hóa',
         category: 'Thực phẩm chức năng / Collagen & Chống lão hóa',
@@ -216,6 +221,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-006',
         sku: 'LH-TEA-240ML',
         name: 'Trà Hoa Cúc La Hán Quả Thanh Nhiệt 240ml',
+        categoryId: 'cat-bev-tea',
         parentCategory: 'Nước giải khát & Trà',
         subCategory: 'Trà thảo mộc thanh nhiệt',
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
@@ -236,6 +242,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-007',
         sku: 'LH-WATER-500ML',
         name: 'Nước Khoáng Kiềm Thiên Nhiên Loha Ion 500ml',
+        categoryId: 'cat-bev-water',
         parentCategory: 'Nước giải khát & Trà',
         subCategory: 'Nước khoáng thiên nhiên',
         category: 'Nước giải khát & Trà / Nước khoáng thiên nhiên',
@@ -256,6 +263,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-008',
         sku: 'LH-MILK-PAST-1L',
         name: 'Sữa Tươi Thanh Trùng Nguyên Chất 1 Lít',
+        categoryId: 'cat-milk-ready',
         parentCategory: 'Sữa & Chế phẩm sữa',
         subCategory: 'Sữa tươi & Tiệt trùng',
         category: 'Sữa & Chế phẩm sữa / Sữa tươi & Tiệt trùng',
@@ -275,6 +283,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-009',
         sku: 'LH-NEST-PREM-100G',
         name: 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g',
+        categoryId: 'cat-nest-pure',
         parentCategory: 'Nước yến & Bổ dưỡng',
         subCategory: 'Tổ yến sào tinh chế',
         category: 'Nước yến & Bổ dưỡng / Tổ yến sào tinh chế',
@@ -295,6 +304,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-010',
         sku: 'LH-NUTS-MIX-250G',
         name: 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g',
+        categoryId: 'cat-cereal-nuts',
         parentCategory: 'Ngũ cốc & Hạt dinh dưỡng',
         subCategory: 'Hạt dinh dưỡng sấy giòn',
         category: 'Ngũ cốc & Hạt dinh dưỡng / Hạt dinh dưỡng sấy giòn',
@@ -315,6 +325,7 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-011',
         sku: 'LH-OLD-COFFEE-CAN',
         name: 'Cà Phê Sữa Đóng Lon Loha Classic 240ml (Mẫu Cũ)',
+        categoryId: 'cat-bev-tea',
         parentCategory: 'Nước giải khát & Trà',
         subCategory: 'Trà thảo mộc thanh nhiệt',
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
@@ -359,6 +370,7 @@ export class ProductsService implements OnModuleInit {
       page = 1,
       limit = 20,
       search,
+      categoryId,
       parentCategory,
       subCategory,
       category,
@@ -374,6 +386,16 @@ export class ProductsService implements OnModuleInit {
         (p) =>
           p.sku.toLowerCase().includes(q) ||
           p.name.toLowerCase().includes(q),
+      );
+    }
+
+    // 2. Lọc theo categoryId
+    if (categoryId && categoryId !== 'ALL') {
+      const cid = categoryId.trim().toLowerCase();
+      items = items.filter(
+        (p) =>
+          (p.categoryId && p.categoryId.toLowerCase() === cid) ||
+          p.id === categoryId,
       );
     }
 
@@ -490,6 +512,7 @@ export class ProductsService implements OnModuleInit {
       id: `prod-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
       sku: cleanSku,
       name: dto.name.trim(),
+      categoryId: dto.categoryId?.trim(),
       parentCategory: parentCat,
       subCategory: subCat,
       category,
@@ -570,6 +593,10 @@ export class ProductsService implements OnModuleInit {
 
     if (dto.name !== undefined) {
       product.name = dto.name.trim();
+    }
+
+    if (dto.categoryId !== undefined) {
+      product.categoryId = dto.categoryId?.trim();
     }
 
     if (dto.parentCategory !== undefined) {
@@ -783,6 +810,66 @@ export class ProductsService implements OnModuleInit {
     categoryName?: string,
   ): number {
     return this.findProductsByCategoryId(categoryId, categoryCode, categoryName).length;
+  }
+
+  /**
+   * Đếm số lượng sản phẩm trực tiếp thuộc một nhóm hàng (phục vụ tính toán cây đa cấp)
+   */
+  public countDirectProductsByCategoryId(
+    categoryId: string,
+    categoryCode?: string,
+    categoryName?: string,
+    hasChildren: boolean = false,
+  ): number {
+    const cidLower = categoryId.toLowerCase().trim();
+    const codeLower = categoryCode ? categoryCode.toLowerCase().trim() : '';
+    const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
+
+    return Array.from(this.products.values()).filter((p) => {
+      if (p.categoryId) {
+        const pCid = p.categoryId.toLowerCase().trim();
+        return pCid === cidLower || (codeLower && pCid === codeLower);
+      }
+      if (!hasChildren) {
+        return (
+          (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) ||
+          (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower)
+        );
+      }
+      return false;
+    }).length;
+  }
+
+  /**
+   * Lấy danh sách sản phẩm thuộc nhánh phân cấp (nhóm chỉ định + tất cả nhóm con/cháu)
+   */
+  public findProductsByBranch(
+    categoryIds: string[],
+    categoryCode?: string,
+    categoryName?: string,
+  ): ProductEntity[] {
+    const targetSet = new Set(categoryIds.map((id) => id.toLowerCase().trim()));
+    const codeLower = categoryCode ? categoryCode.toLowerCase().trim() : '';
+    const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
+
+    return Array.from(this.products.values()).filter((p) => {
+      if (p.categoryId && targetSet.has(p.categoryId.toLowerCase().trim())) {
+        return true;
+      }
+      if (codeLower && p.categoryId && p.categoryId.toLowerCase().trim() === codeLower) {
+        return true;
+      }
+      if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) {
+        return true;
+      }
+      if (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) {
+        return true;
+      }
+      if (p.category && nameLower && p.category.toLowerCase().includes(nameLower)) {
+        return true;
+      }
+      return false;
+    });
   }
 
   /**

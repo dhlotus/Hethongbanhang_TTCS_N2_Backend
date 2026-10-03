@@ -485,3 +485,50 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Test Suite `test/categories-tree-sn150.spec.ts`: **41/41 PASSED, 0 FAILED**.
   - ✅ Hồi quy toàn diện: Test Suite SN-138 (62/62) và SN-10 (25/25) tiếp tục pass 100%.
   - 🚀 Sẵn sàng tích hợp sang các tính năng Bảng giá đa cấp (EP-02 / Sprint 2).
+
+---
+
+### [TASK TIẾP THEO] ĐỒNG BỘ TOÀN DIỆN HAI CHIỀU: CÂY NHÓM HÀNG & DANH MỤC SẢN PHẨM (CATEGORY TREE & PRODUCT CATALOG SYNC)
+- **Mục tiêu:**
+  1. Phân cấp ở Danh mục sản phẩm và Cây nhóm hàng phải đồng nhất 100% theo cùng một cấu trúc chuẩn (3 cấp: Cấp 1 > Cấp 2 > Cấp 3).
+  2. Khi thêm/sửa sản phẩm, sản phẩm thuộc nhánh nào phải về chính xác nhánh đó trên cây; cây nhóm hàng tự động cập nhật số lượng sản phẩm (`productCount`) của nhánh con và rollup lên các nhánh cha.
+  3. Hai mục Cây sản phẩm và Danh mục sản phẩm phải đồng nhất, thay đổi ở mục này sẽ lập tức phản ánh sang mục kia.
+- **Danh sách file thay đổi:**
+  - **Backend (`HTBH_Backend`):**
+    - `src/modules/products/dto/create-product.dto.ts`: Bổ sung trường `categoryId?: string;` hỗ trợ gán trực tiếp ID nhóm hàng khi tạo SKU.
+    - `src/modules/products/dto/get-products-filter.dto.ts`: Bổ sung bộ lọc `categoryId?: string;`.
+    - `src/modules/products/entities/product.entity.ts`: Bổ sung `categoryId`, alias `category_id`, constructor normalization, và serializer `toJSON()`.
+    - `src/modules/products/products.service.ts`:
+      + Gán `categoryId` cho các sản phẩm khởi tạo mẫu và sản phẩm tạo mới/cập nhật.
+      + Triển khai `countDirectProductsByCategoryId()` để đếm chính xác sản phẩm trực tiếp thuộc node mà không trùng lặp khi rollup cây.
+      + Triển khai `findProductsByBranch()` để lấy sản phẩm thuộc toàn bộ nhánh (bao gồm các nhóm con/cháu).
+      + Bổ sung lọc `categoryId` trong `findAllPaginated()`.
+    - `src/modules/categories/categories.service.ts`:
+      + Nâng cấp thuật toán `getCategoryTree()` tính `productCount = directCount + sum(child.productCount)` bảo đảm rollup chính xác từ lá lên gốc.
+      + Bổ sung `getProductsByCategoryId(idOrCode)` tra cứu sản phẩm theo nhánh.
+      + Bổ sung `getDescendantIds(categoryId)`.
+    - `src/modules/categories/categories.controller.ts`:
+      + Bổ sung endpoint `GET /api/categories/:id/products` (quyền: mọi vai trò đăng nhập).
+  - **Frontend (`HTBH_Frontend`):**
+    - `src/types/products.ts`: Bổ sung `level`, `children`, `subCategories`, `productCount` cho `ProductCategory`; bổ sung `categoryId` cho `ProductQueryParams`.
+    - `src/services/categories.service.ts`: Bổ sung hàm `getProductsByCategory(id)`.
+    - `src/services/products.service.ts`:
+      + Cập nhật `PRODUCT_CATEGORIES` tĩnh chuẩn 3 cấp.
+      + Tải danh mục động từ `/api/categories/tree` qua `getCategories()`.
+      + Hỗ trợ truyền `categoryId` trong `getProducts()`.
+    - `src/components/product-form-modal.tsx`:
+      + Tải cây danh mục động từ backend.
+      + Bộ chọn phân cấp 3 tầng liên hoàn: Cấp 1 (Ngành chính) -> Cấp 2 (Nhóm phụ) -> Cấp 3 (Phân loại chi tiết).
+      + Hiển thị Breadcrumb trực quan (`FolderTree`) nhánh đang chọn và tự động gán `categoryId` node lá gửi lên server.
+    - `src/pages/categories-page.tsx`:
+      + Huy hiệu số lượng sản phẩm trên từng node cây cho phép bấm để mở modal danh sách sản phẩm thuộc nhánh.
+      + Nút điều hướng "Mở trong Danh mục sản phẩm →" tự động chuyển hướng và lọc theo `categoryId`.
+    - `src/pages/products-page.tsx`:
+      + Tự động nhận tham số `categoryId` từ URL query parameters và hiển thị chip "Đang lọc theo nhánh cây".
+      + Bổ sung dropdown lọc Cấp 3 khi nhóm Cấp 2 có phân loại con.
+      + Bảng danh sách hiển thị cột "Nhóm hàng" dạng breadcrumb đa cấp trực quan.
+- **Trạng thái kiểm thử:**
+  - ✅ Backend Build: 100% Passed (`nest build`).
+  - ✅ Frontend Build: 100% Passed (`tsc -b && vite build`).
+  - ✅ Test Suite Tự Động: 41/41 Passed (`categories-tree-sn150.spec.ts`).
+  - ✅ Test Live E2E Integration: Hoàn thành kiểm thử vòng tròn (Thêm SP -> Cây tăng số lượng đúng nhánh và cha -> Xem SP theo nhánh -> Lọc SP theo nhánh).
