@@ -32,12 +32,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException(AUTH_CONSTANTS.UNAUTHORIZED_ACCESS_MESSAGE);
     }
 
+    let avatarUrl: string | null = null;
     if (this.usersService) {
       const user = await this.usersService.findById(payload.sub);
       if (user && user.status === UserStatus.LOCKED) {
         throw new UnauthorizedException(
           `Tài khoản của bạn đã bị khóa bởi Quản trị viên.${user.lockReason ? ' Lý do: ' + user.lockReason : ''}`,
         );
+      }
+      if (user) {
+        avatarUrl = user.avatarUrl ?? null;
       }
     }
 
@@ -46,6 +50,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: payload.email,
       roles,
       username: payload.username,
+      avatarUrl,
     };
   }
 }
+

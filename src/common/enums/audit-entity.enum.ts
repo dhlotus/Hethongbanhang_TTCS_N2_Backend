@@ -1,0 +1,9 @@
+export enum AuditEntity {
+  INVENTORY = 'INVENTORY',
+  DEBT = 'DEBT',
+  PRICING = 'PRICING',
+  ORDER = 'ORDER',
+  USER = 'USER',
+  CUSTOMER = 'CUSTOMER',
+  INVOICE = 'INVOICE',
+}

@@ -10,6 +10,7 @@ export interface SafeUser {
   role: UserRole;
   roles: UserRole[];
   status: UserStatus;
+  avatarUrl?: string | null;
   assignedWarehouse?: string;
   lockReason?: string | null;
   resetCode?: string | null;
@@ -28,6 +29,7 @@ export class UserEntity {
   role: UserRole;
   roles: UserRole[];
   status: UserStatus;
+  avatarUrl: string | null;
   assignedWarehouse?: string;
   lockReason?: string | null;
   resetCode?: string | null;
@@ -58,6 +60,7 @@ export class UserEntity {
     }
 
     this.status = partial.status ?? UserStatus.ACTIVE;
+    this.avatarUrl = partial.avatarUrl ?? null;
     this.assignedWarehouse = partial.assignedWarehouse;
     this.lockReason = partial.lockReason ?? null;
     this.resetCode = partial.resetCode ?? null;
@@ -81,6 +84,7 @@ export class UserEntity {
       role: this.role,
       roles: this.roles,
       status: this.status,
+      avatarUrl: this.avatarUrl ?? null,
       assignedWarehouse: this.assignedWarehouse,
       lockReason: this.lockReason,
       resetCode: this.resetCode,
@@ -90,3 +94,4 @@ export class UserEntity {
     };
   }
 }
+

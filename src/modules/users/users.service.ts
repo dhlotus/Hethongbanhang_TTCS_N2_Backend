@@ -6,11 +6,19 @@ import {
   Optional,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { BCRYPT_SALT_ROUNDS } from '../../common/constants/auth.constant';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
 import { MailService } from '../mail/mail.service';
 import {
+  AVATAR_MESSAGES,
+  AVATAR_URL_PREFIX,
+} from './constants/avatar.constant';
+import {
+  AvatarResponseDto,
   CreateUserDto,
   QueryUsersDto,
   UpdateUserDto,
@@ -244,6 +252,88 @@ export class UsersService implements OnModuleInit {
     for (const user of initialUsers) {
       const entity = new UserEntity(user);
       this.users.set(entity.id, entity);
+    }
+
+    // Sau khi seed xong, khôi phục avatarUrl từ file đã lưu trên đĩa
+    this.restoreAvatarsFromDisk();
+  }
+
+  /**
+   * Quét thư mục uploads/avatars/ và khôi phục avatarUrl cho user dựa trên tên file.
+   * File avatar theo pattern: avatar-{userId}-{timestamp}-{hash}.{ext}
+   * Nếu 1 user có nhiều file, chọn file mới nhất (theo thời gian chỉnh sửa).
+   */
+  private restoreAvatarsFromDisk(): void {
+    try {
+      const uploadDir = path.join(process.cwd(), 'uploads', 'avatars');
+      if (!fs.existsSync(uploadDir)) {
+        return;
+      }
+
+      const files = fs.readdirSync(uploadDir);
+      // Map: userId -> { filename, mtime }
+      const latestAvatarMap = new Map<string, { filename: string; mtime: number }>();
+
+      for (const file of files) {
+        // Bỏ qua .gitkeep và các file không phải avatar
+        if (!file.startsWith('avatar-')) continue;
+
+        // Parse userId từ tên file: avatar-{userId}-{timestamp}-{hash}.{ext}
+        const parts = file.split('-');
+        // userId có thể chứa dấu '-', ví dụ: usr-admin-001
+        // Pattern: avatar-{userId}-{timestamp}-{hash}.ext
+        // timestamp là số 13 chữ số, hash là 16 ký tự hex
+        // Tìm timestamp bằng cách duyệt ngược từ cuối
+        const fileWithoutExt = file.replace(/\.[^.]+$/, '');
+        const allParts = fileWithoutExt.split('-');
+        // Phần cuối: hash (16 hex), phần áp cuối: timestamp (13 digits)
+        // => userId = các phần từ index 1 đến length-3
+        if (allParts.length < 4) continue;
+
+        const hash = allParts[allParts.length - 1];
+        const timestamp = allParts[allParts.length - 2];
+
+        // Validate timestamp (phải là số) và hash (phải là hex)
+        if (!/^\d{13}$/.test(timestamp) || !/^[a-f0-9]{16}$/.test(hash)) continue;
+
+        const userId = allParts.slice(1, allParts.length - 2).join('-');
+        if (!userId) continue;
+
+        // Kiểm tra user có tồn tại trong Map không
+        if (!this.users.has(userId)) continue;
+
+        // Lấy thời gian chỉnh sửa file
+        const filePath = path.join(uploadDir, file);
+        const stat = fs.statSync(filePath);
+        const mtime = stat.mtimeMs;
+
+        const existing = latestAvatarMap.get(userId);
+        if (!existing || mtime > existing.mtime) {
+          latestAvatarMap.set(userId, { filename: file, mtime });
+        }
+      }
+
+      // Gán avatarUrl cho các user tìm thấy
+      let restoredCount = 0;
+      for (const [userId, { filename }] of latestAvatarMap) {
+        const user = this.users.get(userId);
+        if (user) {
+          user.avatarUrl = `${AVATAR_URL_PREFIX}${filename}`;
+          user.updatedAt = new Date();
+          restoredCount++;
+        }
+      }
+
+      if (restoredCount > 0) {
+        console.log(
+          `[UsersService] ✅ Đã khôi phục avatarUrl cho ${restoredCount} người dùng từ đĩa.`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        '[UsersService] ⚠️ Không thể quét và khôi phục avatar từ đĩa:',
+        error,
+      );
     }
   }
 
@@ -778,4 +868,99 @@ export class UsersService implements OnModuleInit {
     user.lockedUntil = null;
     user.updatedAt = new Date();
   }
+
+  /**
+   * Tải lên và cập nhật ảnh đại diện người dùng (SN-144):
+   * - Lưu trữ file ảnh an toàn trong thư mục uploads/avatars/
+   * - Sinh tên file duy nhất (UUID/Timestamp + Hash) tránh trùng lặp và lộ tên gốc
+   * - Tự động xóa file ảnh đại diện cũ trên đĩa nếu có để tránh rác dung lượng máy chủ
+   * - Cập nhật avatarUrl trong UserEntity và cơ sở dữ liệu
+   */
+  async uploadAvatar(
+    userId: string,
+    file: Express.Multer.File,
+  ): Promise<AvatarResponseDto> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new NotFoundException(AVATAR_MESSAGES.USER_NOT_FOUND);
+    }
+
+    // 1. Đảm bảo thư mục lưu trữ uploads/avatars luôn tồn tại
+    const uploadDir = path.join(process.cwd(), 'uploads', 'avatars');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    // 2. Tạo tên file ngẫu nhiên, duy nhất
+    const ext = path.extname(file.originalname || '').toLowerCase() || '.png';
+    const randomHash = crypto.randomBytes(8).toString('hex');
+    const uniqueFileName = `avatar-${userId}-${Date.now()}-${randomHash}${ext}`;
+    const targetFilePath = path.join(uploadDir, uniqueFileName);
+
+    // 3. Ghi file từ memory buffer xuống đĩa lưu trữ
+    await fs.promises.writeFile(targetFilePath, file.buffer);
+
+    // 4. Nếu user đã có avatar cũ trước đó, tiến hành xóa file ảnh cũ để dọn dẹp bộ nhớ
+    if (user.avatarUrl) {
+      try {
+        const oldFilename = path.basename(user.avatarUrl);
+        const oldFilePath = path.join(uploadDir, oldFilename);
+        if (fs.existsSync(oldFilePath)) {
+          await fs.promises.unlink(oldFilePath);
+        }
+      } catch (error) {
+        console.warn(
+          `[UsersService] Không thể xóa file avatar cũ (${user.avatarUrl}):`,
+          error,
+        );
+      }
+    }
+
+    // 5. Cập nhật đường dẫn avatarUrl vào thực thể người dùng
+    const avatarUrl = `${AVATAR_URL_PREFIX}${uniqueFileName}`;
+    user.avatarUrl = avatarUrl;
+    user.updatedAt = new Date();
+    this.users.set(user.id, user);
+
+    return {
+      statusCode: 200,
+      message: AVATAR_MESSAGES.UPLOAD_SUCCESS,
+      data: {
+        avatarUrl,
+      },
+    };
+  }
+
+  /**
+   * Xóa ảnh đại diện đưa về mặc định
+   */
+  async removeAvatar(userId: string): Promise<SafeUser> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new NotFoundException(AVATAR_MESSAGES.USER_NOT_FOUND);
+    }
+
+    if (user.avatarUrl) {
+      try {
+        const uploadDir = path.join(process.cwd(), 'uploads', 'avatars');
+        const oldFilename = path.basename(user.avatarUrl);
+        const oldFilePath = path.join(uploadDir, oldFilename);
+        if (fs.existsSync(oldFilePath)) {
+          await fs.promises.unlink(oldFilePath);
+        }
+      } catch (error) {
+        console.warn(
+          `[UsersService] Không thể xóa file avatar (${user.avatarUrl}):`,
+          error,
+        );
+      }
+    }
+
+    user.avatarUrl = null;
+    user.updatedAt = new Date();
+    this.users.set(user.id, user);
+
+    return user.toSafeUser();
+  }
 }
+

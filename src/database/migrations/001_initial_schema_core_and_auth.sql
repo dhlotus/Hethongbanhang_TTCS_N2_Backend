@@ -66,22 +66,31 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 
 -- -----------------------------------------------------------------------------
--- 4. BẢNG AUDIT_LOGS (Nhật ký kiểm toán hệ thống)
+-- 4. BẢNG AUDIT_LOGS (Nhật ký kiểm toán hệ thống - Bất biến Append-only SN-19)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_logs (
-    id BIGSERIAL PRIMARY KEY,
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(50) NOT NULL,
-    target_table VARCHAR(100) NOT NULL,
-    target_id VARCHAR(100) NOT NULL,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    action VARCHAR(50) NOT NULL, -- CREATE, UPDATE, DELETE, APPROVE, CANCEL, STOCK_ADJUST
+    entity_name VARCHAR(100) NOT NULL, -- INVENTORY, DEBT, PRICING, ORDER, USER...
+    entity_id VARCHAR(100) NOT NULL,
     old_values JSONB,
     new_values JSONB,
     ip_address VARCHAR(45),
-    user_agent TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-COMMENT ON TABLE audit_logs IS 'Lưu vết lịch sử thay đổi dữ liệu phục vụ giám sát và bảo mật (EP-01)';
+COMMENT ON TABLE audit_logs IS 'Lưu vết lịch sử thay đổi dữ liệu bất biến (Append-only) phục vụ giám sát và bảo mật (EP-01 & SN-19)';
+COMMENT ON COLUMN audit_logs.id IS 'Mã định danh nhật ký kiểm toán (UUID Khóa chính)';
+COMMENT ON COLUMN audit_logs.user_id IS 'Mã người dùng thực hiện thao tác (FK users, Bắt buộc NOT NULL)';
+COMMENT ON COLUMN audit_logs.action IS 'Hành động: CREATE, UPDATE, DELETE, APPROVE, CANCEL, STOCK_ADJUST';
+COMMENT ON COLUMN audit_logs.entity_name IS 'Phân hệ nghiệp vụ tác động (INVENTORY, DEBT, PRICING, ORDER, USER...)';
+COMMENT ON COLUMN audit_logs.entity_id IS 'Mã định danh đối tượng bị tác động';
+COMMENT ON COLUMN audit_logs.old_values IS 'Trạng thái dữ liệu trước khi thay đổi (JSONB)';
+COMMENT ON COLUMN audit_logs.new_values IS 'Trạng thái dữ liệu sau khi thay đổi (JSONB)';
+COMMENT ON COLUMN audit_logs.ip_address IS 'Địa chỉ IP của client gửi request';
+
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_table, target_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_name, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
