@@ -109,7 +109,7 @@ async function runSN15Tests(): Promise<void> {
   console.log('\n--- 3. Kiểm thử Kiểm tra & Cảnh báo bàn giao Đại lý phụ trách ---');
 
   // 3.1 Truy vấn danh sách đại lý phụ trách trước khi khóa
-  const assignedRes = await usersService.getAssignedCustomersResult(salesUser!.id);
+  const assignedRes = usersService.getAssignedCustomersResult(salesUser!.id);
   assert(assignedRes.total === 3, 'Nhân sự kinh doanh "sales" đang phụ trách chính xác 3 đại lý');
   assert(
     assignedRes.warning !== undefined &&
