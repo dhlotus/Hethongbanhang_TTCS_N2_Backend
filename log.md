@@ -240,5 +240,44 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Hoàn thành 100% yêu cầu Subtask SN-112, 13/13 test cases pass.
   - 🚀 Sẵn sàng cho các task tiếp theo của Sprint 1 (RBAC Roles Guard chi tiết theo 7 vai trò, Module Users/Quản lý tài khoản).
 
+### [Sprint 1] - [SN-148]: API Đơn Vị Tính Quy Đổi & Sổ Kho Bất Biến (Historical Ledger Immutability)
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / US:** SN-148 (User Story: *"Là Nhân viên kho, tôi muốn có đơn vị tính quy đổi đúng theo cách kho đang gọi hàng, để nhập xuất theo thùng mà sổ sách vẫn ghi đúng số lon."*)
+- **Mục tiêu đáp ứng:**
+  1. Cho phép mỗi SKU khai báo nhiều đơn vị tính (Lon, Lốc, Thùng, Kiện...) kèm hệ số quy đổi về đơn vị cơ sở nhỏ nhất.
+  2. Đơn hàng và phiếu kho nhập/xuất theo bất kỳ đơn vị đóng gói nào cũng tự động quy đổi chính xác về đơn vị cơ sở khi ghi sổ tồn kho.
+  3. Cơ chế Snapshot đóng băng hệ số quy đổi tại thời điểm phát sinh giao dịch, đảm bảo khi thay đổi hệ số quy đổi trong tương lai hoàn toàn KHÔNG làm sai lệch các giao dịch sổ kho đã ghi trước đó.
+- **Danh sách file thay đổi / tạo mới:**
+  - `src/modules/products/entities/product-unit.entity.ts`: Entity định nghĩa đơn vị tính quy đổi (`id`, `productId`, `unitName`, `conversionFactor`, `isBaseUnit`, `barcode`, `timestamps`).
+  - `src/modules/products/entities/product.entity.ts`: Bổ sung quan hệ `units: ProductUnitEntity[]`, tự động khởi tạo đơn vị cơ sở mặc định.
+  - `src/modules/products/dto/create-product-unit.dto.ts`: DTO khai báo đơn vị tính mới (chống trùng lặp tên, ràng buộc hệ số `> 0`).
+  - `src/modules/products/dto/update-product-unit.dto.ts`: DTO cập nhật đơn vị tính hoặc điều chỉnh hệ số đóng gói.
+  - `src/modules/products/dto/index.ts`: Barrel export DTOs.
+  - `src/modules/products/products.service.ts`: Nghiệp vụ CRUD đơn vị tính, chống trùng tên, bảo vệ không cho phép xóa đơn vị cơ sở (`isBaseUnit: true`).
+  - `src/modules/products/products.controller.ts`: 4 Endpoints RESTful (`GET/POST/PUT/DELETE /api/products/:id/units`).
+  - `src/modules/inventory/entities/inventory-transaction.entity.ts`: Sổ giao dịch kho bất biến (Lưu trữ snapshot đóng băng `packageQuantity`, `unitName`, `conversionFactor`, `baseQuantityChange`, `baseUnit`).
+  - `src/modules/inventory/dto/adjust-stock.dto.ts`: Bổ sung `unitId` và `unitName` tùy chọn cho phép nhập/xuất theo đơn vị đóng gói.
+  - `src/modules/inventory/inventory.service.ts`: Tự động quy đổi số lượng bao gói về đơn vị cơ sở, cập nhật tồn kho nguyên tử và ghi sổ giao dịch bất biến; hỗ trợ truy vấn lịch sử sổ kho.
+  - `src/modules/inventory/inventory.controller.ts`: Endpoint `GET /api/inventory/transactions` tra cứu sổ kho theo SKU.
+  - `test/unit-conversion-sn148.spec.ts`: Bộ test tích hợp chuyên sâu 17/17 test cases pass (CRUD đơn vị, nhập kho theo Thùng quy về Lon, chứng minh tính bất biến khi đổi hệ số).
+  - Frontend (`Hethongbanhang_TTCS_N2_Frontend-main`):
+    - `src/types/products.ts`: Bổ sung `ProductUnit` interface và các trường quy đổi trong DTO tồn kho.
+    - `src/services/products.service.ts`: Mock dữ liệu quy đổi và tích hợp API CRUD đơn vị tính.
+    - `src/services/inventory.service.ts`: Hỗ trợ quy đổi đơn vị khi điều chỉnh kho và tra cứu giao dịch.
+    - `src/pages/products-page.tsx`: Giao diện trực quan hiển thị các cấp đơn vị tính của SKU, modal điều chỉnh tồn kho theo quy cách kèm công thức tính thời gian thực `[X] Thùng × [Y] = [Z] Lon`, modal quản lý đơn vị quy đổi và thông báo bảo toàn dữ liệu lịch sử.
+- **Chi tiết kỹ thuật & Nghiệp vụ cốt lõi:**
+  - *Đa đơn vị tính*: Một sản phẩm có thể có nhiều đơn vị đóng gói (`Lon = 1`, `Lốc = 6`, `Thùng = 24`, `Kiện = 96`...). Đơn vị cơ sở (`isBaseUnit = true`) luôn có hệ số bằng 1 và được bảo vệ nghiêm ngặt chống xóa.
+  - *Tự động quy đổi sổ kho*: Khi nhân viên kho nhập `5 Thùng`, hệ thống tính toán `baseQuantityChange = 5 * 24 = 120 Lon`. Tồn kho sản phẩm được cập nhật chính xác theo đơn vị cơ sở.
+  - *Bảo toàn tính bất biến lịch sử (Historical Ledger Immutability)*: Mỗi giao dịch kho đóng băng một snapshot gồm `conversionFactor`, `packageQuantity`, `baseQuantityChange` tại thời điểm giao dịch. Khi người dùng thay đổi quy cách thùng từ 24 lên 30 lon trong danh mục sản phẩm, giao dịch 120 lon trong quá khứ vẫn giữ nguyên vẹn giá trị và không bị tính toán lại.
+- **Tuân thủ Code Convention:**
+  - File & thư mục: 100% `kebab-case`.
+  - Type-safety: 100% TypeScript Strict Mode, Zero `any`.
+  - DRY, hàm ngắn gọn 30-50 dòng, JSDoc chuẩn hóa.
+- **Kết quả kiểm thử:**
+  - `test/unit-conversion-sn148.spec.ts`: 17/17 PASSED.
+  - `test/rbac-roles-cost-price.spec.ts`: 25/25 PASSED.
+  - Backend TypeScript compilation (`tsc --noEmit`): 0 lỗi.
+  - Frontend Vite build (`npm run build`): 0 lỗi.
+
 
 

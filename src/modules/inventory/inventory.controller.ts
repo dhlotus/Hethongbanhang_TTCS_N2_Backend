@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -15,6 +16,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
 import { InventoryService, StockAdjustmentResult } from './inventory.service';
 
 /**
@@ -87,5 +89,17 @@ export class InventoryController {
     @CurrentUser() user: ICurrentUser,
   ): Promise<StockAdjustmentResult> {
     return this.inventoryService.adjustStock(dto, user?.userId || 'unknown');
+  }
+
+  /**
+   * Truy vấn lịch sử giao dịch sổ kho bất biến
+   * GET /inventory/transactions
+   * Quyền: Mọi vai trò nghiệp vụ đã đăng nhập
+   */
+  @Get('transactions')
+  async getTransactions(
+    @Query('sku') sku?: string,
+  ): Promise<InventoryTransactionEntity[]> {
+    return this.inventoryService.getTransactions(sku);
   }
 }
