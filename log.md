@@ -338,58 +338,203 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
   - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.
 
-### [Sprint 2] - [SN-17]: [BE] API Xem & Cập nhật Hồ sơ Cá nhân (Persistent - PostgreSQL)
+---
+
+### [Sprint 1] - [SN-147]: BE: Xây dựng API xử lý tệp Excel, validate dữ liệu từng dòng, tạo tài khoản hàng loạt và trả về báo cáo tổng kết.
 - **Thời gian hoàn thành:** 2026-10-03
-- **Mã Jira / US:** SN-17 (Parent: SN-2 - Tài khoản, Phân quyền & I | Sprint 2)
-- **Nhánh Git:** `SN-17-cap-nhat-ho-so-ca-nhan`
-- **Mục tiêu (User Story):** Là người dùng của hệ thống, tôi muốn xem và cập nhật hồ sơ cá nhân, để thông tin liên lạc của tôi luôn đúng để kho gọi được khi cần xác nhận đơn.
-- **Acceptance Criteria đã đáp ứng:**
-  - ✅ Sửa được họ tên, số điện thoại
-  - ✅ Không tự đổi được tài khoản, vai trò, kho và địa bàn
-  - ✅ Kiểm tra định dạng số điện thoại Việt Nam
-  - ✅ Dữ liệu bền vững — không bị mất khi khởi động lại server (lưu vào PostgreSQL)
-- **Danh sách file thay đổi / tạo mới:**
-  - `src/modules/users/constants/profile.constant.ts` (Tạo mới: Hằng số `PROFILE_FULL_NAME_MAX_LENGTH`, `VIETNAM_PHONE_PATTERN`, `PROFILE_PHONE_MESSAGE`)
-  - `src/modules/users/dto/update-profile.dto.ts` (Tạo mới: DTO cho `PATCH /api/users/me` — chỉ cho phép `fullName` và `phone`, whitelist nghiêm ngặt qua ValidationPipe)
-  - `src/modules/users/dto/index.ts` (Cập nhật: Barrel export `UpdateProfileDto`)
-  - `src/modules/users/user.repository.ts` (Tạo mới: `UserRepository` kết nối PostgreSQL — CRUD đầy đủ, mapping snake_case ↔ camelCase, `OnModuleInit` kiểm tra schema khi khởi động)
-  - `src/modules/users/users.service.ts` (Cập nhật: Thêm `updateProfile()` gọi `saveUser()` → `userRepository.update()` → PostgreSQL; inject `UserRepository` qua `@Optional()` để tương thích test in-memory)
-  - `src/modules/users/users.controller.ts` (Cập nhật: Thêm `GET /api/users/me` và `PATCH /api/users/me` — được bảo vệ bởi `JwtAuthGuard + RolesGuard`, mở cho tất cả 7 vai trò)
-  - `src/modules/users/users.module.ts` (Cập nhật: Import `DatabaseModule`, cung cấp `UserRepository`)
-  - `src/database/database.service.ts` (Tạo mới: `DatabaseService` bọc `pg.Pool` — dùng chung toàn hệ thống)
-  - `src/database/database.module.ts` (Tạo mới: `DatabaseModule` global export `DatabaseService`)
-  - `src/database/migrations/008_user_profile_persistence.sql` (Tạo mới: `ALTER TABLE users ADD COLUMN IF NOT EXISTS` cho các trường mở rộng `roles`, `avatar_url`, v.v.; `idempotent`)
-  - `scripts/database.ts` (Tạo mới: Script CLI quản lý DB — `create`, `migrate`, `seed-users`)
-  - `package.json` (Cập nhật: Thêm script `db:create`, `db:migrate`, `db:seed-users`, `test:profile`, `test:profile:postgres`)
-  - `test/profile-sn17.spec.ts` (Tạo mới: Test suite in-memory — 5/5 cases pass)
-  - `test/profile-postgres-sn17.spec.ts` (Tạo mới: Test suite PostgreSQL persistence — tạo user thật, cập nhật, tắt app, khởi động lại, kiểm tra dữ liệu còn nguyên)
-- **Chi tiết kỹ thuật:**
-  - *Endpoints:*
-    - `GET /api/users/me`: Protected bởi `JwtAuthGuard`; trả về `SafeUser` của người dùng đang đăng nhập (không bao gồm `passwordHash`).
-    - `PATCH /api/users/me`: Protected bởi `JwtAuthGuard`; chỉ chấp nhận `fullName` và `phone` thông qua `UpdateProfileDto` + `ValidationPipe({ whitelist: true })`; mọi trường nhạy cảm khác (`id`, `username`, `email`, `role`, `roles`, `assignedWarehouse`, `status`) bị loại bỏ tự động tại lớp Pipe, không thể sửa.
-  - *Validation `UpdateProfileDto`:*
-    - `fullName`: `@ValidateIf(defined)` → `@Transform(trim)` → `@IsString` → `@IsNotEmpty` → `@MaxLength(100)`
-    - `phone`: `@ValidateIf(defined)` → `@Transform(trim)` → `@IsString` → `@Matches(VIETNAM_PHONE_PATTERN)` — khớp `0[35789]XXXXXXXX`, `0[2]XXXXXXXXX`, `+84[35789]XXXXXXXX`; tự động chuẩn hóa `+84` → `0`
-    - Yêu cầu tối thiểu: Phải cung cấp ít nhất một trong hai trường; nếu body rỗng hoàn toàn (cả hai `undefined`) → `400 Bad Request`
-  - *Persistence:*
-    - `UserRepository.update(user, fields)`: Sinh SQL `UPDATE users SET col = $n, ... WHERE id = $1` động theo danh sách `fields` được truyền vào; chỉ cập nhật đúng các cột cần thiết, không bao giờ ghi đè toàn bộ row.
-    - Không dùng In-memory Map cho dữ liệu thật — `UsersService.saveUser()` gọi `userRepository.update()` khi `userRepository` được inject (production), hoặc fallback Map (test in-memory cũ).
-    - Dữ liệu bền vững 100% qua restart vì lưu trực tiếp PostgreSQL.
-  - *Migration `008_user_profile_persistence.sql`* chạy `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` idempotent, an toàn tái chạy nhiều lần.
-  - *Phân quyền RBAC:* `@Roles(...Object.values(UserRole))` — tất cả 7 vai trò (ADMIN, SALES_REP, SALES_MANAGER, WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ACCOUNTANT, CUSTOMER) đều được xem và cập nhật hồ sơ cá nhân của chính mình.
-  - *Code Convention tuân thủ:* 100% `kebab-case` file/thư mục, Zero `any`, Strict TypeScript, `UPPER_SNAKE_CASE` hằng số/regex, `camelCase` biến/hàm, `PascalCase` class/DTO/Entity, thụt lề 2 spaces, trailing comma, hàm ≤ 50 dòng.
-- **Kết quả kiểm thử:**
-  - `npm run test:profile` (in-memory): **5/5 pass** ✅
-  - `npm run test:profile:postgres` (PostgreSQL thật): **1/1 pass** ✅ — kiểm tra đầy đủ: tạo user → đăng nhập → cập nhật hồ sơ → tắt app → khởi động lại → đăng nhập lại → hồ sơ vẫn đúng
-  - `tsc --noEmit`: **0 lỗi** ✅
-- **Hướng dẫn chạy lần đầu (nếu chưa migrate DB):**
-  ```bash
-  npm run db:create      # Tạo database nếu chưa có
-  npm run db:migrate     # Chạy migrations 001 + 008
-  npm run db:seed-users  # Thêm 7 tài khoản mẫu
-  npm run start:dev      # Khởi động server
-  ```
-- **Ghi chú kỹ thuật & Lưu ý cho task kế tiếp:**
-  - `UserRepository` đã được thiết kế tổng quát — các task sau chỉ cần thêm `UserField` mới vào `USER_COLUMNS` và truyền field vào `saveUser()`.
-  - Các test in-memory (`profile-sn17.spec.ts`) override `UserRepository` bằng `null` để tránh cần DB — tương thích CI không cần PostgreSQL.
-  - 🚀 Sẵn sàng cho Frontend (React): Gọi `GET /api/users/me` để hiển thị hồ sơ, `PATCH /api/users/me` để lưu thay đổi `fullName` và `phone`.
+- **Mã Jira / Task:** `SN-147`
+- **Dự án / Space:** `SOFTWARE N3`
+- **Parent Epic / US:** `SN-16` (Import Excel)
+- **Tiêu đề công việc:** BE: Xây dựng API xử lý tệp Excel, validate dữ liệu từng dòng, tạo tài khoản hàng loạt và trả về báo cáo tổng kết.
+- **Trạng thái:** ✅ Hoàn thành 100% (Biên dịch TypeScript `tsc --noEmit` 0 lỗi, 22/22 Test Cases Jest PASS, tuân thủ 100% `CODE_CONVENTION.docx`).
+- **Mục tiêu:** Xây dựng API nhận file Excel (.xlsx / .xls), trích xuất dữ liệu vào bộ nhớ đệm (memory buffer), thẩm định (validate) từng dòng độc lập bằng `class-validator`, tạo tài khoản nhân sự hàng loạt, hash mật khẩu bảo mật, phân bổ kho theo quy chuẩn RBAC, cách ly lỗi (lỗi một dòng không làm gián đoạn toàn bộ batch) và xuất báo cáo tổng kết chi tiết từng dòng (thành công/thất bại kèm nguyên nhân).
+
+#### 📁 1. Danh sách file tạo mới / thay đổi:
+
+| File | Hành động | Mô tả chi tiết |
+|:---|:---:|:---|
+| `src/modules/users/constants/excel-import.constant.ts` | **Tạo mới** | Hằng số cấu hình import: Dung lượng tối đa (`5MB`), số dòng tối đa (`500`), MIME types (`.xlsx`, `.xls`), header bắt buộc, thông báo lỗi chuẩn hóa |
+| `src/modules/users/dto/excel-user-row.dto.ts` | **Tạo mới** | DTO thẩm định dữ liệu từng dòng qua `class-validator`: `@IsNotEmpty`, `@IsEmail`, `@Length`, `@Matches` |
+| `src/modules/users/dto/import-users-report.dto.ts` | **Tạo mới** | DTO phản hồi báo cáo kết quả tổng kết (`ImportUsersReportDto`, `ImportRowResult`, từ điển ánh xạ alias tiếng Việt `ROLE_ALIAS_MAP`) |
+| `src/modules/users/excel-import.service.ts` | **Tạo mới** | Service nghiệp vụ lõi: Đọc buffer Excel (`xlsx`), validate độc lập từng dòng, ủy quyền tạo user cho `UsersService.create()`, cách ly lỗi, ghi log và tổng hợp báo cáo |
+| `src/modules/users/dto/index.ts` | **Cập nhật** | Barrel export xuất bản `ExcelUserRowDto`, `ImportUsersReportDto`, `ImportRowResult` |
+| `src/modules/users/users.controller.ts` | **Cập nhật** | Thêm endpoint `POST /api/users/import-excel`, cấu hình `FileInterceptor('file')`, phân quyền `@Roles(UserRole.ADMIN)` |
+| `src/modules/users/users.module.ts` | **Cập nhật** | Đăng ký `ExcelImportService` vào `providers` và `exports` của module |
+| `test/excel-import-sn147.spec.ts` | **Tạo mới** | Bộ kiểm thử tích hợp Jest với **22 test cases** bao phủ 7 kịch bản từ validation file đến batch processing |
+| `package.json` | **Cập nhật** | Thêm devDependencies Jest (`jest`, `ts-jest`, `@types/jest`), cấu hình script `npm test`, `npm run test:watch`, `npm run test:cov` |
+| `log.md` | **Cập nhật** | Ghi nhật ký tiến độ chi tiết, rõ ràng cho task SN-147 |
+
+---
+
+#### 🔌 2. Đặc tả Endpoint API:
+
+- **Method & URL:** `POST /api/users/import-excel`
+- **Xác thực & Phân quyền:** Bearer Token JWT, chỉ cấp quyền cho vai trò Quản trị viên (`@Roles(UserRole.ADMIN)`).
+- **Content-Type:** `multipart/form-data`
+- **Form-data Field:** `file` (File Excel có đuôi `.xlsx` hoặc `.xls`, dung lượng tối đa 5MB, tối đa 500 dòng).
+
+**Response Thành Công (HTTP 200 OK):**
+```json
+{
+  "statusCode": 200,
+  "message": "Import hoàn tất: Tạo thành công 47 tài khoản, 3 dòng thất bại.",
+  "data": {
+    "totalRows": 50,
+    "successCount": 47,
+    "failedCount": 3,
+    "results": [
+      {
+        "row": 2,
+        "status": "SUCCESS",
+        "createdUser": {
+          "id": "usr_9b1deb4d",
+          "username": "nguyenvana",
+          "email": "nvana@loha.vn",
+          "fullName": "Nguyễn Văn A",
+          "role": "SALES_REP",
+          "status": "ACTIVE",
+          "phone": "0901234567",
+          "assignedWarehouse": null,
+          "createdAt": "2026-10-03T12:00:00.000Z"
+        },
+        "temporaryPassword": "Loha@123456"
+      },
+      {
+        "row": 5,
+        "status": "FAILED",
+        "errors": [
+          "Email \"khong-hop-le\" không đúng định dạng email."
+        ]
+      }
+    ],
+    "createdUsers": [ /* Danh sách SafeUser */ ],
+    "summary": "Import hoàn tất: Tạo thành công 47 tài khoản, 3 dòng thất bại."
+  }
+}
+```
+
+---
+
+#### 📋 3. Quy chuẩn Cấu trúc File Excel mẫu:
+
+| Cột (Header) | Bắt buộc | Kiểu dữ liệu | Ràng buộc / Mô tả | Ví dụ |
+|:---|:---:|:---|:---|:---|
+| `fullName` | **Có** | Chuỗi (2-100 ký tự) | Họ và tên đầy đủ | `Nguyễn Văn A` |
+| `username` | **Có** | Chuỗi (3-30 ký tự) | Chỉ gồm chữ thường, số, dấu gạch dưới | `nguyenvana` |
+| `email` | **Có** | Chuỗi (Email hợp lệ) | Định dạng RFC 5322, duy nhất toàn hệ thống | `nvana@loha.vn` |
+| `role` | **Có** | Chuỗi (Enum / Alias) | 7 vai trò hệ thống hoặc alias tiếng Việt | `SALES_REP` hoặc `thủ kho` |
+| `phone` | Không | Chuỗi (Số ĐT VN) | Bắt đầu bằng 0 hoặc +84, 10-11 chữ số | `0901234567` |
+| `password` | Không | Chuỗi (≥6 ký tự) | Nếu bỏ trống: Tự sinh mật khẩu tạm ngẫu nhiên | `Loha@Secure123` |
+| `assignedWarehouse` | Có điều kiện | Chuỗi | **Bắt buộc** nếu là `WAREHOUSE_KEEPER` / `WAREHOUSE_MANAGER` | `Kho Tổng Miền Nam` |
+
+- **Bản đồ ánh xạ Alias Vai trò Tiếng Việt (`ROLE_ALIAS_MAP`):**
+  - `"thủ kho"`, `"thu kho"`, `"thukho"` ➔ `WAREHOUSE_KEEPER`
+  - `"quản lý kho"`, `"quan ly kho"`, `"ql kho"` ➔ `WAREHOUSE_MANAGER`
+  - `"kế toán"`, `"ke toan"`, `"ketoan"` ➔ `ACCOUNTANT`
+  - `"nhân viên kinh doanh"`, `"kinh doanh"`, `"sales"` ➔ `SALES_REP`
+  - `"quản lý kinh doanh"`, `"trưởng phòng kinh doanh"` ➔ `SALES_MANAGER`
+  - `"quản trị viên"`, `"admin"`, `"quantrivien"` ➔ `ADMIN`
+  - `"khách hàng"`, `"đại lý"`, `"customer"` ➔ `CUSTOMER`
+
+---
+
+#### ⚙️ 4. Chi tiết Kiến trúc & Luồng xử lý Kỹ thuật:
+
+1. **Giai đoạn 1 – Thẩm định File Đầu vào (Pre-validation):**
+   - Kiểm tra `file` có tồn tại trong `Express.Multer.File`.
+   - Kiểm tra định dạng qua MIME type và phần mở rộng (`.xlsx`, `.xls`).
+   - Kiểm tra giới hạn dung lượng `file.size <= 5MB` (`5 * 1024 * 1024` bytes).
+2. **Giai đoạn 2 – Đọc và Phân tích Memory Buffer (Parsing):**
+   - Dùng thư viện `xlsx` (SheetJS) đọc trực tiếp từ `file.buffer`.
+   - Lấy `SheetNames[0]`, chuyển đổi sang mảng object qua `XLSX.utils.sheet_to_json`.
+   - Kiểm tra file rỗng và xác minh sự hiện diện của 4 header bắt buộc: `fullName`, `username`, `email`, `role`.
+   - Kiểm tra giới hạn số lượng dòng `totalRows <= 500`.
+3. **Giai đoạn 3 – Thẩm định & Khởi tạo Từng Dòng Độc lập (Per-row Execution):**
+   - Ánh xạ từng dòng sang instance của `ExcelUserRowDto` bằng `plainToInstance`.
+   - Chạy hàm `validate()` của `class-validator`.
+   - Chuẩn hóa vai trò qua hàm `resolveRole()` kết hợp Enum và `ROLE_ALIAS_MAP`.
+   - Gọi `UsersService.create()`:
+     - Kiểm tra trùng lặp `username` hoặc `email` trong CSDL.
+     - Kiểm tra ràng buộc nhân sự kho bắt buộc phải gắn `assignedWarehouse`.
+     - Tự động băm mật khẩu bằng `bcrypt` (10 salt rounds).
+     - Giả lập gửi email kích hoạt tài khoản kèm mật khẩu tạm.
+   - **Cơ chế Cách ly Lỗi (Error Isolation):** Nếu dòng thứ $i$ bị lỗi (sai định dạng, trùng email, thiếu kho...), hệ thống ghi nhận `status: FAILED` cho dòng đó, ghi log cảnh báo và **tiếp tục xử lý ngay dòng $i+1$** mà không làm dừng toàn bộ batch.
+4. **Giai đoạn 4 – Tổng hợp Báo cáo & Ghi Log:**
+   - Trả về đối tượng `ImportUsersReportDto` chứa `totalRows`, `successCount`, `failedCount`, danh sách chi tiết `results` và `createdUsers` (dạng `SafeUser`, tuyệt đối không để lộ `passwordHash`).
+   - Tích hợp NestJS `Logger`: Ghi log chi tiết tiến trình đọc file, log từng dòng thành công `[LOG]` / thất bại `[WARN]` kèm nguyên nhân, và log tóm tắt cuối cùng.
+
+---
+
+#### 🧪 5. Kết quả Kiểm thử Tự động (Automated Jest Test Suite):
+
+- **File kiểm thử:** `test/excel-import-sn147.spec.ts`
+- **Bộ công cụ:** Jest v30 + `ts-jest` v29 (Strict TypeScript, Zero `any`).
+- **Tổng số test cases:** **22 / 22 PASS (100%)** – Thời gian thực thi: **~4.2 giây**.
+
+```
+PASS test/excel-import-sn147.spec.ts
+  [SN-147] Excel Import – Tao Tai Khoan Hang Loat
+    Validate file dau vao
+      √ TC-01: Nem BadRequestException khi khong co file (null)
+      √ TC-02: Nem BadRequestException khi MIME type khong hop le (.pdf)
+      √ TC-03: Nem BadRequestException khi file qua dung luong (> 5MB)
+      √ TC-04: Nem BadRequestException khi file Excel rong (khong co dong nao)
+      √ TC-05: Nem BadRequestException khi thieu cot bat buoc (thieu email)
+    Validate tung dong du lieu
+      √ TC-06: Dong thieu fullName -> status = FAILED, co thong bao loi ro rang
+      √ TC-07: Dong co vai tro khong hop le -> status = FAILED
+      √ TC-08: Dong co email sai dinh dang -> status = FAILED
+      √ TC-09: Dong thieu username -> status = FAILED
+    Tao tai khoan thanh cong
+      √ TC-10: 1 dong hop le -> successCount = 1, tra ve user va temporaryPassword
+      √ TC-11: 3 dong hop le -> successCount = 3, bao cao day du
+      √ TC-12: Bao cao summary chua so tai khoan tao thanh cong
+      √ TC-13: Tai khoan duoc tao khong lo passwordHash (SafeUser)
+    Xu ly loi trung lap (username / email)
+      √ TC-14: Import cung username 2 lan -> dong 2 FAILED do trung username
+      √ TC-15: Import cung email 2 lan -> dong 2 FAILED do trung email
+    Ho tro alias vai tro tieng Viet
+      √ TC-16: "thu kho" duoc phan giai thanh WAREHOUSE_KEEPER va tao thanh cong
+      √ TC-17: "ketoan" duoc phan giai thanh ACCOUNTANT va tao thanh cong
+      √ TC-18: "quantrivien" duoc phan giai thanh ADMIN
+    Batch processing – loi 1 dong khong dung ca batch
+      √ TC-19: 5 dong, dong 2 loi role, cac dong con lai van duoc xu ly thanh cong
+      √ TC-20: 10 dong tat ca hop le -> successCount = 10
+    Rang buoc kho bat buoc voi vai tro WAREHOUSE_KEEPER / WAREHOUSE_MANAGER
+      √ TC-21: WAREHOUSE_KEEPER khong co assignedWarehouse -> FAILED
+      √ TC-22: WAREHOUSE_KEEPER co assignedWarehouse -> SUCCESS
+
+Test Suites: 1 passed, 1 total
+Tests:       22 passed, 22 total
+```
+
+---
+
+#### ⚠️ 6. Phân tích Xung đột Git & Phương án Giải quyết (Conflict Analysis - PR #5):
+
+Trên Git / GitHub Pull Request #5 có 4 file xung đột cần xử lý khi merge vào nhánh `develop`:
+
+| File xung đột | Nguyên nhân | Phương án giải quyết chính xác |
+|:---|:---|:---|
+| `log.md` | Nhánh `develop` có log của các task khác; nhánh feature có log của SN-147 | **Giữ cả hai**, ghép nối theo thứ tự thời gian. Tuyệt đối không ghi đè mất log của đồng đội. |
+| `package-lock.json` | Nhánh feature cài đặt thêm `xlsx` | **Giữ phiên bản của nhánh feature** (có dependency `xlsx`) hoặc chạy lại `npm install` sau khi merge. |
+| `src/modules/users/users.controller.ts` | Nhánh `develop` có thêm routes từ task khác; nhánh feature thêm route `POST /api/users/import-excel` | **Gộp cả hai**: Giữ toàn bộ routes từ `develop`, bổ sung endpoint import Excel và inject `ExcelImportService`. |
+| `src/modules/users/users.service.ts` | `develop` có hotfix phục hồi avatar; nhánh feature không sửa logic core của service | **Ưu tiên giữ toàn bộ code của `develop`**, vì SN-147 tuân thủ Single Responsibility và gọi qua interface public `create()`. |
+
+---
+
+#### 📌 7. Ghi chú Kỹ thuật & Bàn giao cho Task Kế tiếp:
+
+1. **Tuân thủ triệt để `CODE_CONVENTION.docx`:**
+   - 100% tên file `kebab-case` (`excel-import.service.ts`, `excel-import.constant.ts`, `excel-user-row.dto.ts`).
+   - 100% Class/DTO `PascalCase`, biến/hàm `camelCase` (bắt đầu bằng động từ: `importUsersFromExcel`, `resolveRole`, `validateRowData`).
+   - Hằng số `UPPER_SNAKE_CASE` (`EXCEL_IMPORT_MAX_FILE_SIZE`, `EXCEL_IMPORT_MAX_ROWS`, `EXCEL_ALLOWED_MIME_TYPES`).
+   - Strict TypeScript: **Không dùng `any`** (Zero `any`), sử dụng type casting an toàn và `unknown`.
+   - Thụt lề 2 spaces, trailing comma đầy đủ.
+2. **Sẵn sàng tích hợp Frontend:**
+   - Modal Upload Excel (kéo thả file `.xlsx`/`.xls`).
+   - Bảng kết quả import chi tiết từng dòng kèm tag màu xanh (`SUCCESS`) / đỏ (`FAILED`) và danh sách lỗi.
+3. **Lưu ý tương lai khi chuyển sang PostgreSQL/TypeORM:**
+   - Khi chuyển từ In-Memory Map sang PostgreSQL, có thể cân nhắc tùy chọn Transaction (All-or-Nothing) hoặc Partial Import tùy theo yêu cầu cụ thể của từng nghiệp vụ doanh nghiệp.
+
+

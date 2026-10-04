@@ -9,10 +9,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import * as multer from 'multer';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -24,9 +25,9 @@ import { UploadedAvatarFile } from './decorators/uploaded-avatar-file.decorator'
 import {
   AvatarResponseDto,
   CreateUserDto,
+  ImportUsersReportDto,
   QueryUsersDto,
   UpdateUserDto,
-  UpdateProfileDto,
   UpdateUserStatusDto,
 } from './dto';
 import { SafeUser } from './entities/user.entity';
@@ -39,6 +40,8 @@ import {
   UsersService,
 } from './users.service';
 
+import { ExcelImportService } from './excel-import.service';
+
 /**
  * Controller Quản lý Người dùng & Phân quyền Hệ thống (SN-10 & EP-01):
  * - Bảo vệ bởi JwtAuthGuard & RolesGuard
@@ -48,7 +51,10 @@ import {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly excelImportService: ExcelImportService,
+  ) {}
 
   /**
    * Tải lên ảnh đại diện của người dùng đang đăng nhập (SN-144)
@@ -103,22 +109,13 @@ export class UsersController {
   }
 
   /**
-   * Lấy thông tin tài khoản của chính mình (SN-17)
+   * Lấy thông tin tài khoản của chính mình (SN-18)
    * GET /api/users/me
    */
   @Get('me')
   @Roles(...Object.values(UserRole))
   async getMe(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
     return this.usersService.findSafeById(currentUser.userId);
-  }
-
-  @Patch('me')
-  @Roles(...Object.values(UserRole))
-  async updateMe(
-    @CurrentUser() currentUser: ICurrentUser,
-    @Body() dto: UpdateProfileDto,
-  ): Promise<SafeUser> {
-    return this.usersService.updateProfile(currentUser.userId, dto);
   }
 
   /**
@@ -188,5 +185,30 @@ export class UsersController {
     @Param('id') id: string,
   ): Promise<{ resetCode: string; user: SafeUser }> {
     return this.usersService.generateResetCode(id);
+  }
+
+  /**
+   * Import người dùng hàng loạt từ file Excel (SN-147)
+   * POST /api/users/import-excel
+   * - Chỉ ADMIN mới có quyền thực hiện
+   * - File field: 'file' (.xlsx / .xls, tối đa 5MB)
+   */
+  @Post('import-excel')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(FileInterceptor('file'))
+  @HttpCode(HttpStatus.OK)
+  async importUsersFromExcel(
+    @UploadedFile() file?: Express.Multer.File,
+  ): Promise<{
+    statusCode: number;
+    message: string;
+    data: ImportUsersReportDto;
+  }> {
+    const report = await this.excelImportService.importFromExcel(file);
+    return {
+      statusCode: HttpStatus.OK,
+      message: report.summary,
+      data: report,
+    };
   }
 }

@@ -176,20 +176,20 @@ async function runTests(): Promise<void> {
   assert(Boolean(salesMgrInterceptorResult), 'Quản lý kinh doanh (SALES_MANAGER) được phép xem giá vốn và biên lợi nhuận');
 
   // Test 3.3: Nhân viên kinh doanh (SALES_REP) xem danh sách sản phẩm -> GIÁ VỐN & BIÊN LN BỊ XÓA BỎ
-  const sanitizedForSalesRep = costPriceSanitizer.sanitizeData(rawProducts);
+  const sanitizedForSalesRep = costPriceSanitizer.sanitizeData(rawProducts) as Record<string, unknown>[];
   assert(sanitizedForSalesRep[0].sku === rawProducts[0].sku, 'Dữ liệu công khai (SKU, Tên, Giá bán) vẫn hiển thị đầy đủ cho Sales Rep');
   assert(sanitizedForSalesRep[0].price === rawProducts[0].price, 'Giá bán niêm yết hiển thị đầy đủ cho Sales Rep');
   assert(sanitizedForSalesRep[0].costPrice === undefined, 'Giá vốn (costPrice) ĐÃ BỊ ẨN / LỌC SẠCH đối với Nhân viên kinh doanh');
   assert(sanitizedForSalesRep[0].margin === undefined, 'Biên lợi nhuận (margin) ĐÃ BỊ ẨN / LỌC SẠCH đối với Nhân viên kinh doanh');
 
   // Test 3.4: Thủ kho (WAREHOUSE_KEEPER) xem danh sách sản phẩm -> THỦ KHO KHÔNG XEM ĐƯỢC GIÁ VỐN
-  const sanitizedForWarehouse = costPriceSanitizer.sanitizeData(rawProducts);
+  const sanitizedForWarehouse = costPriceSanitizer.sanitizeData(rawProducts) as Record<string, unknown>[];
   assert(sanitizedForWarehouse[0].costPrice === undefined, 'Giá vốn (costPrice) ĐÃ BỊ ẨN / LỌC BỎ đối với Thủ kho (WAREHOUSE_KEEPER)');
   assert(sanitizedForWarehouse[0].margin === undefined, 'Biên lợi nhuận (margin) ĐÃ BỊ ẨN / LỌC BỎ đối với Thủ kho (WAREHOUSE_KEEPER)');
   assert(sanitizedForWarehouse[0].stockQuantity === rawProducts[0].stockQuantity, 'Số lượng tồn kho hiển thị bình thường cho Thủ kho để quản lý kho');
 
   // Test 3.5: Đại lý (CUSTOMER) xem danh mục -> GIÁ VỐN BỊ ẨN
-  const sanitizedForCustomer = costPriceSanitizer.sanitizeData(rawProducts);
+  const sanitizedForCustomer = costPriceSanitizer.sanitizeData(rawProducts) as Record<string, unknown>[];
   assert(sanitizedForCustomer[0].costPrice === undefined, 'Giá vốn (costPrice) ĐÃ BỊ ẨN đối với Đại lý (CUSTOMER)');
   assert(sanitizedForCustomer[0].margin === undefined, 'Biên lợi nhuận (margin) ĐÃ BỊ ẨN đối với Đại lý (CUSTOMER)');
 

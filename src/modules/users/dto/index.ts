@@ -1,7 +1,7 @@
 export * from './create-user.dto';
 export * from './update-user.dto';
-export * from './update-profile.dto';
 export * from './update-user-status.dto';
 export * from './query-users.dto';
 export * from './avatar-response.dto';
-
+export * from './excel-user-row.dto';
+export * from './import-users-report.dto';

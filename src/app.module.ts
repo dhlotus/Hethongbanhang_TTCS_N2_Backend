@@ -12,11 +12,13 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
 import { ReturnsModule } from './modules/returns/returns.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
+import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    DatabaseModule,
     MailModule,
     AuthModule,
     UsersModule,
