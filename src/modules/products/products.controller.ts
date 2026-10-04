@@ -27,6 +27,7 @@ import { CostPriceSanitizerInterceptor } from '../../common/interceptors/cost-pr
 import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { ConfirmImportDto } from './dto/import-product.dto';
 import { ProductEntity } from './entities/product.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
 import { ProductsService } from './products.service';
@@ -88,11 +89,11 @@ export class ProductsController {
   @Post('import/confirm')
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
-  async confirmImport(@Body('items') items: any[]) {
-    if (!items || !Array.isArray(items)) {
+  async confirmImport(@Body() confirmDto: ConfirmImportDto) {
+    if (!confirmDto.items || !Array.isArray(confirmDto.items)) {
       throw new BadRequestException('Dữ liệu không hợp lệ');
     }
-    return this.productsService.confirmImport(items);
+    return this.productsService.confirmImport(confirmDto.items);
   }
 
   /**

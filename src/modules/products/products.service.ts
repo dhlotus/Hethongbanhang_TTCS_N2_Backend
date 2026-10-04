@@ -619,11 +619,11 @@ export class ProductsService implements OnModuleInit {
       product.margin =
         product.price > 0
           ? Number(
-              (
-                ((product.price - product.costPrice) / product.price) *
-                100
-              ).toFixed(2),
-            )
+            (
+              ((product.price - product.costPrice) / product.price) *
+              100
+            ).toFixed(2),
+          )
           : 0;
     }
 
@@ -669,7 +669,7 @@ export class ProductsService implements OnModuleInit {
             product.sku,
           ],
         );
-      } catch {}
+      } catch { }
     }
 
     return product;
@@ -700,7 +700,7 @@ export class ProductsService implements OnModuleInit {
           `DELETE FROM products WHERE sku = $1;`,
           [product.sku],
         );
-      } catch {}
+      } catch { }
     }
 
     return {
@@ -784,7 +784,11 @@ export class ProductsService implements OnModuleInit {
 
     const workbook = new ExcelJS.Workbook();
     try {
-      await workbook.xlsx.load(file.buffer as any);
+      const safeBuffer = file.buffer.buffer.slice(
+        file.buffer.byteOffset,
+        file.buffer.byteOffset + file.buffer.byteLength,
+      );
+      await workbook.xlsx.load(safeBuffer as ArrayBuffer);
     } catch (error) {
       throw new BadRequestException('Tệp không đúng định dạng Excel');
     }
@@ -798,7 +802,7 @@ export class ProductsService implements OnModuleInit {
     let validCount = 0;
     let invalidCount = 0;
 
-    sheet.eachRow((row, rowNumber) => {
+    sheet.eachRow((row: ExcelJS.Row, rowNumber: number) => {
       if (rowNumber === 1) return; // Skip header
 
       const sku = row.getCell(1).text?.trim();
@@ -815,7 +819,7 @@ export class ProductsService implements OnModuleInit {
       if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
 
       const errors: string[] = [];
-      
+
       if (!sku) errors.push('Mã SKU không được để trống');
       if (!name) errors.push('Tên sản phẩm không được để trống');
       if (!category) errors.push('Ngành hàng không được để trống');
@@ -882,7 +886,7 @@ export class ProductsService implements OnModuleInit {
             price: item.price,
             costPrice: item.costPrice,
             description: item.description,
-          } as any);
+          });
         } else {
           await this.create({
             sku: item.sku,
@@ -894,12 +898,12 @@ export class ProductsService implements OnModuleInit {
             costPrice: item.costPrice,
             stockQuantity: item.stockQuantity,
             description: item.description,
-          } as any);
+          });
         }
         successCount++;
-      } catch (err: any) {
+      } catch (err: unknown) {
         errorCount++;
-        errors.push(`Dòng ${item.row}: ${err.message}`);
+        errors.push(`Dòng ${item.row}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
