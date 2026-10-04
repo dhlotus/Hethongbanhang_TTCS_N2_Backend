@@ -436,3 +436,79 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Build Backend (`nest build`) thành công, 0 lỗi biên dịch.
   - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
   - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.
+
+### [Sprint 2] - [SN-27]: Quản Lý Bảng Giá & Chiết Khấu B2B (Price List Management)
+- **Thời gian hoàn thành:** 2026-10-04
+- **Mã Jira / US:** SN-27 (Parent: SN-21: Danh mục Sản phẩm & Bảng giá, EP-02)
+- **Trạng thái:** ✅ Hoàn thành 100% (Backend: 0 errors `nest build`, 15/15 test cases pass; Frontend: 0 errors `tsc -b && vite build`)
+- **Danh sách file thay đổi / tạo mới:**
+  - *Backend (`HTBH_Backend`):*
+    - `src/common/enums/customer-group.enum.ts` (Tạo mới: Enum `CustomerGroup` với `AGENT_LEVEL_1`, `AGENT_LEVEL_2`, `RETAIL`)
+    - `src/common/enums/price-list-status.enum.ts` (Tạo mới: Enum `PriceListStatus` với `DRAFT`, `ACTIVE`, `INACTIVE`, `EXPIRED`)
+    - `src/common/enums/index.ts` (Cập nhật: Re-export 2 Enums mới)
+    - `src/modules/price-lists/entities/price-list-item.entity.ts` (Tạo mới: Entity dòng chi tiết sản phẩm bảng giá)
+    - `src/modules/price-lists/entities/price-list.entity.ts` (Tạo mới: Entity Bảng giá B2B, quản lý phiên bản `version`, `parentVersionId`, `hasOrders`)
+    - `src/modules/price-lists/dto/price-list-item.dto.ts` (Tạo mới: DTO dòng mặt hàng, kiểm định kiểu số, minPrice, price)
+    - `src/modules/price-lists/dto/create-price-list.dto.ts` (Tạo mới: DTO tạo bảng giá, nested validation mảng mặt hàng)
+    - `src/modules/price-lists/dto/update-price-list.dto.ts` (Tạo mới: DTO cập nhật kế thừa `PartialType(CreatePriceListDto)`)
+    - `src/modules/price-lists/dto/update-price-list-status.dto.ts` (Tạo mới: DTO chuyển trạng thái nhanh)
+    - `src/modules/price-lists/dto/get-price-lists-filter.dto.ts` (Tạo mới: DTO phân trang, tìm kiếm đa trường và lọc nhóm khách hàng, trạng thái)
+    - `src/modules/price-lists/dto/clone-price-list.dto.ts` (Tạo mới: DTO tùy chọn tên và mã khi clone version)
+    - `src/modules/price-lists/dto/index.ts` (Tạo mới: Barrel export DTOs)
+    - `src/modules/price-lists/interfaces/paginated-price-lists.interface.ts` (Tạo mới: Interface phân trang bảng giá)
+    - `src/modules/price-lists/interfaces/index.ts` (Tạo mới: Barrel export interfaces)
+    - `src/modules/price-lists/price-lists.service.ts` (Tạo mới: Nghiệp vụ In-Memory storage, validation giá sàn, chặn sửa/xóa khi có đơn hàng, nhân bản clone version, nạp 5 bảng giá mẫu)
+    - `src/modules/price-lists/price-lists.controller.ts` (Tạo mới: 7 Endpoints RESTful chuẩn hóa, phân quyền JwtAuthGuard và RolesGuard)
+    - `src/modules/price-lists/price-lists.module.ts` (Tạo mới: Đóng gói PriceListsModule)
+    - `src/app.module.ts` (Cập nhật: Đăng ký `PriceListsModule`)
+    - `test/price-lists-sn27.spec.ts` (Tạo mới: Test suite kiểm thử toàn diện 7 nhóm kịch bản nghiệp vụ, 15/15 tests passed)
+  - *Frontend (`HTBH_Frontend`):*
+    - `src/types/price-list.ts` (Tạo mới: Type definitions cho PriceList, PriceListItem, payloads và filter params)
+    - `src/services/price-lists.service.ts` (Tạo mới: Service gọi API tập trung qua Axios kèm offline fallback)
+    - `src/components/price-list-form-modal.tsx` (Tạo mới: Modal form khai báo & chỉnh sửa, realtime validation `Price >= MinPrice`, banner cảnh báo vàng khóa sửa khi có đơn hàng)
+    - `src/components/price-list-clone-modal.tsx` (Tạo mới: Modal xác nhận và tùy chỉnh thông tin phiên bản mới khi clone)
+    - `src/pages/price-lists-page.tsx` (Tạo mới: Màn hình Quản lý Bảng giá & Chiết khấu B2B hoàn chỉnh, 4 thẻ metrics, tabs nhóm khách hàng, bảng dữ liệu, badge đơn hàng, phân trang)
+    - `src/routes/index.tsx` (Cập nhật: Đăng ký route `/catalog/pricing` bảo vệ bằng RoleGuard cho `ADMIN`, `SALES_MANAGER`, `SALES_REP`)
+    - `src/utils/navigation-config.ts` (Cập nhật: Đồng bộ hiển thị menu Bảng giá & Chiết khấu cho vai trò kinh doanh)
+- **Chi tiết kỹ thuật & Nghiệp vụ:**
+  - *1. Ma trận 5 Bảng giá mẫu (Seed Data - In-Memory):*
+    - `pl-001` (`BG-RETAIL-2026`): Nhóm `RETAIL`, `ACTIVE`, `hasOrders: false` -> Sửa/Xóa tự do.
+    - `pl-002` (`BG-AGENT1-Q4-2026`): Nhóm `AGENT_LEVEL_1`, `ACTIVE`, `hasOrders: true` -> Khóa sửa/xóa, kích hoạt nút "Tạo phiên bản mới (Clone Version)".
+    - `pl-003` (`BG-AGENT2-TET-2027`): Nhóm `AGENT_LEVEL_2`, `ACTIVE`, `hasOrders: false` -> Kiểm thử validation Giá bán < Giá sàn.
+    - `pl-004` (`BG-AGENT1-Q4-2026-V2`): Nhóm `AGENT_LEVEL_1`, `DRAFT`, `version: 2`, `parentVersionId: pl-002` -> Mô phỏng sau khi Clone Version.
+    - `pl-005` (`BG-SUMMER-PROMO-2026`): Nhóm `RETAIL`, `EXPIRED` (ngày kết thúc trong quá khứ) -> Kiểm thử bộ lọc trạng thái và thời gian.
+  - *2. Ràng buộc Giá sàn Realtime (Price >= MinPrice):*
+    - Backend: Duyệt mảng `items`, nếu phát hiện bất kỳ sản phẩm nào có `price < minPrice`, ném HTTP 400 `BadRequestException` với thông báo chi tiết mã/tên sản phẩm.
+    - Frontend: Kiểm tra realtime khi gõ phím, hiển thị dòng cảnh báo màu đỏ trực tiếp dưới ô input, vô hiệu hóa (disable) nút Lưu.
+  - *3. Cơ chế Khóa dữ liệu Đơn hàng (Order Data Lock):*
+    - Khi `hasOrders === true`: Chặn trực tiếp API `PUT /api/price-lists/:id` và `DELETE /api/price-lists/:id` (ném HTTP 400).
+    - Trên giao diện: Khóa toàn bộ các ô nhập liệu, hiển thị Banner cảnh báo màu vàng giải thích tính bảo toàn lịch sử hóa đơn, cung cấp nút hành động nổi bật "Tạo phiên bản mới (Clone Version)".
+  - *4. Cơ chế Nhân bản Phiên bản mới (Clone Version):*
+    - Tăng `version + 1`, gán `parentVersionId = id_bảng_giá_gốc`.
+    - Reset `hasOrders = false`, chuyển trạng thái sang `DRAFT`.
+    - Tự động sao chép toàn bộ danh sách mặt hàng và gán ID mới, cho phép người dùng điều chỉnh giá bán tùy ý cho kỳ kinh doanh tiếp theo.
+  - *5. Danh sách Endpoints RESTful APIs Backend:*
+    - `GET /api/price-lists`: Lấy danh sách bảng giá phân trang, tìm kiếm và lọc.
+    - `GET /api/price-lists/:id`: Tra cứu chi tiết bảng giá kèm danh sách mặt hàng.
+    - `POST /api/price-lists`: Tạo mới bảng giá + validate `price >= minPrice`.
+    - `PUT /api/price-lists/:id`: Cập nhật bảng giá (Báo lỗi 400 nếu `hasOrders == true`).
+    - `PATCH /api/price-lists/:id/status`: Bật/Tắt cập nhật nhanh trạng thái.
+    - `POST /api/price-lists/:id/clone`: Nhân bản bảng giá thành phiên bản mới.
+    - `DELETE /api/price-lists/:id`: Xóa bảng giá (Báo lỗi 400 nếu `hasOrders == true`).
+- **Trạng thái & Lưu ý:**
+  - ✅ Backend: `npm run build` đạt 0 lỗi (`Found 0 errors`), test suite đạt 15/15 tests pass.
+  - ✅ Frontend: `npm run build` (`tsc -b && vite build`) đạt 100% không lỗi.
+  - 🚀 Hoàn thành trọn vẹn task SN-27 theo đúng quy chuẩn dự án.
+
+---
+
+### [Hotfix] - [SN-25 Route Restore]: Khôi phục Route `/inventory/suppliers` bị mất sau SN-27
+- **Thời gian hoàn thành:** 2026-10-04
+- **Nguyên nhân:** Khi triển khai SN-27, route `/inventory/suppliers` bị bỏ sót trong `routes/index.tsx` dẫn đến lỗi 404 khi WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN truy cập menu Nhà cung cấp.
+- **File thay đổi:**
+  - `HTBH_Frontend/src/routes/index.tsx` (Thêm Route Group `/inventory/suppliers` với RoleGuard `ADMIN`, `WAREHOUSE_KEEPER`, `WAREHOUSE_MANAGER`)
+- **Nguyên tắc phòng chống Regression:**
+  - Khi triển khai task mới, KHÔNG BAO GIỜ overwrite `routes/index.tsx` hoàn toàn - phải MERGE vào danh sách routes cũ.
+  - Sau mỗi task, kiểm tra lại tất cả menu trong `navigation-config.ts` đều có route tương ứng.
+- **Trạng thái:** ✅ Đã khắc phục.
+
