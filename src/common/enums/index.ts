@@ -8,3 +8,4 @@ export * from './customer-group.enum';
 export * from './price-list-status.enum';
 export * from './supplier-status.enum';
 
+export * from './supplier-status.enum';
