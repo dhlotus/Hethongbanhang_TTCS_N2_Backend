@@ -1,7 +1,8 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { AuditAction, AuditEntity } from '../../common/enums';
 import { UsersService } from '../users/users.service';
+import { DatabaseService } from '../../database/database.service';
 import { CreateAuditLogDto, QueryAuditLogsDto } from './dto';
 import { AuditLogEntity, AuditLogUserInfo } from './entities/audit-log.entity';
 
@@ -18,14 +19,58 @@ export interface PaginatedAuditLogsResult {
  * - Đảm bảo dữ liệu bất biến (Append-only)
  * - Tự động liên kết với thực thể Users để trả về đầy đủ thông tin người thực hiện
  * - Hỗ trợ lọc theo thời gian, người dùng, phân hệ, hành động và phân trang
+ * - Đồng bộ trực tiếp PostgreSQL table audit_logs khi có kết nối
  */
 @Injectable()
 export class AuditLogsService implements OnModuleInit {
   private auditLogs: AuditLogEntity[] = [];
 
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    @Optional() private readonly dbService?: DatabaseService,
+  ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
+    if (this.dbService?.isConnected()) {
+      try {
+        const rows = await this.dbService.query<{
+          id: string;
+          user_id: string;
+          action: AuditAction;
+          entity_name: AuditEntity;
+          entity_id: string;
+          old_values: Record<string, unknown> | null;
+          new_values: Record<string, unknown> | null;
+          ip_address: string;
+          created_at: Date;
+        }>(
+          `SELECT id, user_id, action, entity_name, entity_id, old_values, new_values, ip_address, created_at
+           FROM audit_logs
+           ORDER BY created_at DESC
+           LIMIT 200;`,
+        );
+
+        if (rows && rows.length > 0) {
+          this.auditLogs = rows.map(
+            (r) =>
+              new AuditLogEntity({
+                id: r.id,
+                user_id: r.user_id,
+                action: r.action,
+                entity_name: r.entity_name,
+                entity_id: r.entity_id,
+                old_values: r.old_values,
+                new_values: r.new_values,
+                ip_address: r.ip_address,
+                created_at: new Date(r.created_at),
+              }),
+          );
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
     if (this.auditLogs.length === 0) {
       this.seedInitialAuditLogs();
     }
@@ -219,6 +264,30 @@ export class AuditLogsService implements OnModuleInit {
 
     // Append-only: Thêm vào đầu danh sách để truy vấn mới nhất trước
     this.auditLogs.unshift(logItem);
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `INSERT INTO audit_logs (id, user_id, action, entity_name, entity_id, old_values, new_values, ip_address, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO NOTHING;`,
+          [
+            logItem.id,
+            logItem.user_id,
+            logItem.action,
+            logItem.entity_name,
+            logItem.entity_id,
+            logItem.old_values ? JSON.stringify(logItem.old_values) : null,
+            logItem.new_values ? JSON.stringify(logItem.new_values) : null,
+            logItem.ip_address,
+            logItem.created_at,
+          ],
+        );
+      } catch {
+        // Fallback an toàn không làm gián đoạn luồng nghiệp vụ
+      }
+    }
+
     return logItem;
   }
 
@@ -252,11 +321,161 @@ export class AuditLogsService implements OnModuleInit {
 
   /**
    * Truy vấn danh sách Audit Logs có hỗ trợ bộ lọc và phân trang (GET /api/audit-logs)
+   * - Khi PostgreSQL có kết nối: Chạy câu lệnh SQL trực tiếp (JOIN users & roles) với ILIKE và WHERE
+   * - Khi chạy cục bộ/fallback: Tìm kiếm toàn diện trên dữ liệu bộ nhớ bao gồm cả trường JSONB
    */
   async findAll(query: QueryAuditLogsDto): Promise<PaginatedAuditLogsResult> {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.max(1, Math.min(100, Number(query.limit || 20)));
 
+    // 1. TRUY VẤN TRỰC TIẾP TỪ CƠ SỞ DỮ LIỆU POSTGRESQL (NẾU KẾT NỐI SẴN SÀNG)
+    if (this.dbService?.isConnected()) {
+      try {
+        const whereClauses: string[] = ['1=1'];
+        const params: unknown[] = [];
+        let paramIdx = 1;
+
+        // Lọc theo khoảng thời gian
+        if (query.startDate) {
+          const start = new Date(query.startDate);
+          if (!isNaN(start.getTime())) {
+            start.setHours(0, 0, 0, 0);
+            whereClauses.push(`a.created_at >= $${paramIdx++}`);
+            params.push(start);
+          }
+        }
+
+        if (query.endDate) {
+          const end = new Date(query.endDate);
+          if (!isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            whereClauses.push(`a.created_at <= $${paramIdx++}`);
+            params.push(end);
+          }
+        }
+
+        // Lọc theo người thực hiện (userId)
+        if (query.userId && query.userId !== 'ALL') {
+          whereClauses.push(`a.user_id::text = $${paramIdx++}`);
+          params.push(query.userId);
+        }
+
+        // Lọc theo phân hệ nghiệp vụ tác động
+        const targetEntity = query.entityName || query.entity;
+        if (targetEntity && targetEntity !== 'ALL') {
+          whereClauses.push(`UPPER(a.entity_name) = UPPER($${paramIdx++})`);
+          params.push(targetEntity);
+        }
+
+        // Lọc theo loại hành động
+        if (query.action && query.action !== 'ALL') {
+          whereClauses.push(`UPPER(a.action) = UPPER($${paramIdx++})`);
+          params.push(query.action);
+        }
+
+        // Tìm kiếm chuỗi văn bản tự do trực tiếp trên cơ sở dữ liệu
+        if (query.searchUser?.trim()) {
+          const searchPattern = `%${query.searchUser.trim()}%`;
+          whereClauses.push(`(
+            u.full_name ILIKE $${paramIdx} OR
+            u.username ILIKE $${paramIdx} OR
+            u.email ILIKE $${paramIdx} OR
+            a.entity_id ILIKE $${paramIdx} OR
+            a.ip_address ILIKE $${paramIdx} OR
+            a.old_values::text ILIKE $${paramIdx} OR
+            a.new_values::text ILIKE $${paramIdx}
+          )`);
+          params.push(searchPattern);
+          paramIdx++;
+        }
+
+        const whereSql = whereClauses.join(' AND ');
+
+        // Đếm tổng số bản ghi khớp điều kiện
+        const countResult = await this.dbService.query<{ total: string }>(
+          `SELECT COUNT(*) AS total
+           FROM audit_logs a
+           LEFT JOIN users u ON a.user_id = u.id
+           WHERE ${whereSql};`,
+          params,
+        );
+        const total = parseInt(countResult[0]?.total || '0', 10);
+        const totalPages = Math.ceil(total / limit) || 1;
+        const offset = (page - 1) * limit;
+
+        // Lấy danh sách bản ghi theo trang
+        const dataRows = await this.dbService.query<{
+          id: string;
+          user_id: string;
+          action: AuditAction;
+          entity_name: AuditEntity;
+          entity_id: string;
+          old_values: Record<string, unknown> | null;
+          new_values: Record<string, unknown> | null;
+          ip_address: string;
+          summary?: string;
+          created_at: Date;
+          user_full_name?: string;
+          user_email?: string;
+          user_role?: string;
+        }>(
+          `SELECT 
+             a.id,
+             a.user_id,
+             a.action,
+             a.entity_name,
+             a.entity_id,
+             a.old_values,
+             a.new_values,
+             a.ip_address,
+             a.created_at,
+             u.full_name AS user_full_name,
+             u.email AS user_email,
+             COALESCE(r.code, 'ADMIN') AS user_role
+           FROM audit_logs a
+           LEFT JOIN users u ON a.user_id = u.id
+           LEFT JOIN roles r ON u.role_id = r.id
+           WHERE ${whereSql}
+           ORDER BY a.created_at DESC
+           LIMIT $${paramIdx++} OFFSET $${paramIdx++};`,
+          [...params, limit, offset],
+        );
+
+        const data = dataRows.map((r) => {
+          return new AuditLogEntity({
+            id: r.id,
+            user_id: r.user_id,
+            action: r.action,
+            entity_name: r.entity_name,
+            entity_id: r.entity_id,
+            old_values: r.old_values,
+            new_values: r.new_values,
+            ip_address: r.ip_address,
+            summary: r.summary,
+            created_at: new Date(r.created_at),
+            user: {
+              id: r.user_id,
+              full_name: r.user_full_name || 'Người dùng hệ thống',
+              email: r.user_email || '',
+              role: r.user_role || 'ADMIN',
+              ip_address: r.ip_address,
+            },
+          });
+        });
+
+        return {
+          data,
+          total,
+          page,
+          limit,
+          totalPages,
+        };
+      } catch {
+        // Fallback mượt mà sang in-memory filtering nếu bảng PostgreSQL chưa tạo hoặc mất kết nối
+      }
+    }
+
+    // 2. TÌM KIẾM TRÊN DỮ LIỆU BỘ NHỚ (KHI CSDL CHƯA SẴN SÀNG HOẶC FALLBACK)
     let filtered = [...this.auditLogs];
 
     // 1. Lọc theo khoảng thời gian (startDate, endDate)
@@ -296,7 +515,7 @@ export class AuditLogsService implements OnModuleInit {
       );
     }
 
-    // 5. Tìm kiếm tự do theo tên người dùng, email hoặc địa chỉ IP
+    // 5. Tìm kiếm tự do theo tên người dùng, email, mã đối tượng hoặc nội dung JSON
     if (query.searchUser?.trim()) {
       const q = query.searchUser.trim().toLowerCase();
       const matchedUserIds = new Set<string>();
@@ -318,7 +537,9 @@ export class AuditLogsService implements OnModuleInit {
           matchedUserIds.has(log.user_id) ||
           log.ip_address.toLowerCase().includes(q) ||
           log.entity_id.toLowerCase().includes(q) ||
-          (log.summary && log.summary.toLowerCase().includes(q)),
+          (log.summary && log.summary.toLowerCase().includes(q)) ||
+          JSON.stringify(log.old_values || {}).toLowerCase().includes(q) ||
+          JSON.stringify(log.new_values || {}).toLowerCase().includes(q),
       );
     }
 
