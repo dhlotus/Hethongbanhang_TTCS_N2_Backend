@@ -28,52 +28,11 @@
 
 ---
 
-## 2. 9 EPICS CỐT LÕI & PHẠM VI NGHIỆP VỤ
-
-1. **EP-01: Tài khoản, Phân quyền & Hồ sơ (F-01)**
-   - Đăng nhập & Xác thực JWT (Access Token 1h, Refresh Token Rotation 7d, chống Brute-force & Timing Attack, khóa tạm 15p).
-   - Phân quyền 7 vai trò chuẩn (RBAC) trên Server, nguyên tắc Deny by default.
-   - Quản trị tài khoản, kích hoạt, khóa/mở khóa, hồ sơ cá nhân và Audit Log.
-2. **EP-02: Danh mục Sản phẩm & Bảng giá (F-02)**
-   - Quản lý SKU, tên, danh mục cây phân cấp, đơn vị tính quy đổi (Thùng/Lốc/Chai -> Base Unit), thuộc tính sản phẩm.
-   - Quản lý đa bảng giá song song (Giá sỉ, Giá lẻ, Bảng giá đại lý), bậc chiết khấu theo số lượng, lịch sử đổi giá.
-   - **Bảo mật giá vốn (COGS) & biên lợi nhuận tuyệt đối:** Chỉ vai trò Quản lý mới được truy cập.
-3. **EP-03: Đại lý & Hạn mức công nợ (F-03)**
-   - Quản lý hồ sơ đại lý, mã số thuế, nhóm đại lý, gán Sales Rep phụ trách.
-   - Quản lý nhiều địa điểm giao hàng cho một đại lý (kèm người nhận, SĐT).
-   - Thiết lập hạn mức công nợ (tiền/ngày), tự động cảnh báo hoặc khóa tạo đơn khi quá hạn.
-4. **EP-04: Đặt hàng & Duyệt đơn (F-04 - Epic lớn nhất)**
-   - Tạo đơn hàng (Sales / Đại lý portal), tự động áp bảng giá & chiết khấu; kiểm tra tồn kho khả dụng real-time.
-   - Luồng duyệt đơn: Nháp → Chờ duyệt → Đã duyệt → Từ chối → Hủy. Tự động duyệt nếu trong hạn mức, chuyển Quản lý duyệt ngoại lệ nếu vượt hạn mức hoặc chiết khấu đặc biệt.
-   - Tiện ích đơn hàng: In PDF, sao chép đơn cũ, theo dõi lịch sử và trạng thái vòng đời đơn hàng.
-5. **EP-05: Kho & Tồn kho (F-05)**
-   - Quản lý đa kho (Multi-warehouse) & Nhà cung cấp.
-   - Nhập kho nhà cung cấp & Chuyển kho nội bộ.
-   - Tồn kho real-time 3 cột tách biệt: **Tồn thực tế** - **Tồn giữ chỗ (Reserved)** - **Tồn khả dụng (Available)**.
-   - Lập phiếu kiểm kê kho, cân bằng kho, thiết lập định mức tồn tối thiểu để tự động cảnh báo.
-6. **EP-06: Xuất kho & Giao hàng (F-06)**
-   - Quản lý Lô (Batch/Lot) & Hạn sử dụng (Expiry Date).
-   - Soạn hàng theo nguyên tắc **FEFO** (First Expired, First Out). Lập phiếu soạn hàng, xác nhận xuất kho.
-   - Phân tuyến giao hàng, gom chuyến, phân công tài xế/giao vận, ghi nhận Proof of Delivery (POD) thành công/thất bại.
-7. **EP-07: Hóa đơn, Công nợ & Thanh toán (F-07)**
-   - Phát hành hóa đơn bán hàng dựa trên số lượng thực xuất / giao thành công.
-   - Quản lý thu tiền (tiền mặt/chuyển khoản), lập phiếu thu, cấn trừ công nợ.
-   - Quản lý sổ nợ đại lý chi tiết theo tuổi nợ (**Aging Report**), tự động nhắc nợ, đối soát định kỳ.
-8. **EP-08: Trả hàng & Điều chỉnh (F-08)**
-   - Quản lý trả hàng (RMA) gắn liền với Hóa đơn gốc, nhập lại hàng tốt hoặc write-off hàng hỏng/lỗi có phê duyệt.
-   - Tự động sinh chứng từ điều chỉnh giảm công nợ tương ứng sau khi duyệt trả hàng.
-9. **EP-09: Chỉ tiêu, Dashboard & Báo cáo (F-09)**
-   - Thiết lập và quản lý chỉ tiêu doanh số (KPI) theo tháng cho nhân viên/khu vực.
-   - Dashboard quản trị real-time: Doanh số hôm nay, đơn chờ duyệt, cảnh báo tồn kho, công nợ quá hạn.
-   - Hệ thống báo cáo phân tích: Doanh số NV/Khu vực, giá trị tồn kho & quay vòng tồn, phân tích nợ xấu/tuổi nợ.
-
----
-
-## 3. BẢNG THEO DÕI TIẾN ĐỘ TỔNG THỂ (8 SPRINTS)
+## 2. BẢNG THEO DÕI TIẾN ĐỘ TỔNG THỂ (8 SPRINTS)
 
 | Sprint | Mục tiêu chính / Epics trọng tâm | Story Points | Trạng thái | Ghi chú |
 | :---: | :--- | :---: | :---: | :--- |
-| **Sprint 1** | Khởi tạo hạ tầng, Auth & RBAC (EP-01), Danh mục Sản phẩm & Bảng giá cơ sở (EP-02) | ~44 | 🚀 Đang triển khai | Auth, JWT, 7 Roles, Quản lý SKU & Bảo mật COGS |
+| **Sprint 1** | Khởi tạo hạ tầng, Auth & RBAC (EP-01), Danh mục Sản phẩm & Bảng giá cơ sở (EP-02) | ~44 | 🚀 Đang chuẩn bị | Khởi tạo khung dự án, JWT, 7 Roles |
 | **Sprint 2** | Hoàn thiện Bảng giá đa cấp (EP-02), Quản lý Đại lý & Hạn mức nợ (EP-03) | ~45 | ⏳ Chưa bắt đầu | Bậc chiết khấu, tuyến bán hàng |
 | **Sprint 3** | Multi-Warehouse, Danh mục Kho & Tồn kho 3 cột (EP-05) | ~44 | ⏳ Chưa bắt đầu | Thực tế - Giữ chỗ - Khả dụng |
 | **Sprint 4** | Đặt hàng & Auto-Pricing, Kiểm tra hạn mức & Tồn kho real-time (EP-04) | ~45 | ⏳ Chưa bắt đầu | Core Epic, ACID Transaction, Locking |
@@ -84,7 +43,7 @@
 
 ---
 
-## 4. MA TRẬN 7 VAI TRÒ HỆ THỐNG (RBAC - DENY BY DEFAULT)
+## 3. MA TRẬN 7 VAI TRÒ HỆ THỐNG (RBAC - DENY BY DEFAULT)
 
 | Mã Vai Trò | Tên Vai Trò (Tiếng Việt) | Quyền hạn & Phạm vi cốt lõi |
 | :--- | :--- | :--- |
@@ -98,21 +57,7 @@
 
 ---
 
-## 5. YÊU CẦU PHI CHỨC NĂNG BẮT BUỘC (NON-FUNCTIONAL INVARIANTS)
-
-| Tiêu chí | Quy chuẩn & Ràng buộc kỹ thuật bắt buộc |
-| :--- | :--- |
-| **1. Hiệu năng (Performance)** | - Phản hồi tìm kiếm, áp giá, thêm hàng vào đơn < 2 giây.<br>- Giao diện tạo đơn mượt mà với danh mục > 10.000 SKU. |
-| **2. Toàn vẹn dữ liệu (Data Integrity)** | - Trừ tồn kho, giữ chỗ (Reserved) và ghi nợ công nợ BẮT BUỘC trong cùng Database Transaction (ACID).<br>- **Quy tắc bất biến:** Mọi biến động tồn kho phải quy đổi chính xác về đơn vị tính nhỏ nhất (**Base Unit**). |
-| **3. Xử lý tranh chấp (Concurrency)** | - Cơ chế **Pessimistic / Optimistic Locking** khi chốt đơn và xuất kho, triệt tiêu race condition (không xuất vượt tồn thực tế). |
-| **4. Quy mô hệ thống (Scalability)** | - Tối thiểu 150 người dùng nội bộ đồng thời và 500 đại lý truy cập portal. |
-| **5. Bảo mật & Bí mật kinh doanh (Security)** | - Mật khẩu băm bằng **bcrypt**.<br>- Xác thực và phân quyền bằng JWT Token (RBAC ở tầng Server, Deny by default).<br>- **Giá vốn (COGS) & Biên lợi nhuận được bảo mật tuyệt đối**, chỉ Quản lý mới có quyền truy cập. |
-| **6. Giao diện & Trải nghiệm (UI/UX)** | - Web Responsive hỗ trợ hoàn hảo từ mobile (**từ 360px**) cho Sales đi thị trường đến PC/Laptop cho Kế toán, Thủ kho. |
-| **7. Ngôn ngữ & Múi giờ** | - Ngôn ngữ hiển thị: **100% Tiếng Việt**.<br>- Múi giờ hệ thống: **`Asia/Ho_Chi_Minh` (UTC+7)**. |
-
----
-
-## 6. QUY CHUẨN KIẾN TRÚC KỸ THUẬT
+## 4. QUY CHUẨN KIẾN TRÚC KỸ THUẬT
 
 ### A. Backend (NestJS + TypeScript)
 ```
@@ -150,7 +95,7 @@ src/
 
 ---
 
-## 7. NHẬT KÝ CHI TIẾT TỪNG TASK (TASK EXECUTION LOGS)
+## 5. NHẬT KÝ CHI TIẾT TỪNG TASK (TASK EXECUTION LOGS)
 
 <!-- 
 MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH):
@@ -295,50 +240,6 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Hoàn thành 100% yêu cầu Subtask SN-112, 13/13 test cases pass.
   - 🚀 Sẵn sàng cho các task tiếp theo của Sprint 1 (RBAC Roles Guard chi tiết theo 7 vai trò, Module Users/Quản lý tài khoản).
 
-### [Sprint 2] - [SN-138]: BE: Xây dựng API Quản lý SKU, Phân quyền Bảo mật Giá vốn & Ràng buộc Trạng thái Sản phẩm
-- **Thời gian hoàn thành:** 2026-10-02
-- **Mã Jira / US:** SN-138 (User Story: SN-20 / EP-02: Danh mục Sản phẩm & Bảng giá)
-- **Trạng thái:** ✅ Hoàn thành (62/62 test cases passed, 0 failed, 0 warning)
-- **Danh sách file thay đổi / tạo mới:**
-  - [`src/common/enums/product-status.enum.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/common/enums/product-status.enum.ts) (Tạo mới: Enum `ProductStatus` với `ACTIVE`, `INACTIVE`)
-  - [`src/common/enums/index.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/common/enums/index.ts) (Cập nhật: Export `ProductStatus`)
-  - [`src/common/interceptors/cost-price-sanitizer.interceptor.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/common/interceptors/cost-price-sanitizer.interceptor.ts) (Cập nhật: Interceptor bảo mật giá vốn, Strict TypeScript Zero `any`, hỗ trợ `toJSON()`)
-  - [`src/modules/products/entities/product.entity.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/entities/product.entity.ts) (Cập nhật: Entity 16 thuộc tính nghiệp vụ chuẩn hóa, loại bỏ barcode để đồng bộ 100% với Frontend, tính dynamic margin)
-  - [`src/modules/products/dto/create-product.dto.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/create-product.dto.ts) (Cập nhật: DTO tạo SKU với validator kiểm tra không khoảng trắng, uppercase, transform danh mục 2 cấp linh hoạt)
-  - [`src/modules/products/dto/update-product.dto.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/update-product.dto.ts) (Tạo mới: Kế thừa `PartialType(CreateProductDto)`)
-  - [`src/modules/products/dto/get-products-filter.dto.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/get-products-filter.dto.ts) (Tạo mới: DTO lọc, tìm kiếm theo SKU / Tên và phân trang)
-  - [`src/modules/products/dto/index.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/index.ts) (Cập nhật: Barrel export cho DTOs)
-  - [`src/modules/products/interfaces/paginated-products.interface.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/interfaces/paginated-products.interface.ts) (Tạo mới: Interface `PaginatedProductsResponse` đồng bộ 100% với Frontend)
-  - [`src/modules/products/interfaces/index.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/interfaces/index.ts) (Tạo mới: Export interfaces)
-  - [`src/modules/products/products.service.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/products.service.ts) (Cập nhật: 11 sản phẩm seed FMCG chuẩn, CRUD logic, tìm kiếm đa trường theo SKU/tên, check trùng SKU, ràng buộc giao dịch)
-  - [`src/modules/products/products.controller.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/products.controller.ts) (Cập nhật: 5 Endpoints RESTful, phân quyền RolesGuard, Interceptor lọc giá vốn)
-  - [`test/products-sku-management-sn138.spec.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/test/products-sku-management-sn138.spec.ts) (Cập nhật: Test suite tích hợp chuyên sâu 62 test cases bao quát toàn bộ kịch bản nghiệp vụ)
-- **Chi tiết kỹ thuật đã thực hiện:**
-  - *Entity & Schema Bảng `products`:*
-    - Bao gồm đầy đủ các trường: `id`, `sku` (unique, uppercase, không khoảng trắng), `name`, `parentCategory` (Cấp 1), `subCategory` (Cấp 2), `category` (chuẩn format `${parentCategory} / ${subCategory}`), `baseUnit`, `packagingSpec`, `price`, `costPrice`, `stockQuantity`, `status` (`ACTIVE`/`INACTIVE`), `imageUrl`, `description`, `hasTransactions`, `createdAt`, `updatedAt`.
-    - Đã loại bỏ trường `barcode` khỏi Entity, DTOs, Service và Controller để đồng bộ 100% với Frontend.
-    - Cung cấp getter và hàm `toJSON()` hỗ trợ đồng thời cả camelCase cho Frontend API và snake_case cho Database/Schema.
-  - *DTOs & Validation:*
-    - `CreateProductDto`: Ràng buộc `sku` (@Matches(/^\S+$/) không khoảng trắng, @Transform uppercase), `name`, `parentCategory`, `subCategory` (optional), `category` (tự động ghép khi cần), `baseUnit`, `price` (> 0), `costPrice` (>= 0), `status` (ACTIVE/INACTIVE), `imageUrl`, `description`.
-    - `UpdateProductDto`: Kế thừa `PartialType(CreateProductDto)`.
-    - `GetProductsFilterDto`: Hỗ trợ phân trang (`page`, `limit`), tìm kiếm tương đối (`search` cho SKU, tên sản phẩm), lọc danh mục (`parentCategory`, `subCategory`, `category`), và `status`.
-  - *Danh sách Endpoints API:*
-    - `GET /api/products`: Mọi vai trò đã đăng nhập (JwtAuthGuard). Trả về cấu trúc phân trang `{ data, total, page, limit, totalPages }`, tự động tính toán trường động `margin` và `hasTransactions`.
-    - `GET /api/products/:id`: Tra cứu chi tiết sản phẩm theo ID hoặc SKU.
-    - `POST /api/products`: Quyền `@Roles(ADMIN, SALES_MANAGER)`. Chặn trùng lặp SKU với message: `"Mã SKU đã tồn tại trên hệ thống"`, chặn SKU chứa khoảng trắng, chặn giá bán <= 0, giá vốn âm.
-    - `PATCH /api/products/:id`: Quyền `@Roles(ADMIN, SALES_MANAGER)`. Cập nhật thông tin, tự động tính lại `margin`, kiểm tra tính duy nhất khi đổi SKU.
-    - `DELETE /api/products/:id`: Quyền `@Roles(ADMIN, SALES_MANAGER)`. Ràng buộc toàn vẹn dữ liệu: Nếu sản phẩm đã phát sinh giao dịch trong đơn hàng (`order_items`) hoặc phiếu kho (`inventory_transactions`), ném `BadRequestException` với message: `"Sản phẩm đã phát sinh giao dịch kho hoặc đơn hàng. Không thể xóa, chỉ được phép chuyển trạng thái sang Ngừng kinh doanh"`. Xóa an toàn khi chưa có giao dịch.
-  - *Cơ chế Bảo mật Bảo vệ Giá Vốn (CostPriceSanitizerInterceptor):*
-    - Kiểm tra danh sách vai trò người dùng trong ExecutionContext.
-    - Chỉ `ADMIN` và `SALES_MANAGER` mới được xem `costPrice` và `margin`.
-    - Với các vai trò `SALES_REP`, `WAREHOUSE` / `WAREHOUSE_KEEPER`, `CUSTOMER`, `ACCOUNTANT`: Tự động lọc sạch đệ quy 100% các trường `costPrice`, `cost_price`, `margin`, `profitMargin`, v.v. trên luồng response, chống lộ bí mật kinh doanh ở tầng Server.
-- **Ghi chú kỹ thuật & Lưu ý cho task kế tiếp:**
-  - Biên dịch TypeScript (`tsc --noEmit`): Đạt 0 lỗi trên cả `src/` và `test/`, 100% Type-safe (Zero `any`).
-  - Toàn bộ tên file/thư mục tuân thủ nghiêm ngặt `kebab-case`.
-  - Sẵn sàng tích hợp cho các task liên quan tiếp theo:
-    - Bảng giá đa cấp và ma trận chiết khấu theo số lượng mua (EP-02 / Sprint 2).
-    - Đơn vị tính quy đổi phụ (Thùng / Lốc / Hộp sang Base Unit) phục vụ tính toán kho và auto-pricing đơn hàng.
-
 ### [Sprint 1] - [SN-144]: Xây Dựng API Upload Ảnh Đại Diện (Avatar Upload)
 - **Thời gian hoàn thành:** 2026-10-02
 - **Mã Jira / US:** SN-144 (Parent: SN-18 - Upload ảnh đại diện)
@@ -436,51 +337,3 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Build Backend (`nest build`) thành công, 0 lỗi biên dịch.
   - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
   - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.
-
-### [Sprint 2] - [SN-25]: Quản Lý Nhà Cung Cấp & Ràng Buộc Phiếu Nhập Kho (Supplier Management)
-- **Thời gian hoàn thành:** 2026-10-04
-- **Mã Jira / US:** SN-25 (EP-02: Danh mục Sản phẩm & Bảng giá, EP-05: Kho & Tồn kho)
-- **Trạng thái:** ✅ Hoàn thành 100% (Backend: 0 errors `nest build`; Frontend: 0 errors `tsc -b && vite build`)
-- **Danh sách file thay đổi / tạo mới:**
-  - *Backend (`HTBH_Backend`):*
-    - `src/common/enums/supplier-status.enum.ts` (Tạo mới: Enum `SupplierStatus` với `ACTIVE`, `INACTIVE`)
-    - `src/common/enums/index.ts` (Cập nhật: Export `SupplierStatus`)
-    - `src/modules/suppliers/entities/supplier.entity.ts` (Tạo mới: Entity Supplier, hỗ trợ camelCase và snake_case với `toJSON()`, `hasReceipts`)
-    - `src/modules/suppliers/dto/create-supplier.dto.ts` (Tạo mới: DTO tạo NCC với validation, auto uppercase code, không khoảng trắng)
-    - `src/modules/suppliers/dto/update-supplier.dto.ts` (Tạo mới: DTO cập nhật `PartialType(CreateSupplierDto)`)
-    - `src/modules/suppliers/dto/update-supplier-status.dto.ts` (Tạo mới: DTO chuyển trạng thái)
-    - `src/modules/suppliers/dto/get-suppliers-filter.dto.ts` (Tạo mới: DTO phân trang, tìm kiếm đa trường và lọc trạng thái)
-    - `src/modules/suppliers/dto/index.ts` (Tạo mới: Barrel export DTOs)
-    - `src/modules/suppliers/interfaces/paginated-suppliers.interface.ts` (Tạo mới: Interface `PaginatedSuppliersResponse`)
-    - `src/modules/suppliers/interfaces/index.ts` (Tạo mới: Barrel export interfaces)
-    - `src/modules/suppliers/suppliers.service.ts` (Tạo mới: Nghiệp vụ CRUD, dữ liệu seed tương thích DB, kiểm tra trùng mã NCC, kiểm tra ràng buộc phiếu nhập kho)
-    - `src/modules/suppliers/suppliers.controller.ts` (Tạo mới: 6 Endpoints RESTful chuẩn hóa, phân quyền JwtAuthGuard và RolesGuard)
-    - `src/modules/suppliers/suppliers.module.ts` (Tạo mới: Đóng gói module Suppliers)
-    - `src/app.module.ts` (Cập nhật: Đăng ký `SuppliersModule`)
-    - `test/suppliers-sn25.spec.ts` (Tạo mới: Test suite kiểm thử toàn diện CRUD và ràng buộc phiếu nhập kho)
-  - *Frontend (`HTBH_Frontend`):*
-    - `src/types/supplier.ts` (Tạo mới: Định nghĩa kiểu dữ liệu `Supplier`, `SupplierQueryParams`, `CreateSupplierPayload`, `UpdateSupplierPayload`)
-    - `src/services/suppliers.service.ts` (Tạo mới: API Client Axios gọi RESTful API của Backend, kèm fallback offline)
-    - `src/components/supplier-form-modal.tsx` (Tạo mới: Modal form thêm mới và chỉnh sửa nhà cung cấp, client-side validation, gợi ý điều khoản thanh toán)
-    - `src/pages/suppliers-page.tsx` (Tạo mới: Giao diện Quản lý Nhà cung cấp hoàn chỉnh, bảng dữ liệu, badge trạng thái, toggle active/inactive, modal cảnh báo chặn xóa khi có phiếu nhập)
-    - `src/routes/index.tsx` (Cập nhật: Đăng ký route `/inventory/suppliers` được bảo vệ bởi RoleGuard)
-    - `src/utils/navigation-config.ts` (Cập nhật: Tích hợp menu Nhà cung cấp vào Sidebar cho WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN)
-- **Chi tiết kỹ thuật:**
-  - *Schema & Data Structure:*
-    - Entity `Supplier` với các trường: `id`, `code` (unique, uppercase), `name`, `taxCode`/`tax_code`, `contactName`/`contact_name`, `phone`, `email`, `address`, `paymentTerms`/`payment_terms`, `status` (`ACTIVE`/`INACTIVE`), `notes`, `hasReceipts`, `createdAt`, `updatedAt`.
-  - *Danh sách Endpoints API Backend:*
-    - `GET /api/suppliers`: Lấy danh sách NCC phân trang, tìm kiếm đa trường (Mã, Tên, MST, SĐT, Email), lọc trạng thái.
-    - `GET /api/suppliers/:id`: Chi tiết NCC theo ID hoặc Mã code.
-    - `POST /api/suppliers`: Thêm mới NCC, chặn trùng mã code, tự động sinh mã `NCC-xxx` nếu để trống.
-    - `PUT /api/suppliers/:id`: Cập nhật thông tin NCC, kiểm tra tính duy nhất khi đổi mã code.
-    - `PATCH /api/suppliers/:id/status`: Toggle hoặc gán trạng thái `ACTIVE`/`INACTIVE`.
-    - `DELETE /api/suppliers/:id`: Xóa NCC có kiểm tra ràng buộc phiếu nhập kho.
-  - *Cơ chế Xử lý Ràng buộc Xóa (Import Receipt Constraint):*
-    - Kiểm tra xem Supplier đã từng phát sinh trong bất kỳ Phiếu nhập kho (`goods_receipts` / `suppliersWithReceipts`) hay chưa.
-    - Nếu ĐÃ CÓ phiếu nhập: Ném HTTP 400 `BadRequestException` với thông báo rõ ràng: `"Nhà cung cấp đã phát sinh phiếu nhập kho. Không thể xóa, vui lòng chuyển trạng thái sang Ngừng hoạt động (Inactive)."`.
-    - Trên giao diện: Hiển thị Dialog cảnh báo màu cam với nội dung giải thích bảo toàn thẻ kho, cung cấp nút chuyển nhanh sang Inactive thay vì xóa.
-    - Nếu CHƯA CÓ phiếu nhập: Cho phép xóa an toàn và cập nhật danh sách real-time.
-- **Trạng thái & Lưu ý:**
-  - ✅ Biên dịch Backend `npm run build`: 0 lỗi TypeScript (`Found 0 errors`).
-  - ✅ Biên dịch Frontend `npm run build`: 0 lỗi Vite/React.
-  - 🚀 Hoàn thành trọn vẹn task SN-25 theo đúng quy chuẩn dự án.
