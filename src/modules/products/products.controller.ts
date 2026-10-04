@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,9 +11,14 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
+
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -26,7 +32,7 @@ import { PaginatedProductsResponse } from './interfaces/paginated-products.inter
 import { ProductsService } from './products.service';
 
 /**
- * Controller Quản lý Sản phẩm / SKU Hàng hóa (SN-138 & SN-20 / EP-02):
+ * Controller Quản lý Sản phẩm / SKU Hàng hóa (SN-138 & SN-20 / EP-02, SN-24):
  * - Áp dụng JwtAuthGuard & RolesGuard để kiểm soát truy cập phân quyền
  * - Áp dụng CostPriceSanitizerInterceptor để bảo mật dữ liệu nhạy cảm:
  *   + ADMIN và SALES_MANAGER: nhìn thấy đầy đủ costPrice và margin
@@ -49,6 +55,44 @@ export class ProductsController {
     @Query() filterDto: GetProductsFilterDto,
   ): Promise<PaginatedProductsResponse> {
     return this.productsService.findAllPaginated(filterDto);
+  }
+
+  /**
+   * Tải tệp mẫu Excel để nhập sản phẩm hàng loạt (SN-24)
+   * GET /products/import-template
+   */
+  @Get('import-template')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async downloadTemplate(@Res() res: Response) {
+    return this.productsService.generateImportTemplate(res);
+  }
+
+  /**
+   * Xem trước tệp Excel tải lên (SN-24)
+   * POST /products/import/preview
+   */
+  @Post('import/preview')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @UseInterceptors(FileInterceptor('file'))
+  async previewImport(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng tải lên tệp Excel');
+    }
+    return this.productsService.previewImport(file);
+  }
+
+  /**
+   * Xác nhận nhập dữ liệu từ bản xem trước (SN-24)
+   * POST /products/import/confirm
+   */
+  @Post('import/confirm')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async confirmImport(@Body('items') items: any[]) {
+    if (!items || !Array.isArray(items)) {
+      throw new BadRequestException('Dữ liệu không hợp lệ');
+    }
+    return this.productsService.confirmImport(items);
   }
 
   /**

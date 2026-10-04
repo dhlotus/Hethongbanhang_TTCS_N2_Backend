@@ -28,52 +28,11 @@
 
 ---
 
-## 2. 9 EPICS CỐT LÕI & PHẠM VI NGHIỆP VỤ
-
-1. **EP-01: Tài khoản, Phân quyền & Hồ sơ (F-01)**
-   - Đăng nhập & Xác thực JWT (Access Token 1h, Refresh Token Rotation 7d, chống Brute-force & Timing Attack, khóa tạm 15p).
-   - Phân quyền 7 vai trò chuẩn (RBAC) trên Server, nguyên tắc Deny by default.
-   - Quản trị tài khoản, kích hoạt, khóa/mở khóa, hồ sơ cá nhân và Audit Log.
-2. **EP-02: Danh mục Sản phẩm & Bảng giá (F-02)**
-   - Quản lý SKU, tên, danh mục cây phân cấp, đơn vị tính quy đổi (Thùng/Lốc/Chai -> Base Unit), thuộc tính sản phẩm.
-   - Quản lý đa bảng giá song song (Giá sỉ, Giá lẻ, Bảng giá đại lý), bậc chiết khấu theo số lượng, lịch sử đổi giá.
-   - **Bảo mật giá vốn (COGS) & biên lợi nhuận tuyệt đối:** Chỉ vai trò Quản lý mới được truy cập.
-3. **EP-03: Đại lý & Hạn mức công nợ (F-03)**
-   - Quản lý hồ sơ đại lý, mã số thuế, nhóm đại lý, gán Sales Rep phụ trách.
-   - Quản lý nhiều địa điểm giao hàng cho một đại lý (kèm người nhận, SĐT).
-   - Thiết lập hạn mức công nợ (tiền/ngày), tự động cảnh báo hoặc khóa tạo đơn khi quá hạn.
-4. **EP-04: Đặt hàng & Duyệt đơn (F-04 - Epic lớn nhất)**
-   - Tạo đơn hàng (Sales / Đại lý portal), tự động áp bảng giá & chiết khấu; kiểm tra tồn kho khả dụng real-time.
-   - Luồng duyệt đơn: Nháp → Chờ duyệt → Đã duyệt → Từ chối → Hủy. Tự động duyệt nếu trong hạn mức, chuyển Quản lý duyệt ngoại lệ nếu vượt hạn mức hoặc chiết khấu đặc biệt.
-   - Tiện ích đơn hàng: In PDF, sao chép đơn cũ, theo dõi lịch sử và trạng thái vòng đời đơn hàng.
-5. **EP-05: Kho & Tồn kho (F-05)**
-   - Quản lý đa kho (Multi-warehouse) & Nhà cung cấp.
-   - Nhập kho nhà cung cấp & Chuyển kho nội bộ.
-   - Tồn kho real-time 3 cột tách biệt: **Tồn thực tế** - **Tồn giữ chỗ (Reserved)** - **Tồn khả dụng (Available)**.
-   - Lập phiếu kiểm kê kho, cân bằng kho, thiết lập định mức tồn tối thiểu để tự động cảnh báo.
-6. **EP-06: Xuất kho & Giao hàng (F-06)**
-   - Quản lý Lô (Batch/Lot) & Hạn sử dụng (Expiry Date).
-   - Soạn hàng theo nguyên tắc **FEFO** (First Expired, First Out). Lập phiếu soạn hàng, xác nhận xuất kho.
-   - Phân tuyến giao hàng, gom chuyến, phân công tài xế/giao vận, ghi nhận Proof of Delivery (POD) thành công/thất bại.
-7. **EP-07: Hóa đơn, Công nợ & Thanh toán (F-07)**
-   - Phát hành hóa đơn bán hàng dựa trên số lượng thực xuất / giao thành công.
-   - Quản lý thu tiền (tiền mặt/chuyển khoản), lập phiếu thu, cấn trừ công nợ.
-   - Quản lý sổ nợ đại lý chi tiết theo tuổi nợ (**Aging Report**), tự động nhắc nợ, đối soát định kỳ.
-8. **EP-08: Trả hàng & Điều chỉnh (F-08)**
-   - Quản lý trả hàng (RMA) gắn liền với Hóa đơn gốc, nhập lại hàng tốt hoặc write-off hàng hỏng/lỗi có phê duyệt.
-   - Tự động sinh chứng từ điều chỉnh giảm công nợ tương ứng sau khi duyệt trả hàng.
-9. **EP-09: Chỉ tiêu, Dashboard & Báo cáo (F-09)**
-   - Thiết lập và quản lý chỉ tiêu doanh số (KPI) theo tháng cho nhân viên/khu vực.
-   - Dashboard quản trị real-time: Doanh số hôm nay, đơn chờ duyệt, cảnh báo tồn kho, công nợ quá hạn.
-   - Hệ thống báo cáo phân tích: Doanh số NV/Khu vực, giá trị tồn kho & quay vòng tồn, phân tích nợ xấu/tuổi nợ.
-
----
-
-## 3. BẢNG THEO DÕI TIẾN ĐỘ TỔNG THỂ (8 SPRINTS)
+## 2. BẢNG THEO DÕI TIẾN ĐỘ TỔNG THỂ (8 SPRINTS)
 
 | Sprint | Mục tiêu chính / Epics trọng tâm | Story Points | Trạng thái | Ghi chú |
 | :---: | :--- | :---: | :---: | :--- |
-| **Sprint 1** | Khởi tạo hạ tầng, Auth & RBAC (EP-01), Danh mục Sản phẩm & Bảng giá cơ sở (EP-02) | ~44 | 🚀 Đang triển khai | Auth, JWT, 7 Roles, Quản lý SKU & Bảo mật COGS |
+| **Sprint 1** | Khởi tạo hạ tầng, Auth & RBAC (EP-01), Danh mục Sản phẩm & Bảng giá cơ sở (EP-02) | ~44 | 🚀 Đang chuẩn bị | Khởi tạo khung dự án, JWT, 7 Roles |
 | **Sprint 2** | Hoàn thiện Bảng giá đa cấp (EP-02), Quản lý Đại lý & Hạn mức nợ (EP-03) | ~45 | ⏳ Chưa bắt đầu | Bậc chiết khấu, tuyến bán hàng |
 | **Sprint 3** | Multi-Warehouse, Danh mục Kho & Tồn kho 3 cột (EP-05) | ~44 | ⏳ Chưa bắt đầu | Thực tế - Giữ chỗ - Khả dụng |
 | **Sprint 4** | Đặt hàng & Auto-Pricing, Kiểm tra hạn mức & Tồn kho real-time (EP-04) | ~45 | ⏳ Chưa bắt đầu | Core Epic, ACID Transaction, Locking |
@@ -84,7 +43,7 @@
 
 ---
 
-## 4. MA TRẬN 7 VAI TRÒ HỆ THỐNG (RBAC - DENY BY DEFAULT)
+## 3. MA TRẬN 7 VAI TRÒ HỆ THỐNG (RBAC - DENY BY DEFAULT)
 
 | Mã Vai Trò | Tên Vai Trò (Tiếng Việt) | Quyền hạn & Phạm vi cốt lõi |
 | :--- | :--- | :--- |
@@ -98,21 +57,7 @@
 
 ---
 
-## 5. YÊU CẦU PHI CHỨC NĂNG BẮT BUỘC (NON-FUNCTIONAL INVARIANTS)
-
-| Tiêu chí | Quy chuẩn & Ràng buộc kỹ thuật bắt buộc |
-| :--- | :--- |
-| **1. Hiệu năng (Performance)** | - Phản hồi tìm kiếm, áp giá, thêm hàng vào đơn < 2 giây.<br>- Giao diện tạo đơn mượt mà với danh mục > 10.000 SKU. |
-| **2. Toàn vẹn dữ liệu (Data Integrity)** | - Trừ tồn kho, giữ chỗ (Reserved) và ghi nợ công nợ BẮT BUỘC trong cùng Database Transaction (ACID).<br>- **Quy tắc bất biến:** Mọi biến động tồn kho phải quy đổi chính xác về đơn vị tính nhỏ nhất (**Base Unit**). |
-| **3. Xử lý tranh chấp (Concurrency)** | - Cơ chế **Pessimistic / Optimistic Locking** khi chốt đơn và xuất kho, triệt tiêu race condition (không xuất vượt tồn thực tế). |
-| **4. Quy mô hệ thống (Scalability)** | - Tối thiểu 150 người dùng nội bộ đồng thời và 500 đại lý truy cập portal. |
-| **5. Bảo mật & Bí mật kinh doanh (Security)** | - Mật khẩu băm bằng **bcrypt**.<br>- Xác thực và phân quyền bằng JWT Token (RBAC ở tầng Server, Deny by default).<br>- **Giá vốn (COGS) & Biên lợi nhuận được bảo mật tuyệt đối**, chỉ Quản lý mới có quyền truy cập. |
-| **6. Giao diện & Trải nghiệm (UI/UX)** | - Web Responsive hỗ trợ hoàn hảo từ mobile (**từ 360px**) cho Sales đi thị trường đến PC/Laptop cho Kế toán, Thủ kho. |
-| **7. Ngôn ngữ & Múi giờ** | - Ngôn ngữ hiển thị: **100% Tiếng Việt**.<br>- Múi giờ hệ thống: **`Asia/Ho_Chi_Minh` (UTC+7)**. |
-
----
-
-## 6. QUY CHUẨN KIẾN TRÚC KỸ THUẬT
+## 4. QUY CHUẨN KIẾN TRÚC KỸ THUẬT
 
 ### A. Backend (NestJS + TypeScript)
 ```
@@ -150,7 +95,7 @@ src/
 
 ---
 
-## 7. NHẬT KÝ CHI TIẾT TỪNG TASK (TASK EXECUTION LOGS)
+## 5. NHẬT KÝ CHI TIẾT TỪNG TASK (TASK EXECUTION LOGS)
 
 <!-- 
 MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH):
@@ -295,50 +240,6 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Hoàn thành 100% yêu cầu Subtask SN-112, 13/13 test cases pass.
   - 🚀 Sẵn sàng cho các task tiếp theo của Sprint 1 (RBAC Roles Guard chi tiết theo 7 vai trò, Module Users/Quản lý tài khoản).
 
-### [Sprint 2] - [SN-138]: BE: Xây dựng API Quản lý SKU, Phân quyền Bảo mật Giá vốn & Ràng buộc Trạng thái Sản phẩm
-- **Thời gian hoàn thành:** 2026-10-02
-- **Mã Jira / US:** SN-138 (User Story: SN-20 / EP-02: Danh mục Sản phẩm & Bảng giá)
-- **Trạng thái:** ✅ Hoàn thành (62/62 test cases passed, 0 failed, 0 warning)
-- **Danh sách file thay đổi / tạo mới:**
-  - [`src/common/enums/product-status.enum.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/common/enums/product-status.enum.ts) (Tạo mới: Enum `ProductStatus` với `ACTIVE`, `INACTIVE`)
-  - [`src/common/enums/index.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/common/enums/index.ts) (Cập nhật: Export `ProductStatus`)
-  - [`src/common/interceptors/cost-price-sanitizer.interceptor.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/common/interceptors/cost-price-sanitizer.interceptor.ts) (Cập nhật: Interceptor bảo mật giá vốn, Strict TypeScript Zero `any`, hỗ trợ `toJSON()`)
-  - [`src/modules/products/entities/product.entity.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/entities/product.entity.ts) (Cập nhật: Entity 16 thuộc tính nghiệp vụ chuẩn hóa, loại bỏ barcode để đồng bộ 100% với Frontend, tính dynamic margin)
-  - [`src/modules/products/dto/create-product.dto.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/create-product.dto.ts) (Cập nhật: DTO tạo SKU với validator kiểm tra không khoảng trắng, uppercase, transform danh mục 2 cấp linh hoạt)
-  - [`src/modules/products/dto/update-product.dto.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/update-product.dto.ts) (Tạo mới: Kế thừa `PartialType(CreateProductDto)`)
-  - [`src/modules/products/dto/get-products-filter.dto.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/get-products-filter.dto.ts) (Tạo mới: DTO lọc, tìm kiếm theo SKU / Tên và phân trang)
-  - [`src/modules/products/dto/index.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/dto/index.ts) (Cập nhật: Barrel export cho DTOs)
-  - [`src/modules/products/interfaces/paginated-products.interface.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/interfaces/paginated-products.interface.ts) (Tạo mới: Interface `PaginatedProductsResponse` đồng bộ 100% với Frontend)
-  - [`src/modules/products/interfaces/index.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/interfaces/index.ts) (Tạo mới: Export interfaces)
-  - [`src/modules/products/products.service.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/products.service.ts) (Cập nhật: 11 sản phẩm seed FMCG chuẩn, CRUD logic, tìm kiếm đa trường theo SKU/tên, check trùng SKU, ràng buộc giao dịch)
-  - [`src/modules/products/products.controller.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/products.controller.ts) (Cập nhật: 5 Endpoints RESTful, phân quyền RolesGuard, Interceptor lọc giá vốn)
-  - [`test/products-sku-management-sn138.spec.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/test/products-sku-management-sn138.spec.ts) (Cập nhật: Test suite tích hợp chuyên sâu 62 test cases bao quát toàn bộ kịch bản nghiệp vụ)
-- **Chi tiết kỹ thuật đã thực hiện:**
-  - *Entity & Schema Bảng `products`:*
-    - Bao gồm đầy đủ các trường: `id`, `sku` (unique, uppercase, không khoảng trắng), `name`, `parentCategory` (Cấp 1), `subCategory` (Cấp 2), `category` (chuẩn format `${parentCategory} / ${subCategory}`), `baseUnit`, `packagingSpec`, `price`, `costPrice`, `stockQuantity`, `status` (`ACTIVE`/`INACTIVE`), `imageUrl`, `description`, `hasTransactions`, `createdAt`, `updatedAt`.
-    - Đã loại bỏ trường `barcode` khỏi Entity, DTOs, Service và Controller để đồng bộ 100% với Frontend.
-    - Cung cấp getter và hàm `toJSON()` hỗ trợ đồng thời cả camelCase cho Frontend API và snake_case cho Database/Schema.
-  - *DTOs & Validation:*
-    - `CreateProductDto`: Ràng buộc `sku` (@Matches(/^\S+$/) không khoảng trắng, @Transform uppercase), `name`, `parentCategory`, `subCategory` (optional), `category` (tự động ghép khi cần), `baseUnit`, `price` (> 0), `costPrice` (>= 0), `status` (ACTIVE/INACTIVE), `imageUrl`, `description`.
-    - `UpdateProductDto`: Kế thừa `PartialType(CreateProductDto)`.
-    - `GetProductsFilterDto`: Hỗ trợ phân trang (`page`, `limit`), tìm kiếm tương đối (`search` cho SKU, tên sản phẩm), lọc danh mục (`parentCategory`, `subCategory`, `category`), và `status`.
-  - *Danh sách Endpoints API:*
-    - `GET /api/products`: Mọi vai trò đã đăng nhập (JwtAuthGuard). Trả về cấu trúc phân trang `{ data, total, page, limit, totalPages }`, tự động tính toán trường động `margin` và `hasTransactions`.
-    - `GET /api/products/:id`: Tra cứu chi tiết sản phẩm theo ID hoặc SKU.
-    - `POST /api/products`: Quyền `@Roles(ADMIN, SALES_MANAGER)`. Chặn trùng lặp SKU với message: `"Mã SKU đã tồn tại trên hệ thống"`, chặn SKU chứa khoảng trắng, chặn giá bán <= 0, giá vốn âm.
-    - `PATCH /api/products/:id`: Quyền `@Roles(ADMIN, SALES_MANAGER)`. Cập nhật thông tin, tự động tính lại `margin`, kiểm tra tính duy nhất khi đổi SKU.
-    - `DELETE /api/products/:id`: Quyền `@Roles(ADMIN, SALES_MANAGER)`. Ràng buộc toàn vẹn dữ liệu: Nếu sản phẩm đã phát sinh giao dịch trong đơn hàng (`order_items`) hoặc phiếu kho (`inventory_transactions`), ném `BadRequestException` với message: `"Sản phẩm đã phát sinh giao dịch kho hoặc đơn hàng. Không thể xóa, chỉ được phép chuyển trạng thái sang Ngừng kinh doanh"`. Xóa an toàn khi chưa có giao dịch.
-  - *Cơ chế Bảo mật Bảo vệ Giá Vốn (CostPriceSanitizerInterceptor):*
-    - Kiểm tra danh sách vai trò người dùng trong ExecutionContext.
-    - Chỉ `ADMIN` và `SALES_MANAGER` mới được xem `costPrice` và `margin`.
-    - Với các vai trò `SALES_REP`, `WAREHOUSE` / `WAREHOUSE_KEEPER`, `CUSTOMER`, `ACCOUNTANT`: Tự động lọc sạch đệ quy 100% các trường `costPrice`, `cost_price`, `margin`, `profitMargin`, v.v. trên luồng response, chống lộ bí mật kinh doanh ở tầng Server.
-- **Ghi chú kỹ thuật & Lưu ý cho task kế tiếp:**
-  - Biên dịch TypeScript (`tsc --noEmit`): Đạt 0 lỗi trên cả `src/` và `test/`, 100% Type-safe (Zero `any`).
-  - Toàn bộ tên file/thư mục tuân thủ nghiêm ngặt `kebab-case`.
-  - Sẵn sàng tích hợp cho các task liên quan tiếp theo:
-    - Bảng giá đa cấp và ma trận chiết khấu theo số lượng mua (EP-02 / Sprint 2).
-    - Đơn vị tính quy đổi phụ (Thùng / Lốc / Hộp sang Base Unit) phục vụ tính toán kho và auto-pricing đơn hàng.
-
 ### [Sprint 1] - [SN-144]: Xây Dựng API Upload Ảnh Đại Diện (Avatar Upload)
 - **Thời gian hoàn thành:** 2026-10-02
 - **Mã Jira / US:** SN-144 (Parent: SN-18 - Upload ảnh đại diện)
@@ -436,3 +337,204 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Build Backend (`nest build`) thành công, 0 lỗi biên dịch.
   - ✅ Avatar đã upload sẽ tự động khôi phục khi restart server dev.
   - ⚠️ **Lưu ý quan trọng:** Backend hiện dùng In-memory Map, nghĩa là dữ liệu user khác (password đã đổi, status, v.v.) vẫn bị reset về seed mặc định khi restart. Cần migrate sang PostgreSQL + TypeORM trong các sprint tiếp theo để đảm bảo persistence hoàn toàn.
+
+---
+
+### [Sprint 1] - [SN-147]: BE: Xây dựng API xử lý tệp Excel, validate dữ liệu từng dòng, tạo tài khoản hàng loạt và trả về báo cáo tổng kết.
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / Task:** `SN-147`
+- **Dự án / Space:** `SOFTWARE N3`
+- **Parent Epic / US:** `SN-16` (Import Excel)
+- **Tiêu đề công việc:** BE: Xây dựng API xử lý tệp Excel, validate dữ liệu từng dòng, tạo tài khoản hàng loạt và trả về báo cáo tổng kết.
+- **Trạng thái:** ✅ Hoàn thành 100% (Biên dịch TypeScript `tsc --noEmit` 0 lỗi, 22/22 Test Cases Jest PASS, tuân thủ 100% `CODE_CONVENTION.docx`).
+- **Mục tiêu:** Xây dựng API nhận file Excel (.xlsx / .xls), trích xuất dữ liệu vào bộ nhớ đệm (memory buffer), thẩm định (validate) từng dòng độc lập bằng `class-validator`, tạo tài khoản nhân sự hàng loạt, hash mật khẩu bảo mật, phân bổ kho theo quy chuẩn RBAC, cách ly lỗi (lỗi một dòng không làm gián đoạn toàn bộ batch) và xuất báo cáo tổng kết chi tiết từng dòng (thành công/thất bại kèm nguyên nhân).
+
+#### 📁 1. Danh sách file tạo mới / thay đổi:
+
+| File | Hành động | Mô tả chi tiết |
+|:---|:---:|:---|
+| `src/modules/users/constants/excel-import.constant.ts` | **Tạo mới** | Hằng số cấu hình import: Dung lượng tối đa (`5MB`), số dòng tối đa (`500`), MIME types (`.xlsx`, `.xls`), header bắt buộc, thông báo lỗi chuẩn hóa |
+| `src/modules/users/dto/excel-user-row.dto.ts` | **Tạo mới** | DTO thẩm định dữ liệu từng dòng qua `class-validator`: `@IsNotEmpty`, `@IsEmail`, `@Length`, `@Matches` |
+| `src/modules/users/dto/import-users-report.dto.ts` | **Tạo mới** | DTO phản hồi báo cáo kết quả tổng kết (`ImportUsersReportDto`, `ImportRowResult`, từ điển ánh xạ alias tiếng Việt `ROLE_ALIAS_MAP`) |
+| `src/modules/users/excel-import.service.ts` | **Tạo mới** | Service nghiệp vụ lõi: Đọc buffer Excel (`xlsx`), validate độc lập từng dòng, ủy quyền tạo user cho `UsersService.create()`, cách ly lỗi, ghi log và tổng hợp báo cáo |
+| `src/modules/users/dto/index.ts` | **Cập nhật** | Barrel export xuất bản `ExcelUserRowDto`, `ImportUsersReportDto`, `ImportRowResult` |
+| `src/modules/users/users.controller.ts` | **Cập nhật** | Thêm endpoint `POST /api/users/import-excel`, cấu hình `FileInterceptor('file')`, phân quyền `@Roles(UserRole.ADMIN)` |
+| `src/modules/users/users.module.ts` | **Cập nhật** | Đăng ký `ExcelImportService` vào `providers` và `exports` của module |
+| `test/excel-import-sn147.spec.ts` | **Tạo mới** | Bộ kiểm thử tích hợp Jest với **22 test cases** bao phủ 7 kịch bản từ validation file đến batch processing |
+| `package.json` | **Cập nhật** | Thêm devDependencies Jest (`jest`, `ts-jest`, `@types/jest`), cấu hình script `npm test`, `npm run test:watch`, `npm run test:cov` |
+| `log.md` | **Cập nhật** | Ghi nhật ký tiến độ chi tiết, rõ ràng cho task SN-147 |
+
+---
+
+#### 🔌 2. Đặc tả Endpoint API:
+
+- **Method & URL:** `POST /api/users/import-excel`
+- **Xác thực & Phân quyền:** Bearer Token JWT, chỉ cấp quyền cho vai trò Quản trị viên (`@Roles(UserRole.ADMIN)`).
+- **Content-Type:** `multipart/form-data`
+- **Form-data Field:** `file` (File Excel có đuôi `.xlsx` hoặc `.xls`, dung lượng tối đa 5MB, tối đa 500 dòng).
+
+**Response Thành Công (HTTP 200 OK):**
+```json
+{
+  "statusCode": 200,
+  "message": "Import hoàn tất: Tạo thành công 47 tài khoản, 3 dòng thất bại.",
+  "data": {
+    "totalRows": 50,
+    "successCount": 47,
+    "failedCount": 3,
+    "results": [
+      {
+        "row": 2,
+        "status": "SUCCESS",
+        "createdUser": {
+          "id": "usr_9b1deb4d",
+          "username": "nguyenvana",
+          "email": "nvana@loha.vn",
+          "fullName": "Nguyễn Văn A",
+          "role": "SALES_REP",
+          "status": "ACTIVE",
+          "phone": "0901234567",
+          "assignedWarehouse": null,
+          "createdAt": "2026-10-03T12:00:00.000Z"
+        },
+        "temporaryPassword": "Loha@123456"
+      },
+      {
+        "row": 5,
+        "status": "FAILED",
+        "errors": [
+          "Email \"khong-hop-le\" không đúng định dạng email."
+        ]
+      }
+    ],
+    "createdUsers": [ /* Danh sách SafeUser */ ],
+    "summary": "Import hoàn tất: Tạo thành công 47 tài khoản, 3 dòng thất bại."
+  }
+}
+```
+
+---
+
+#### 📋 3. Quy chuẩn Cấu trúc File Excel mẫu:
+
+| Cột (Header) | Bắt buộc | Kiểu dữ liệu | Ràng buộc / Mô tả | Ví dụ |
+|:---|:---:|:---|:---|:---|
+| `fullName` | **Có** | Chuỗi (2-100 ký tự) | Họ và tên đầy đủ | `Nguyễn Văn A` |
+| `username` | **Có** | Chuỗi (3-30 ký tự) | Chỉ gồm chữ thường, số, dấu gạch dưới | `nguyenvana` |
+| `email` | **Có** | Chuỗi (Email hợp lệ) | Định dạng RFC 5322, duy nhất toàn hệ thống | `nvana@loha.vn` |
+| `role` | **Có** | Chuỗi (Enum / Alias) | 7 vai trò hệ thống hoặc alias tiếng Việt | `SALES_REP` hoặc `thủ kho` |
+| `phone` | Không | Chuỗi (Số ĐT VN) | Bắt đầu bằng 0 hoặc +84, 10-11 chữ số | `0901234567` |
+| `password` | Không | Chuỗi (≥6 ký tự) | Nếu bỏ trống: Tự sinh mật khẩu tạm ngẫu nhiên | `Loha@Secure123` |
+| `assignedWarehouse` | Có điều kiện | Chuỗi | **Bắt buộc** nếu là `WAREHOUSE_KEEPER` / `WAREHOUSE_MANAGER` | `Kho Tổng Miền Nam` |
+
+- **Bản đồ ánh xạ Alias Vai trò Tiếng Việt (`ROLE_ALIAS_MAP`):**
+  - `"thủ kho"`, `"thu kho"`, `"thukho"` ➔ `WAREHOUSE_KEEPER`
+  - `"quản lý kho"`, `"quan ly kho"`, `"ql kho"` ➔ `WAREHOUSE_MANAGER`
+  - `"kế toán"`, `"ke toan"`, `"ketoan"` ➔ `ACCOUNTANT`
+  - `"nhân viên kinh doanh"`, `"kinh doanh"`, `"sales"` ➔ `SALES_REP`
+  - `"quản lý kinh doanh"`, `"trưởng phòng kinh doanh"` ➔ `SALES_MANAGER`
+  - `"quản trị viên"`, `"admin"`, `"quantrivien"` ➔ `ADMIN`
+  - `"khách hàng"`, `"đại lý"`, `"customer"` ➔ `CUSTOMER`
+
+---
+
+#### ⚙️ 4. Chi tiết Kiến trúc & Luồng xử lý Kỹ thuật:
+
+1. **Giai đoạn 1 – Thẩm định File Đầu vào (Pre-validation):**
+   - Kiểm tra `file` có tồn tại trong `Express.Multer.File`.
+   - Kiểm tra định dạng qua MIME type và phần mở rộng (`.xlsx`, `.xls`).
+   - Kiểm tra giới hạn dung lượng `file.size <= 5MB` (`5 * 1024 * 1024` bytes).
+2. **Giai đoạn 2 – Đọc và Phân tích Memory Buffer (Parsing):**
+   - Dùng thư viện `xlsx` (SheetJS) đọc trực tiếp từ `file.buffer`.
+   - Lấy `SheetNames[0]`, chuyển đổi sang mảng object qua `XLSX.utils.sheet_to_json`.
+   - Kiểm tra file rỗng và xác minh sự hiện diện của 4 header bắt buộc: `fullName`, `username`, `email`, `role`.
+   - Kiểm tra giới hạn số lượng dòng `totalRows <= 500`.
+3. **Giai đoạn 3 – Thẩm định & Khởi tạo Từng Dòng Độc lập (Per-row Execution):**
+   - Ánh xạ từng dòng sang instance của `ExcelUserRowDto` bằng `plainToInstance`.
+   - Chạy hàm `validate()` của `class-validator`.
+   - Chuẩn hóa vai trò qua hàm `resolveRole()` kết hợp Enum và `ROLE_ALIAS_MAP`.
+   - Gọi `UsersService.create()`:
+     - Kiểm tra trùng lặp `username` hoặc `email` trong CSDL.
+     - Kiểm tra ràng buộc nhân sự kho bắt buộc phải gắn `assignedWarehouse`.
+     - Tự động băm mật khẩu bằng `bcrypt` (10 salt rounds).
+     - Giả lập gửi email kích hoạt tài khoản kèm mật khẩu tạm.
+   - **Cơ chế Cách ly Lỗi (Error Isolation):** Nếu dòng thứ $i$ bị lỗi (sai định dạng, trùng email, thiếu kho...), hệ thống ghi nhận `status: FAILED` cho dòng đó, ghi log cảnh báo và **tiếp tục xử lý ngay dòng $i+1$** mà không làm dừng toàn bộ batch.
+4. **Giai đoạn 4 – Tổng hợp Báo cáo & Ghi Log:**
+   - Trả về đối tượng `ImportUsersReportDto` chứa `totalRows`, `successCount`, `failedCount`, danh sách chi tiết `results` và `createdUsers` (dạng `SafeUser`, tuyệt đối không để lộ `passwordHash`).
+   - Tích hợp NestJS `Logger`: Ghi log chi tiết tiến trình đọc file, log từng dòng thành công `[LOG]` / thất bại `[WARN]` kèm nguyên nhân, và log tóm tắt cuối cùng.
+
+---
+
+#### 🧪 5. Kết quả Kiểm thử Tự động (Automated Jest Test Suite):
+
+- **File kiểm thử:** `test/excel-import-sn147.spec.ts`
+- **Bộ công cụ:** Jest v30 + `ts-jest` v29 (Strict TypeScript, Zero `any`).
+- **Tổng số test cases:** **22 / 22 PASS (100%)** – Thời gian thực thi: **~4.2 giây**.
+
+```
+PASS test/excel-import-sn147.spec.ts
+  [SN-147] Excel Import – Tao Tai Khoan Hang Loat
+    Validate file dau vao
+      √ TC-01: Nem BadRequestException khi khong co file (null)
+      √ TC-02: Nem BadRequestException khi MIME type khong hop le (.pdf)
+      √ TC-03: Nem BadRequestException khi file qua dung luong (> 5MB)
+      √ TC-04: Nem BadRequestException khi file Excel rong (khong co dong nao)
+      √ TC-05: Nem BadRequestException khi thieu cot bat buoc (thieu email)
+    Validate tung dong du lieu
+      √ TC-06: Dong thieu fullName -> status = FAILED, co thong bao loi ro rang
+      √ TC-07: Dong co vai tro khong hop le -> status = FAILED
+      √ TC-08: Dong co email sai dinh dang -> status = FAILED
+      √ TC-09: Dong thieu username -> status = FAILED
+    Tao tai khoan thanh cong
+      √ TC-10: 1 dong hop le -> successCount = 1, tra ve user va temporaryPassword
+      √ TC-11: 3 dong hop le -> successCount = 3, bao cao day du
+      √ TC-12: Bao cao summary chua so tai khoan tao thanh cong
+      √ TC-13: Tai khoan duoc tao khong lo passwordHash (SafeUser)
+    Xu ly loi trung lap (username / email)
+      √ TC-14: Import cung username 2 lan -> dong 2 FAILED do trung username
+      √ TC-15: Import cung email 2 lan -> dong 2 FAILED do trung email
+    Ho tro alias vai tro tieng Viet
+      √ TC-16: "thu kho" duoc phan giai thanh WAREHOUSE_KEEPER va tao thanh cong
+      √ TC-17: "ketoan" duoc phan giai thanh ACCOUNTANT va tao thanh cong
+      √ TC-18: "quantrivien" duoc phan giai thanh ADMIN
+    Batch processing – loi 1 dong khong dung ca batch
+      √ TC-19: 5 dong, dong 2 loi role, cac dong con lai van duoc xu ly thanh cong
+      √ TC-20: 10 dong tat ca hop le -> successCount = 10
+    Rang buoc kho bat buoc voi vai tro WAREHOUSE_KEEPER / WAREHOUSE_MANAGER
+      √ TC-21: WAREHOUSE_KEEPER khong co assignedWarehouse -> FAILED
+      √ TC-22: WAREHOUSE_KEEPER co assignedWarehouse -> SUCCESS
+
+Test Suites: 1 passed, 1 total
+Tests:       22 passed, 22 total
+```
+
+---
+
+#### ⚠️ 6. Phân tích Xung đột Git & Phương án Giải quyết (Conflict Analysis - PR #5):
+
+Trên Git / GitHub Pull Request #5 có 4 file xung đột cần xử lý khi merge vào nhánh `develop`:
+
+| File xung đột | Nguyên nhân | Phương án giải quyết chính xác |
+|:---|:---|:---|
+| `log.md` | Nhánh `develop` có log của các task khác; nhánh feature có log của SN-147 | **Giữ cả hai**, ghép nối theo thứ tự thời gian. Tuyệt đối không ghi đè mất log của đồng đội. |
+| `package-lock.json` | Nhánh feature cài đặt thêm `xlsx` | **Giữ phiên bản của nhánh feature** (có dependency `xlsx`) hoặc chạy lại `npm install` sau khi merge. |
+| `src/modules/users/users.controller.ts` | Nhánh `develop` có thêm routes từ task khác; nhánh feature thêm route `POST /api/users/import-excel` | **Gộp cả hai**: Giữ toàn bộ routes từ `develop`, bổ sung endpoint import Excel và inject `ExcelImportService`. |
+| `src/modules/users/users.service.ts` | `develop` có hotfix phục hồi avatar; nhánh feature không sửa logic core của service | **Ưu tiên giữ toàn bộ code của `develop`**, vì SN-147 tuân thủ Single Responsibility và gọi qua interface public `create()`. |
+
+---
+
+#### 📌 7. Ghi chú Kỹ thuật & Bàn giao cho Task Kế tiếp:
+
+1. **Tuân thủ triệt để `CODE_CONVENTION.docx`:**
+   - 100% tên file `kebab-case` (`excel-import.service.ts`, `excel-import.constant.ts`, `excel-user-row.dto.ts`).
+   - 100% Class/DTO `PascalCase`, biến/hàm `camelCase` (bắt đầu bằng động từ: `importUsersFromExcel`, `resolveRole`, `validateRowData`).
+   - Hằng số `UPPER_SNAKE_CASE` (`EXCEL_IMPORT_MAX_FILE_SIZE`, `EXCEL_IMPORT_MAX_ROWS`, `EXCEL_ALLOWED_MIME_TYPES`).
+   - Strict TypeScript: **Không dùng `any`** (Zero `any`), sử dụng type casting an toàn và `unknown`.
+   - Thụt lề 2 spaces, trailing comma đầy đủ.
+2. **Sẵn sàng tích hợp Frontend:**
+   - Modal Upload Excel (kéo thả file `.xlsx`/`.xls`).
+   - Bảng kết quả import chi tiết từng dòng kèm tag màu xanh (`SUCCESS`) / đỏ (`FAILED`) và danh sách lỗi.
+3. **Lưu ý tương lai khi chuyển sang PostgreSQL/TypeORM:**
+   - Khi chuyển từ In-Memory Map sang PostgreSQL, có thể cân nhắc tùy chọn Transaction (All-or-Nothing) hoặc Partial Import tùy theo yêu cầu cụ thể của từng nghiệp vụ doanh nghiệp.
+
+
