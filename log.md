@@ -518,7 +518,7 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
       + Hỗ trợ truyền `categoryId` trong `getProducts()`.
     - `src/components/product-form-modal.tsx`:
       + Tải cây danh mục động từ backend.
-      + Bộ chọn phân cấp 3 tầng liên hoàn: Cấp 1 (Ngành chính) -> Cấp 2 (Nhóm phụ) -> Cấp 3 (Phân loại chi tiết).
+      + Bộ chọn phân cấp 3 tầng liên hoàn: Cấp 1 (Nhóm chính) -> Cấp 2 (Nhóm phụ) -> Cấp 3 (Phân loại chi tiết).
       + Hiển thị Breadcrumb trực quan (`FolderTree`) nhánh đang chọn và tự động gán `categoryId` node lá gửi lên server.
     - `src/pages/categories-page.tsx`:
       + Huy hiệu số lượng sản phẩm trên từng node cây cho phép bấm để mở modal danh sách sản phẩm thuộc nhánh.
