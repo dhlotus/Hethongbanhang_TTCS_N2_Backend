@@ -16,7 +16,6 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
-import { SuppliersModule } from './modules/suppliers/suppliers.module';
 
 @Module({
   imports: [
@@ -40,4 +39,4 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module';
     SuppliersModule,
   ],
 })
-export class AppModule {}
+export class AppModule { }
