@@ -36,7 +36,6 @@ import { MailModule } from './modules/mail/mail.module';
     ReturnsModule,
     ReportsModule,
     AuditLogsModule,
-    SuppliersModule,
   ],
 })
 export class AppModule { }
