@@ -66,21 +66,18 @@ export class CategoriesService implements OnModuleInit {
         .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
         .map(buildNode);
 
-      const directCount = this.productsService
-        ? this.productsService.countDirectProductsByCategoryId(
-            cat.id,
-            cat.code,
-            cat.name,
-            children.length > 0,
-          )
-        : (cat.productCount ?? 0);
-
-      const childrenCount = children.reduce(
-        (sum, child) => sum + (child.productCount || 0),
-        0,
-      );
-
-      const productCount = directCount + childrenCount;
+      let productCount = 0;
+      if (this.productsService) {
+        const descendantIds = this.getDescendantIds(cat.id);
+        const targetIds = [cat.id, ...descendantIds];
+        productCount = this.productsService.findProductsByBranch(
+          targetIds,
+          cat.code,
+          cat.name,
+        ).length;
+      } else {
+        productCount = cat.productCount ?? 0;
+      }
 
       return {
         id: cat.id,

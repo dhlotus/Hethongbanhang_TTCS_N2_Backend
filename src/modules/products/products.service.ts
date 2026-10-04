@@ -87,7 +87,10 @@ export class ProductsService implements OnModuleInit {
 
       for (const row of rows) {
         const existing = Array.from(this.products.values()).find(
-          (p) => p.sku.toUpperCase() === row.sku.toUpperCase() || p.id === row.id,
+          (p) =>
+            p.sku.toUpperCase() === row.sku.toUpperCase() ||
+            p.id === row.id ||
+            (row.sku.toUpperCase() === 'LH-MILK-POWDER-900G' && p.sku.toUpperCase() === 'LH-MILK-900G'),
         );
         const catName = row.category_name || 'Đồ uống & Nước giải khát';
         const parentName = row.parent_category_name || catName;
@@ -95,6 +98,7 @@ export class ProductsService implements OnModuleInit {
         const costPrice = Number(row.cost_price) || 0;
 
         if (existing) {
+          existing.sku = row.sku;
           if (row.category_id) {
             existing.categoryId = String(row.category_id);
             existing.category = fullCat;
@@ -144,12 +148,12 @@ export class ProductsService implements OnModuleInit {
     const initialList: Partial<ProductEntity>[] = [
       {
         id: 'prod-001',
-        sku: 'LH-MILK-900G',
+        sku: 'LH-MILK-POWDER-900G',
         name: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
-        categoryId: 'cat-milk-powder',
-        parentCategory: 'Sữa & Chế phẩm sữa',
-        subCategory: 'Sữa bột công thức',
-        category: 'Sữa & Chế phẩm sữa / Sữa bột công thức',
+        categoryId: '38',
+        parentCategory: 'Sữa bột công thức',
+        subCategory: 'Sữa bột người lớn & cao tuổi',
+        category: 'Sữa & Chế phẩm sữa / Sữa bột công thức / Sữa bột người lớn & cao tuổi',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
         price: 520000,
