@@ -71,6 +71,7 @@
     "@types/passport": "^1.0.17",
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.23.1",
+    "@types/xlsx": "^0.0.35",
     "jest": "^30.5.2",
     "source-map-support": "^0.5.21",
     "ts-jest": "^29.4.14",

@@ -4,6 +4,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ProductsModule } from './modules/products/products.module';
 import { PriceBooksModule } from './modules/price-books/price-books.module';
+import { PriceListsModule } from './modules/price-lists/price-lists.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
@@ -12,9 +13,9 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
 import { ReturnsModule } from './modules/returns/returns.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
+import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
-import { SuppliersModule } from './modules/suppliers/suppliers.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module';
     UsersModule,
     ProductsModule,
     PriceBooksModule,
+    PriceListsModule,
     CustomersModule,
     OrdersModule,
     InventoryModule,
@@ -36,4 +38,4 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module';
     AuditLogsModule,
   ],
 })
-export class AppModule {}
+export class AppModule { }
