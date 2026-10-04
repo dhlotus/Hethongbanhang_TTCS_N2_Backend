@@ -784,7 +784,7 @@ export class ProductsService implements OnModuleInit {
 
     const workbook = new ExcelJS.Workbook();
     try {
-      await workbook.xlsx.load(file.buffer);
+      await workbook.xlsx.load(file.buffer as any);
     } catch (error) {
       throw new BadRequestException('Tệp không đúng định dạng Excel');
     }
@@ -877,24 +877,24 @@ export class ProductsService implements OnModuleInit {
           await this.update(item.sku, {
             name: item.name,
             category: item.category,
+            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
             baseUnit: item.baseUnit,
             price: item.price,
             costPrice: item.costPrice,
-            barcode: item.barcode,
             description: item.description,
-          });
+          } as any);
         } else {
           await this.create({
             sku: item.sku,
             name: item.name,
             category: item.category,
+            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
             baseUnit: item.baseUnit,
             price: item.price,
             costPrice: item.costPrice,
             stockQuantity: item.stockQuantity,
-            barcode: item.barcode,
             description: item.description,
-          });
+          } as any);
         }
         successCount++;
       } catch (err: any) {
@@ -908,9 +908,7 @@ export class ProductsService implements OnModuleInit {
       error: errorCount,
       errorDetails: errors,
     };
-
-
-
+  }
   /**
    * Kiểm tra xem sản phẩm đã phát sinh giao dịch hay chưa
    */
