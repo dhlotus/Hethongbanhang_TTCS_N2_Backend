@@ -1,4 +1,9 @@
-async function main() {
+export {};
+
+/**
+ * Script kiểm tra đồng bộ hai chiều giữa Danh mục sản phẩm và Cây nhóm hàng
+ */
+async function runSyncVerificationTest(): Promise<void> {
   const baseURL = 'http://localhost:3000/api';
   console.log('--- 1. ĐĂNG NHẬP LẤY TOKEN ---');
   const loginRes = await fetch(`${baseURL}/auth/login`, {
@@ -79,7 +84,7 @@ async function main() {
   console.log('========================================================');
 }
 
-main().catch((err) => {
+runSyncVerificationTest().catch((err) => {
   console.error('Lỗi kiểm thử:', err);
   process.exit(1);
 });

@@ -27,6 +27,7 @@ import { CategoryTreeNode } from './interfaces/category-tree.interface';
 @Injectable()
 export class CategoriesService implements OnModuleInit {
   private categories = new Map<string, CategoryEntity>();
+  private legacyAliasMap = new Map<string, string>();
 
   constructor(
     @Optional() private readonly dbService?: DatabaseService,
@@ -669,6 +670,14 @@ export class CategoriesService implements OnModuleInit {
     if (direct) return direct;
 
     const lower = idOrCode.toLowerCase().trim();
+    const aliasId =
+      this.legacyAliasMap.get(lower) ||
+      this.legacyAliasMap.get(idOrCode.toUpperCase().trim());
+    if (aliasId) {
+      const aliasCat = this.categories.get(aliasId);
+      if (aliasCat) return aliasCat;
+    }
+
     return Array.from(this.categories.values()).find(
       (c) =>
         c.id.toLowerCase() === lower ||
@@ -680,13 +689,19 @@ export class CategoriesService implements OnModuleInit {
   /**
    * Đồng bộ hai chiều giữa bộ nhớ và cơ sở dữ liệu PostgreSQL:
    * 1. Đồng bộ các nhóm hàng khởi tạo mẫu (seeds) vào DB nếu chưa có
-   * 2. Tải toàn bộ cây nhóm hàng từ PostgreSQL vào bộ nhớ
+   * 2. Xóa sạch các node tạm thời trong bộ nhớ trước khi nạp từ DB (chống nhân đôi dữ liệu cây)
+   * 3. Tải toàn bộ cây nhóm hàng chuẩn xác từ PostgreSQL vào bộ nhớ
    */
   private async syncAndLoadCategoriesFromDatabase(): Promise<void> {
     if (!this.dbService?.isConnected()) return;
 
     try {
-      // 1. Lấy danh sách nhóm hàng hiện có trong PostgreSQL
+      // 1. Dọn dẹp các nhóm rác và nhánh BEV dư thừa (trùng lặp với BEVERAGE có sẵn trong DB)
+      await this.dbService.query(
+        "DELETE FROM categories WHERE code IN ('SAMPLE_EMPTY', 'BEV', 'BEV_TEA', 'BEV_WATER');",
+      );
+
+      // 2. Lấy danh sách nhóm hàng hiện có trong PostgreSQL
       const existingRows = await this.dbService.query<{
         id: number;
         code: string;
@@ -702,13 +717,22 @@ export class CategoriesService implements OnModuleInit {
         dbCodeToId.set(row.code.toUpperCase(), row.id);
       }
 
-      // 2. Chèn các nhóm hàng mẫu (seeds) nếu DB chưa có, theo thứ tự level từ thấp đến cao (1 -> 2 -> 3)
+      // 3. Chèn các nhóm hàng mẫu (seeds) nếu DB chưa có, theo thứ tự level từ thấp đến cao (1 -> 2 -> 3)
       const seeds = Array.from(this.categories.values()).sort(
         (a, b) => a.level - b.level,
       );
 
       for (const seed of seeds) {
         const seedCode = seed.code.toUpperCase();
+        // Bỏ qua các nhóm rác hoặc nhóm dư thừa
+        if (
+          seedCode === 'SAMPLE_EMPTY' ||
+          seedCode === 'BEV' ||
+          seedCode.startsWith('BEV_')
+        ) {
+          continue;
+        }
+
         if (!dbCodeToId.has(seedCode)) {
           let parentDbId: number | null = null;
           if (seed.parentId) {
@@ -754,7 +778,11 @@ export class CategoriesService implements OnModuleInit {
         }
       }
 
-      // 3. Tải lại toàn bộ cây danh mục từ PostgreSQL vào bộ nhớ
+      // 4. XÓA SẠCH DỮ LIỆU TẠM THỜI TRONG BỘ NHỚ ĐỂ TRÁNH TRÙNG LẶP / NHÂN ĐÔI TRÊN FRONTEND
+      this.categories.clear();
+      this.legacyAliasMap.clear();
+
+      // 5. Tải lại toàn bộ cây danh mục chuẩn duy nhất từ PostgreSQL vào bộ nhớ
       const allRows = await this.dbService.query<{
         id: number;
         code: string;
@@ -789,6 +817,21 @@ export class CategoriesService implements OnModuleInit {
 
         this.categories.set(entity.id, entity);
       }
+
+      // 6. Xây dựng bảng ánh xạ alias (legacy alias map) để các mã cũ (cat-milk, cat-cereal...) trỏ chính xác về ID DB
+      for (const entity of this.categories.values()) {
+        const code = entity.code.toUpperCase();
+        this.legacyAliasMap.set(code.toLowerCase(), entity.id);
+        this.legacyAliasMap.set(`cat-${code.toLowerCase().replace(/_/g, '-')}`, entity.id);
+      }
+
+      // Ánh xạ các alias đặc biệt
+      this.legacyAliasMap.set('cat-bev', '1');
+      this.legacyAliasMap.set('cat-bev-tea', '4');
+      this.legacyAliasMap.set('cat-bev-water', '3');
+      this.legacyAliasMap.set('bev', '1');
+      this.legacyAliasMap.set('bev_tea', '4');
+      this.legacyAliasMap.set('bev_water', '3');
     } catch {
       // Fallback an toàn
     }

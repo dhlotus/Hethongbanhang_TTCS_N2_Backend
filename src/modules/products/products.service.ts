@@ -68,6 +68,8 @@ export class ProductsService implements OnModuleInit {
         name: string;
         category_id: number;
         category_name?: string;
+        category_code?: string;
+        parent_category_name?: string;
         base_unit: string;
         cost_price: string | number;
         status: string;
@@ -75,24 +77,47 @@ export class ProductsService implements OnModuleInit {
         created_at: Date;
         updated_at: Date;
       }>(
-        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at, c.name as category_name
+        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at,
+                c.name as category_name, c.code as category_code,
+                pcat.name as parent_category_name
          FROM products p
-         LEFT JOIN categories c ON p.category_id = c.id;`,
+         LEFT JOIN categories c ON p.category_id = c.id
+         LEFT JOIN categories pcat ON c.parent_id = pcat.id;`,
       );
 
       for (const row of rows) {
         const existing = Array.from(this.products.values()).find(
           (p) => p.sku.toUpperCase() === row.sku.toUpperCase() || p.id === row.id,
         );
-        if (!existing) {
-          const catName = row.category_name || 'Đồ uống & Nước giải khát';
-          const costPrice = Number(row.cost_price) || 0;
+        const catName = row.category_name || 'Đồ uống & Nước giải khát';
+        const parentName = row.parent_category_name || catName;
+        const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
+        const costPrice = Number(row.cost_price) || 0;
+
+        if (existing) {
+          if (row.category_id) {
+            existing.categoryId = String(row.category_id);
+            existing.category = fullCat;
+            existing.parentCategory = parentName;
+            existing.subCategory = catName;
+          }
+          if (costPrice > 0) {
+            existing.costPrice = costPrice;
+          }
+          if (row.base_unit) {
+            existing.baseUnit = row.base_unit;
+          }
+          if (row.name) {
+            existing.name = row.name;
+          }
+        } else {
           const entity = new ProductEntity({
             id: row.id,
             sku: row.sku,
             name: row.name,
-            category: catName,
-            parentCategory: catName,
+            categoryId: row.category_id ? String(row.category_id) : undefined,
+            category: fullCat,
+            parentCategory: parentName,
             subCategory: catName,
             baseUnit: row.base_unit,
             costPrice,
@@ -871,7 +896,17 @@ export class ProductsService implements OnModuleInit {
     return Array.from(this.products.values()).filter((p) => {
       if (p.categoryId) {
         const pCid = p.categoryId.toLowerCase().trim();
-        return pCid === cidLower || (codeLower && pCid === codeLower);
+        if (pCid === cidLower) return true;
+        if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
+          return true;
+        }
+        if (nameLower && (
+          (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) ||
+          (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower)
+        )) {
+          return true;
+        }
+        return false;
       }
       if (!hasChildren) {
         return (
@@ -899,8 +934,11 @@ export class ProductsService implements OnModuleInit {
       if (p.categoryId && targetSet.has(p.categoryId.toLowerCase().trim())) {
         return true;
       }
-      if (codeLower && p.categoryId && p.categoryId.toLowerCase().trim() === codeLower) {
-        return true;
+      if (codeLower && p.categoryId) {
+        const pCid = p.categoryId.toLowerCase().trim();
+        if (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower) {
+          return true;
+        }
       }
       if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) {
         return true;
