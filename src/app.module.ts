@@ -14,6 +14,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
+import { SuppliersModule } from './modules/suppliers/suppliers.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { MailModule } from './modules/mail/mail.module';
     CustomersModule,
     OrdersModule,
     InventoryModule,
+    SuppliersModule,
     ShipmentsModule,
     InvoicesModule,
     ReturnsModule,
