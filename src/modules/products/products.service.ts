@@ -532,17 +532,38 @@ export class ProductsService implements OnModuleInit {
 
     if (this.dbService?.isConnected()) {
       try {
+        let dbCategoryId = 1;
+        if (newProduct.categoryId) {
+          const num = parseInt(newProduct.categoryId, 10);
+          if (!isNaN(num) && num > 0) {
+            dbCategoryId = num;
+          } else {
+            try {
+              const catRows = await this.dbService.query<{ id: number }>(
+                'SELECT id FROM categories WHERE UPPER(code) = $1 OR id::text = $1 LIMIT 1;',
+                [newProduct.categoryId.toUpperCase()],
+              );
+              if (catRows.length > 0) {
+                dbCategoryId = catRows[0].id;
+              }
+            } catch {}
+          }
+        }
+
         await this.dbService.query(
           `INSERT INTO products (sku, name, category_id, base_unit, cost_price, status, image_url)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (sku) DO UPDATE SET
              name = EXCLUDED.name,
              cost_price = EXCLUDED.cost_price,
+             category_id = EXCLUDED.category_id,
+             status = EXCLUDED.status,
+             image_url = EXCLUDED.image_url,
              updated_at = CURRENT_TIMESTAMP;`,
           [
             newProduct.sku,
             newProduct.name,
-            1,
+            dbCategoryId,
             newProduct.baseUnit,
             newProduct.costPrice,
             newProduct.status,
@@ -675,6 +696,26 @@ export class ProductsService implements OnModuleInit {
 
     if (this.dbService?.isConnected()) {
       try {
+        let dbCategoryId: number | null = null;
+        if (dto.categoryId !== undefined) {
+          if (dto.categoryId) {
+            const num = parseInt(dto.categoryId, 10);
+            if (!isNaN(num) && num > 0) {
+              dbCategoryId = num;
+            } else {
+              try {
+                const catRows = await this.dbService.query<{ id: number }>(
+                  'SELECT id FROM categories WHERE UPPER(code) = $1 OR id::text = $1 LIMIT 1;',
+                  [dto.categoryId.toUpperCase()],
+                );
+                if (catRows.length > 0) {
+                  dbCategoryId = catRows[0].id;
+                }
+              } catch {}
+            }
+          }
+        }
+
         await this.dbService.query(
           `UPDATE products 
            SET name = COALESCE($1, name),
@@ -682,6 +723,7 @@ export class ProductsService implements OnModuleInit {
                cost_price = COALESCE($3, cost_price),
                status = COALESCE($4, status),
                image_url = COALESCE($5, image_url),
+               category_id = COALESCE($7, category_id),
                updated_at = CURRENT_TIMESTAMP
            WHERE sku = $6;`,
           [
@@ -691,6 +733,7 @@ export class ProductsService implements OnModuleInit {
             dto.status || null,
             dto.imageUrl ? dto.imageUrl.trim() : null,
             product.sku,
+            dbCategoryId,
           ],
         );
       } catch {}

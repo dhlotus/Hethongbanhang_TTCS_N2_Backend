@@ -42,7 +42,7 @@ export class CategoriesService implements OnModuleInit {
       this.seedInitialCategories();
     }
     if (this.dbService?.isConnected()) {
-      await this.loadCategoriesFromDatabase();
+      await this.syncAndLoadCategoriesFromDatabase();
     }
   }
 
@@ -194,12 +194,29 @@ export class CategoriesService implements OnModuleInit {
   async create(dto: CreateCategoryDto): Promise<CategoryEntity> {
     const cleanCode = dto.code.trim().toUpperCase();
 
+    // 1. Kiểm tra mã đã tồn tại trong bộ nhớ
     if (this.findCategoryInternal(cleanCode)) {
       throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
     }
 
+    // 2. Kiểm tra mã trong PostgreSQL nếu đang kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        const check = await this.dbService.query<{ id: number }>(
+          'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+          [cleanCode],
+        );
+        if (check.length > 0) {
+          throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+      }
+    }
+
     let level = 1;
     let parentId: string | null = null;
+    let parentDbId: number | null = null;
 
     if (dto.parentId) {
       const parent = this.findCategoryInternal(dto.parentId);
@@ -208,8 +225,91 @@ export class CategoriesService implements OnModuleInit {
       }
       parentId = parent.id;
       level = parent.level + 1;
+
+      if (this.dbService?.isConnected()) {
+        const num = parseInt(parent.id, 10);
+        if (!isNaN(num)) {
+          parentDbId = num;
+        } else {
+          try {
+            const pRows = await this.dbService.query<{ id: number }>(
+              'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+              [parent.code.toUpperCase()],
+            );
+            if (pRows.length > 0) {
+              parentDbId = pRows[0].id;
+            }
+          } catch {
+            // Tiếp tục fallback
+          }
+        }
+      }
     }
 
+    // 3. Lưu vào cơ sở dữ liệu PostgreSQL nếu có kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        const insertRes = await this.dbService.query<{
+          id: number;
+          code: string;
+          name: string;
+          parent_id: number | null;
+          level: number;
+          path: string;
+          status: string;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          `INSERT INTO categories (code, name, parent_id, level, path, status)
+           VALUES ($1, $2, $3, $4, '', $5)
+           RETURNING id, code, name, parent_id, level, path, status, created_at, updated_at;`,
+          [
+            cleanCode,
+            dto.name.trim(),
+            parentDbId,
+            level,
+            dto.status ?? CategoryStatus.ACTIVE,
+          ],
+        );
+
+        if (insertRes.length > 0) {
+          const row = insertRes[0];
+
+          // Cập nhật đường dẫn path
+          await this.dbService.query(
+            `UPDATE categories
+             SET path = CASE 
+               WHEN parent_id IS NULL THEN '/' || id || '/' 
+               ELSE (SELECT p.path FROM categories p WHERE p.id = categories.parent_id) || id || '/' 
+             END
+             WHERE id = $1;`,
+            [row.id],
+          );
+
+          const newCategory = new CategoryEntity({
+            id: String(row.id),
+            code: row.code,
+            name: row.name,
+            parentId: row.parent_id !== null ? String(row.parent_id) : null,
+            level: Number(row.level),
+            description: dto.description?.trim() || null,
+            status: (row.status as CategoryStatus) || CategoryStatus.ACTIVE,
+            productCount: 0,
+            createdAt: new Date(row.created_at),
+            updatedAt: new Date(row.updated_at),
+          });
+
+          this.categories.set(newCategory.id, newCategory);
+          return newCategory;
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException || err instanceof NotFoundException) {
+          throw err;
+        }
+      }
+    }
+
+    // 4. Fallback bộ nhớ (hỗ trợ môi trường kiểm thử cô lập)
     const id = `cat-${randomUUID()}`;
     const newCategory = new CategoryEntity({
       id,
@@ -225,26 +325,6 @@ export class CategoriesService implements OnModuleInit {
     });
 
     this.categories.set(newCategory.id, newCategory);
-
-    if (this.dbService?.isConnected()) {
-      try {
-        await this.dbService.query(
-          `INSERT INTO categories (code, name, parent_id, level, status)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (code) DO NOTHING;`,
-          [
-            newCategory.code,
-            newCategory.name,
-            newCategory.parentId,
-            newCategory.level,
-            newCategory.status,
-          ],
-        );
-      } catch {
-        // Fallback an toàn
-      }
-    }
-
     return newCategory;
   }
 
@@ -263,6 +343,19 @@ export class CategoriesService implements OnModuleInit {
       if (existing && existing.id !== category.id) {
         throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
       }
+      if (this.dbService?.isConnected()) {
+        try {
+          const check = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE UPPER(code) = $1 AND id::text != $2 LIMIT 1;',
+            [cleanCode, category.id],
+          );
+          if (check.length > 0) {
+            throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
+          }
+        } catch (err) {
+          if (err instanceof BadRequestException) throw err;
+        }
+      }
       category.code = cleanCode;
     }
 
@@ -279,6 +372,7 @@ export class CategoriesService implements OnModuleInit {
     }
 
     // 2. Kiểm tra thay đổi parentId và chống Circular Dependency
+    let newParentDbId: number | null = null;
     if (dto.parentId !== undefined) {
       if (dto.parentId === category.id) {
         throw new BadRequestException(
@@ -301,32 +395,95 @@ export class CategoriesService implements OnModuleInit {
 
         category.parentId = newParent.id;
         category.level = newParent.level + 1;
+
+        if (this.dbService?.isConnected()) {
+          const num = parseInt(newParent.id, 10);
+          if (!isNaN(num)) {
+            newParentDbId = num;
+          } else {
+            try {
+              const pRow = await this.dbService.query<{ id: number }>(
+                'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+                [newParent.code.toUpperCase()],
+              );
+              if (pRow.length > 0) newParentDbId = pRow[0].id;
+            } catch {}
+          }
+        }
       } else {
         category.parentId = null;
         category.level = 1;
+        newParentDbId = null;
       }
 
-      // Cập nhật lại level của toàn bộ cây con bên dưới
+      // Cập nhật lại level của toàn bộ cây con bên dưới trong bộ nhớ
       this.updateDescendantLevels(category);
     }
 
     category.updatedAt = new Date();
 
+    // 3. Cập nhật vào PostgreSQL nếu có kết nối
     if (this.dbService?.isConnected()) {
       try {
-        await this.dbService.query(
-          `UPDATE categories
-           SET code = $1, name = $2, parent_id = $3, level = $4, status = $5, updated_at = CURRENT_TIMESTAMP
-           WHERE id::text = $6 OR code = $6;`,
-          [
-            category.code,
-            category.name,
-            category.parentId,
-            category.level,
-            category.status,
-            category.id,
-          ],
-        );
+        let dbId: number | null = null;
+        const num = parseInt(category.id, 10);
+        if (!isNaN(num)) {
+          dbId = num;
+        } else {
+          const row = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+            [category.code.toUpperCase()],
+          );
+          if (row.length > 0) dbId = row[0].id;
+        }
+
+        if (dbId !== null) {
+          if (dto.parentId !== undefined) {
+            await this.dbService.query(
+              `UPDATE categories
+               SET code = $1, name = $2, parent_id = $3, level = $4, status = $5, updated_at = CURRENT_TIMESTAMP
+               WHERE id = $6;`,
+              [
+                category.code,
+                category.name,
+                newParentDbId,
+                category.level,
+                category.status,
+                dbId,
+              ],
+            );
+
+            // Cập nhật đệ quy path và level cho node này và toàn bộ con cháu trong DB
+            await this.dbService.query(
+              `WITH RECURSIVE cat_tree AS (
+                 SELECT id, parent_id, level, 
+                        CASE WHEN parent_id IS NULL THEN '/' || id || '/' 
+                             ELSE (SELECT p.path FROM categories p WHERE p.id = categories.parent_id) || id || '/' 
+                        END as new_path
+                 FROM categories
+                 WHERE id = $1
+                 UNION ALL
+                 SELECT c.id, c.parent_id, ct.level + 1, ct.new_path || c.id || '/'
+                 FROM categories c
+                 JOIN cat_tree ct ON c.parent_id = ct.id
+               )
+               UPDATE categories
+               SET path = cat_tree.new_path,
+                   level = cat_tree.level,
+                   updated_at = CURRENT_TIMESTAMP
+               FROM cat_tree
+               WHERE categories.id = cat_tree.id;`,
+              [dbId],
+            );
+          } else {
+            await this.dbService.query(
+              `UPDATE categories
+               SET code = $1, name = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+               WHERE id = $4;`,
+              [category.code, category.name, category.status, dbId],
+            );
+          }
+        }
       } catch {
         // Fallback
       }
@@ -390,7 +547,7 @@ export class CategoriesService implements OnModuleInit {
   async delete(id: string): Promise<{ success: boolean; message: string }> {
     const category = await this.findById(id);
 
-    // 1. Kiểm tra nhóm con
+    // 1. Kiểm tra nhóm con trong bộ nhớ
     const hasChildren = Array.from(this.categories.values()).some(
       (c) => c.parentId === category.id,
     );
@@ -415,19 +572,51 @@ export class CategoriesService implements OnModuleInit {
       );
     }
 
-    // 3. Thực hiện xóa khi nhóm hoàn toàn rỗng
-    this.categories.delete(category.id);
-
+    // 3. Kiểm tra ràng buộc cứng trực tiếp trên PostgreSQL nếu đã kết nối
     if (this.dbService?.isConnected()) {
       try {
-        await this.dbService.query(
-          `DELETE FROM categories WHERE id::text = $1 OR code = $1;`,
-          [category.id],
-        );
-      } catch {
-        // Fallback
+        let dbId: number | null = null;
+        const num = parseInt(category.id, 10);
+        if (!isNaN(num)) {
+          dbId = num;
+        } else {
+          const row = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+            [category.code.toUpperCase()],
+          );
+          if (row.length > 0) dbId = row[0].id;
+        }
+
+        if (dbId !== null) {
+          const childRows = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE parent_id = $1 LIMIT 1;',
+            [dbId],
+          );
+          if (childRows.length > 0) {
+            throw new BadRequestException(
+              'Nhóm hàng đang chứa nhóm hàng con. Vui lòng chuyển hoặc xóa nhóm con trước.',
+            );
+          }
+
+          const prodRows = await this.dbService.query<{ id: string }>(
+            'SELECT id FROM products WHERE category_id = $1 LIMIT 1;',
+            [dbId],
+          );
+          if (prodRows.length > 0) {
+            throw new BadRequestException(
+              'Nhóm còn sản phẩm thì không xoá được. Vui lòng chuyển sản phẩm sang nhóm khác trước khi xoá.',
+            );
+          }
+
+          await this.dbService.query('DELETE FROM categories WHERE id = $1;', [dbId]);
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
       }
     }
+
+    // 4. Xóa khỏi bộ nhớ
+    this.categories.delete(category.id);
 
     return {
       success: true,
@@ -472,9 +661,9 @@ export class CategoriesService implements OnModuleInit {
   }
 
   /**
-   * Tìm kiếm nhóm hàng nội bộ theo id hoặc code (không ném lỗi nếu không thấy)
+   * Tìm kiếm nhóm hàng nội bộ theo id hoặc code hoặc name (không ném lỗi nếu không thấy)
    */
-  private findCategoryInternal(idOrCode: string): CategoryEntity | undefined {
+  public findCategoryInternal(idOrCode: string): CategoryEntity | undefined {
     if (!idOrCode) return undefined;
     const direct = this.categories.get(idOrCode);
     if (direct) return direct;
@@ -482,56 +671,126 @@ export class CategoriesService implements OnModuleInit {
     const lower = idOrCode.toLowerCase().trim();
     return Array.from(this.categories.values()).find(
       (c) =>
-        c.id.toLowerCase() === lower || c.code.toLowerCase() === lower,
+        c.id.toLowerCase() === lower ||
+        c.code.toLowerCase() === lower ||
+        c.name.toLowerCase() === lower,
     );
   }
 
   /**
-   * Tải danh mục nhóm hàng từ PostgreSQL (nếu có bảng categories)
+   * Đồng bộ hai chiều giữa bộ nhớ và cơ sở dữ liệu PostgreSQL:
+   * 1. Đồng bộ các nhóm hàng khởi tạo mẫu (seeds) vào DB nếu chưa có
+   * 2. Tải toàn bộ cây nhóm hàng từ PostgreSQL vào bộ nhớ
    */
-  private async loadCategoriesFromDatabase(): Promise<void> {
+  private async syncAndLoadCategoriesFromDatabase(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+
     try {
-      const rows = await this.dbService!.query<{
-        id: string | number;
+      // 1. Lấy danh sách nhóm hàng hiện có trong PostgreSQL
+      const existingRows = await this.dbService.query<{
+        id: number;
         code: string;
         name: string;
-        parent_id?: string | number | null;
-        level?: number;
-        status?: string;
-        description?: string;
-        created_at?: Date;
-        updated_at?: Date;
+        parent_id: number | null;
+        level: number;
+        path: string;
+        status: string;
+      }>('SELECT id, code, name, parent_id, level, path, status FROM categories;');
+
+      const dbCodeToId = new Map<string, number>();
+      for (const row of existingRows) {
+        dbCodeToId.set(row.code.toUpperCase(), row.id);
+      }
+
+      // 2. Chèn các nhóm hàng mẫu (seeds) nếu DB chưa có, theo thứ tự level từ thấp đến cao (1 -> 2 -> 3)
+      const seeds = Array.from(this.categories.values()).sort(
+        (a, b) => a.level - b.level,
+      );
+
+      for (const seed of seeds) {
+        const seedCode = seed.code.toUpperCase();
+        if (!dbCodeToId.has(seedCode)) {
+          let parentDbId: number | null = null;
+          if (seed.parentId) {
+            const parentCat = this.findCategoryInternal(seed.parentId);
+            if (parentCat) {
+              parentDbId = dbCodeToId.get(parentCat.code.toUpperCase()) ?? null;
+            }
+          }
+
+          try {
+            const insertRes = await this.dbService.query<{ id: number }>(
+              `INSERT INTO categories (code, name, parent_id, level, path, status)
+               VALUES ($1, $2, $3, $4, '', $5)
+               ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
+               RETURNING id;`,
+              [
+                seed.code,
+                seed.name,
+                parentDbId,
+                seed.level,
+                seed.status || CategoryStatus.ACTIVE,
+              ],
+            );
+
+            if (insertRes.length > 0) {
+              const newId = insertRes[0].id;
+              dbCodeToId.set(seedCode, newId);
+
+              // Cập nhật path
+              await this.dbService.query(
+                `UPDATE categories
+                 SET path = CASE 
+                   WHEN parent_id IS NULL THEN '/' || id || '/' 
+                   ELSE (SELECT p.path FROM categories p WHERE p.id = categories.parent_id) || id || '/' 
+                 END
+                 WHERE id = $1;`,
+                [newId],
+              );
+            }
+          } catch {
+            // Tiếp tục nếu có xung đột
+          }
+        }
+      }
+
+      // 3. Tải lại toàn bộ cây danh mục từ PostgreSQL vào bộ nhớ
+      const allRows = await this.dbService.query<{
+        id: number;
+        code: string;
+        name: string;
+        parent_id: number | null;
+        level: number;
+        path: string;
+        status: string;
+        created_at: Date;
+        updated_at: Date;
       }>(
-        `SELECT id, code, name, parent_id, level, status, created_at, updated_at
+        `SELECT id, code, name, parent_id, level, path, status, created_at, updated_at
          FROM categories
          ORDER BY level ASC, id ASC;`,
       );
 
-      for (const row of rows) {
+      for (const row of allRows) {
         const idStr = String(row.id);
-        const parentIdStr =
-          row.parent_id !== null && row.parent_id !== undefined
-            ? String(row.parent_id)
-            : null;
+        const parentIdStr = row.parent_id !== null ? String(row.parent_id) : null;
 
-        const existing = this.findCategoryInternal(row.code);
-        if (!existing) {
-          const entity = new CategoryEntity({
-            id: idStr,
-            code: row.code,
-            name: row.name,
-            parentId: parentIdStr,
-            level: Number(row.level) || 1,
-            status:
-              (row.status as CategoryStatus) || CategoryStatus.ACTIVE,
-            createdAt: row.created_at ? new Date(row.created_at) : new Date(),
-            updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
-          });
-          this.categories.set(entity.id, entity);
-        }
+        const entity = new CategoryEntity({
+          id: idStr,
+          code: row.code,
+          name: row.name,
+          parentId: parentIdStr,
+          level: Number(row.level) || 1,
+          status: (row.status as CategoryStatus) || CategoryStatus.ACTIVE,
+          productCount: 0,
+          createdAt: row.created_at ? new Date(row.created_at) : new Date(),
+          updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
+        });
+
+        this.categories.set(entity.id, entity);
       }
     } catch {
-      // Fallback
+      // Fallback an toàn
     }
   }
 

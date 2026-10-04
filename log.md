@@ -532,3 +532,24 @@ MẪU GHI NHẬT KÝ TASK (BẮT BUỘC SỬ DỤNG CHO MỌI TASK HOÀN THÀNH)
   - ✅ Frontend Build: 100% Passed (`tsc -b && vite build`).
   - ✅ Test Suite Tự Động: 41/41 Passed (`categories-tree-sn150.spec.ts`).
   - ✅ Test Live E2E Integration: Hoàn thành kiểm thử vòng tròn (Thêm SP -> Cây tăng số lượng đúng nhánh và cha -> Xem SP theo nhánh -> Lọc SP theo nhánh).
+
+---
+
+### [FIX] LƯU TRỮ VÀ ĐỒNG BỘ TOÀN VẸN CÂY NHÓM HÀNG VÀO CƠ SỞ DỮ LIỆU POSTGRESQL
+- **Vấn đề phát hiện:**
+  - Schema PostgreSQL `categories` sử dụng kiểu dữ liệu `id INT SERIAL PRIMARY KEY`, `parent_id INT REFERENCES categories(id)`, và `path VARCHAR(255) NOT NULL`.
+  - Trong tầng Service trước đó, `newCategory.parentId` được truyền dạng chuỗi (`'cat-...'`) khiến PostgreSQL từ chối câu lệnh INSERT do lỗi ép kiểu `parent_id INT`.
+  - Hàm `loadCategoriesFromDatabase()` bị thiếu logic đồng bộ hai chiều, khiến dữ liệu khởi tạo không được nạp vào DB và dữ liệu tạo mới từ UI không lưu được vào PostgreSQL.
+- **Giải pháp xử lý:**
+  - Cập nhật [`categories.service.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/categories/categories.service.ts):
+    + `syncAndLoadCategoriesFromDatabase()`: Tự động đồng bộ toàn bộ bộ seed cây mẫu (3 cấp) vào PostgreSQL khi khởi động với ID số nguyên và cập nhật `path` phân cấp (ví dụ: `/11/17/28/`).
+    + `create()`: Truy vấn chuyển đổi `parentId` sang `parent_id` kiểu số nguyên trong Postgres; thực hiện `INSERT INTO categories ... RETURNING id`, tự động sinh `path` tương ứng và lưu ID số nguyên thực tế vào hệ thống.
+    + `update()`: Kiểm tra tính duy nhất mã code trong DB; cập nhật `parent_id`, `level`, và tự động cập nhật đệ quy `path` bằng Recursive CTE trong PostgreSQL.
+    + `delete()`: Kiểm tra ràng buộc cứng tồn tại nhóm con (`parent_id`) và sản phẩm (`category_id`) trực tiếp trên bảng PostgreSQL trước khi thực thi xóa.
+  - Cập nhật [`products.service.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/products.service.ts):
+    + Khi tạo mới hoặc cập nhật sản phẩm, tự động ánh xạ `dto.categoryId` sang ID số nguyên của bảng `categories` trong PostgreSQL (thay vì cố định giá trị 1).
+- **Trạng thái kiểm thử:**
+  - ✅ Build `nest build`: Thành công 100%, 0 lỗi.
+  - ✅ Unit Test `categories-tree-sn150.spec.ts`: 41/41 Passed.
+  - ✅ Live Test PostgreSQL: Kiểm thử trực tiếp trên PostgreSQL thực tế (`htbh_db`) thành công 100%: 29 nhóm ngành hàng được đồng bộ, nhóm mới tạo lập tức ghi nhận vào bảng `categories`, cập nhật `path` và liên kết `parent_id` chính xác.
+
