@@ -615,10 +615,16 @@ export class ProductsService implements OnModuleInit {
         }
         seenNames.add(lower);
 
-        const rate = Number(u.conversionRate);
+        // Fix #1: Merge hệ số quy đổi từ 3 alias theo priority
+        // conversionRate (canonical) > conversionFactor (camelCase FE) > conversion_factor (snake_case)
+        const rawRate =
+          u.conversionRate ??
+          (u as unknown as Record<string, unknown>)['conversionFactor'] ??
+          (u as unknown as Record<string, unknown>)['conversion_factor'];
+        const rate = Number(rawRate);
         if (!Number.isFinite(rate) || rate <= 0) {
           throw new BadRequestException(
-            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0`,
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0 (nhận được: ${rawRate})`,
           );
         }
 
@@ -790,7 +796,19 @@ export class ProductsService implements OnModuleInit {
     }
 
     if (dto.baseUnit !== undefined) {
-      product.baseUnit = dto.baseUnit.trim();
+      const newBaseUnit = dto.baseUnit.trim();
+      // Fix #3: Chặn đổi baseUnit khi còn tồn kho để tránh sai lệch nghĩa số tồn (SN-23 AC3)
+      // Ví dụ: 240 lon → đổi baseUnit thành "Thùng" → hệ thống hiểu là "240 thùng" (SAI)
+      if (
+        newBaseUnit.toLowerCase() !== product.baseUnit.toLowerCase() &&
+        product.stockQuantity > 0
+      ) {
+        throw new BadRequestException(
+          `Không thể đổi đơn vị cơ sở từ "${product.baseUnit}" sang "${newBaseUnit}" khi sản phẩm đang có tồn kho (${product.stockQuantity} ${product.baseUnit}). ` +
+          `Vui lòng xuất kho hết hàng về 0 trước khi thay đổi đơn vị cơ sở.`,
+        );
+      }
+      product.baseUnit = newBaseUnit;
     }
 
     if (dto.packagingSpec !== undefined) {
@@ -860,10 +878,16 @@ export class ProductsService implements OnModuleInit {
         }
         seenNames.add(lower);
 
-        const rate = Number(u.conversionRate);
+        // Fix #1: Merge hệ số quy đổi từ 3 alias theo priority
+        // conversionRate (canonical) > conversionFactor (camelCase FE) > conversion_factor (snake_case)
+        const rawRate =
+          u.conversionRate ??
+          (u as unknown as Record<string, unknown>)['conversionFactor'] ??
+          (u as unknown as Record<string, unknown>)['conversion_factor'];
+        const rate = Number(rawRate);
         if (!Number.isFinite(rate) || rate <= 0) {
           throw new BadRequestException(
-            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0`,
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0 (nhận được: ${rawRate})`,
           );
         }
 
