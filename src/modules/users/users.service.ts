@@ -256,6 +256,52 @@ export class UsersService implements OnModuleInit {
 
     // Sau khi seed xong, khôi phục avatarUrl từ file đã lưu trên đĩa
     this.restoreAvatarsFromDisk();
+
+    // Khôi phục và đồng bộ các thay đổi người dùng đã lưu từ đĩa
+    this.loadUsersFromDisk();
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'users.json');
+  }
+
+  private loadUsersFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<UserEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const existing = this.users.get(item.id);
+        if (existing) {
+          Object.assign(existing, {
+            ...item,
+            createdAt: item.createdAt ? new Date(item.createdAt) : existing.createdAt,
+            updatedAt: item.updatedAt ? new Date(item.updatedAt) : existing.updatedAt,
+          });
+        } else {
+          this.users.set(item.id, new UserEntity(item));
+        }
+      }
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi khi nạp dữ liệu người dùng từ đĩa:', err);
+    }
+  }
+
+  private saveUsersToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.users.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi khi lưu dữ liệu người dùng ra đĩa:', err);
+    }
   }
 
   /**
@@ -500,6 +546,7 @@ export class UsersService implements OnModuleInit {
     });
 
     this.users.set(newUser.id, newUser);
+    this.saveUsersToDisk();
 
     // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
     if (this.mailService) {
@@ -621,6 +668,28 @@ export class UsersService implements OnModuleInit {
       user.phone = dto.phone.trim();
     }
 
+    // Quản lý thông tin định danh cá nhân (Ngày sinh & Giới tính)
+    if (user.isIdentityLocked) {
+      if (
+        (dto.dateOfBirth && dto.dateOfBirth !== user.dateOfBirth) ||
+        (dto.gender && dto.gender !== user.gender)
+      ) {
+        throw new BadRequestException(
+          'Thông tin Ngày sinh và Giới tính đã được xác thực định danh và khóa cố định, không thể thay đổi.',
+        );
+      }
+    } else {
+      if (dto.dateOfBirth !== undefined) {
+        user.dateOfBirth = dto.dateOfBirth.trim() || null;
+      }
+      if (dto.gender !== undefined) {
+        user.gender = dto.gender.trim() || null;
+      }
+      if (dto.isIdentityLocked) {
+        user.isIdentityLocked = true;
+      }
+    }
+
     if (targetRoles) {
       user.roles = targetRoles;
       user.role = targetRoles[0];
@@ -636,6 +705,9 @@ export class UsersService implements OnModuleInit {
 
     user.updatedAt = new Date();
     this.users.set(user.id, user);
+
+    // Lưu dữ liệu cập nhật ra đĩa vĩnh viễn
+    this.saveUsersToDisk();
 
     return user.toSafeUser();
   }

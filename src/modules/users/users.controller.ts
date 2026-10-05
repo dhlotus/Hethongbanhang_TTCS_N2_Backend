@@ -138,6 +138,19 @@ export class UsersController {
   }
 
   /**
+   * Cập nhật thông tin hồ sơ của chính mình (SN-17)
+   * PATCH /api/users/me
+   */
+  @Patch('me')
+  @Roles(...Object.values(UserRole))
+  async updateMe(
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<SafeUser> {
+    return this.usersService.update(currentUser.userId, dto, currentUser);
+  }
+
+  /**
    * Cập nhật thông tin nhân sự
    * PATCH /api/users/:id
    */
@@ -147,7 +160,8 @@ export class UsersController {
     @Body() dto: UpdateUserDto,
     @CurrentUser() currentUser: ICurrentUser,
   ): Promise<SafeUser> {
-    return this.usersService.update(id, dto, currentUser);
+    const targetId = id === 'me' ? currentUser.userId : id;
+    return this.usersService.update(targetId, dto, currentUser);
   }
 
   /**

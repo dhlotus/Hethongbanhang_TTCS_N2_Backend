@@ -12,6 +12,9 @@ export interface SafeUser {
   status: UserStatus;
   avatarUrl?: string | null;
   assignedWarehouse?: string;
+  dateOfBirth?: string | null;
+  gender?: string | null;
+  isIdentityLocked?: boolean;
   lockReason?: string | null;
   resetCode?: string | null;
   resetCodeCreatedAt?: Date | null;
@@ -31,6 +34,9 @@ export class UserEntity {
   status: UserStatus;
   avatarUrl: string | null;
   assignedWarehouse?: string;
+  dateOfBirth?: string | null;
+  gender?: string | null;
+  isIdentityLocked?: boolean;
   lockReason?: string | null;
   resetCode?: string | null;
   resetCodeCreatedAt?: Date | null;
@@ -62,6 +68,9 @@ export class UserEntity {
     this.status = partial.status ?? UserStatus.ACTIVE;
     this.avatarUrl = partial.avatarUrl ?? null;
     this.assignedWarehouse = partial.assignedWarehouse;
+    this.dateOfBirth = partial.dateOfBirth ?? null;
+    this.gender = partial.gender ?? null;
+    this.isIdentityLocked = partial.isIdentityLocked ?? false;
     this.lockReason = partial.lockReason ?? null;
     this.resetCode = partial.resetCode ?? null;
     this.resetCodeCreatedAt = partial.resetCodeCreatedAt ?? null;
@@ -86,6 +95,9 @@ export class UserEntity {
       status: this.status,
       avatarUrl: this.avatarUrl ?? null,
       assignedWarehouse: this.assignedWarehouse,
+      dateOfBirth: this.dateOfBirth,
+      gender: this.gender,
+      isIdentityLocked: this.isIdentityLocked,
       lockReason: this.lockReason,
       resetCode: this.resetCode,
       resetCodeCreatedAt: this.resetCodeCreatedAt,
