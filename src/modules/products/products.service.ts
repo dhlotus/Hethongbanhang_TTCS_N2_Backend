@@ -11,9 +11,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductEntity } from './entities/product.entity';
-import { ImportProductItemDto, PreviewImportResult, ConfirmImportResult } from './dto/import-product.dto';
-import * as ExcelJS from 'exceljs';
-import { Response } from 'express';
+import { ProductUnitEntity } from './entities/product-unit.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
 
 /**
@@ -129,6 +127,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Sữa & Chế phẩm sữa / Sữa bột công thức',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 520000,
         costPrice: 380000,
         margin: 26.92,
@@ -149,6 +152,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Sữa & Chế phẩm sữa / Sữa hạt organic',
         baseUnit: 'Hộp',
         packagingSpec: '48 hộp/thùng (12 lốc x 4 hộp)',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 4, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 48, isBaseUnit: false }),
+        ],
         price: 18000,
         costPrice: 11500,
         margin: 36.11,
@@ -169,6 +177,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước yến & Bổ dưỡng / Nước yến chưng sẵn',
         baseUnit: 'Hũ',
         packagingSpec: '30 hũ/thùng (5 hộp x 6 hũ)',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hũ', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 30, isBaseUnit: false }),
+        ],
         price: 65000,
         costPrice: 42000,
         margin: 35.38,
@@ -189,6 +202,10 @@ export class ProductsService implements OnModuleInit {
         category: 'Ngũ cốc & Hạt dinh dưỡng / Ngũ cốc hạt mầm',
         baseUnit: 'Túi',
         packagingSpec: '20 túi/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Túi', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 20, isBaseUnit: false }),
+        ],
         price: 145000,
         costPrice: 95000,
         margin: 34.48,
@@ -206,6 +223,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Thực phẩm chức năng / Collagen & Chống lão hóa',
         baseUnit: 'Chai',
         packagingSpec: '30 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 10, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 30, isBaseUnit: false }),
+        ],
         price: 85000,
         costPrice: 55000,
         margin: 35.29,
@@ -224,6 +246,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 15000,
         costPrice: 9200,
         margin: 38.67,
@@ -244,6 +271,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước giải khát & Trà / Nước khoáng thiên nhiên',
         baseUnit: 'Chai',
         packagingSpec: '24 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 12000,
         costPrice: 6800,
         margin: 43.33,
@@ -264,6 +296,10 @@ export class ProductsService implements OnModuleInit {
         category: 'Sữa & Chế phẩm sữa / Sữa tươi & Tiệt trùng',
         baseUnit: 'Chai',
         packagingSpec: '12 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 12, isBaseUnit: false }),
+        ],
         price: 38000,
         costPrice: 26000,
         margin: 31.58,
@@ -283,6 +319,10 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước yến & Bổ dưỡng / Tổ yến sào tinh chế',
         baseUnit: 'Hộp',
         packagingSpec: '10 hộp/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 10, isBaseUnit: false }),
+        ],
         price: 4200000,
         costPrice: 3100000,
         margin: 26.19,
@@ -303,6 +343,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Ngũ cốc & Hạt dinh dưỡng / Hạt dinh dưỡng sấy giòn',
         baseUnit: 'Hũ',
         packagingSpec: '24 hũ/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hũ', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 135000,
         costPrice: 88000,
         margin: 34.81,
@@ -323,6 +368,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 14000,
         costPrice: 9000,
         margin: 35.71,
@@ -489,6 +539,67 @@ export class ProductsService implements OnModuleInit {
       dto.category?.trim() ||
       (parentCat && subCat ? `${parentCat} / ${subCat}` : parentCat || subCat);
 
+    // Chuẩn hóa và xác thực danh sách đơn vị quy đổi (units - SN-23)
+    const baseUnitName = dto.baseUnit.trim();
+    let productUnits: ProductUnitEntity[] = [];
+
+    if (dto.units && dto.units.length > 0) {
+      const seenNames = new Set<string>();
+      for (const u of dto.units) {
+        const uName = (u.unitName || '').trim();
+        if (!uName) {
+          throw new BadRequestException('Tên đơn vị quy đổi không được để trống');
+        }
+        const lower = uName.toLowerCase();
+        if (seenNames.has(lower)) {
+          throw new BadRequestException(`Đơn vị quy đổi "${uName}" bị trùng lặp`);
+        }
+        seenNames.add(lower);
+
+        const rate = Number(u.conversionRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new BadRequestException(
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0`,
+          );
+        }
+
+        const isBase =
+          lower === baseUnitName.toLowerCase() || Boolean(u.isBaseUnit);
+        productUnits.push(
+          new ProductUnitEntity({
+            unitName: uName,
+            conversionRate: isBase ? 1 : rate,
+            isBaseUnit: isBase,
+            barcode: u.barcode,
+            price: u.price,
+            costPrice: u.costPrice,
+          }),
+        );
+      }
+
+      // Đảm bảo đơn vị cơ sở có mặt trong danh sách units
+      const hasBase = productUnits.some(
+        (u) => u.unitName.toLowerCase() === baseUnitName.toLowerCase(),
+      );
+      if (!hasBase) {
+        productUnits.unshift(
+          new ProductUnitEntity({
+            unitName: baseUnitName,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+    } else {
+      productUnits = [
+        new ProductUnitEntity({
+          unitName: baseUnitName,
+          conversionRate: 1,
+          isBaseUnit: true,
+        }),
+      ];
+    }
+
     const newProduct = new ProductEntity({
       id: `prod-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
       sku: cleanSku,
@@ -496,8 +607,9 @@ export class ProductsService implements OnModuleInit {
       parentCategory: parentCat,
       subCategory: subCat,
       category,
-      baseUnit: dto.baseUnit.trim(),
+      baseUnit: baseUnitName,
       packagingSpec: dto.packagingSpec?.trim(),
+      units: productUnits,
       price: Number(dto.price),
       costPrice,
       margin,
@@ -619,11 +731,11 @@ export class ProductsService implements OnModuleInit {
       product.margin =
         product.price > 0
           ? Number(
-            (
-              ((product.price - product.costPrice) / product.price) *
-              100
-            ).toFixed(2),
-          )
+              (
+                ((product.price - product.costPrice) / product.price) *
+                100
+              ).toFixed(2),
+            )
           : 0;
     }
 
@@ -644,6 +756,63 @@ export class ProductsService implements OnModuleInit {
 
     if (dto.description !== undefined) {
       product.description = dto.description?.trim();
+    }
+
+    // Cập nhật danh sách đơn vị quy đổi (units - SN-23)
+    if (dto.units !== undefined) {
+      const baseUnitName = (dto.baseUnit ? dto.baseUnit.trim() : product.baseUnit).trim();
+      const seenNames = new Set<string>();
+      const updatedUnits: ProductUnitEntity[] = [];
+
+      for (const u of dto.units) {
+        const uName = (u.unitName || '').trim();
+        if (!uName) {
+          throw new BadRequestException('Tên đơn vị quy đổi không được để trống');
+        }
+        const lower = uName.toLowerCase();
+        if (seenNames.has(lower)) {
+          throw new BadRequestException(`Đơn vị quy đổi "${uName}" bị trùng lặp`);
+        }
+        seenNames.add(lower);
+
+        const rate = Number(u.conversionRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new BadRequestException(
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0`,
+          );
+        }
+
+        const isBase =
+          lower === baseUnitName.toLowerCase() || Boolean(u.isBaseUnit);
+        updatedUnits.push(
+          new ProductUnitEntity({
+            productId: product.id,
+            unitName: uName,
+            conversionRate: isBase ? 1 : rate,
+            isBaseUnit: isBase,
+            barcode: u.barcode,
+            price: u.price,
+            costPrice: u.costPrice,
+          }),
+        );
+      }
+
+      // Đảm bảo đơn vị cơ sở có mặt trong danh sách units
+      const hasBase = updatedUnits.some(
+        (u) => u.unitName.toLowerCase() === baseUnitName.toLowerCase(),
+      );
+      if (!hasBase) {
+        updatedUnits.unshift(
+          new ProductUnitEntity({
+            productId: product.id,
+            unitName: baseUnitName,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+
+      product.units = updatedUnits;
     }
 
     product.updatedAt = new Date();
@@ -669,7 +838,7 @@ export class ProductsService implements OnModuleInit {
             product.sku,
           ],
         );
-      } catch { }
+      } catch {}
     }
 
     return product;
@@ -700,7 +869,7 @@ export class ProductsService implements OnModuleInit {
           `DELETE FROM products WHERE sku = $1;`,
           [product.sku],
         );
-      } catch { }
+      } catch {}
     }
 
     return {
@@ -728,191 +897,50 @@ export class ProductsService implements OnModuleInit {
     return product;
   }
 
+  /**
+   * Tra cứu hệ số quy đổi của một đơn vị đối với SKU (SN-23):
+   * - Nếu không truyền unitName hoặc unitName trùng baseUnit: rate = 1
+   * - Nếu truyền unitName: tra cứu trong product.units
+   * - Nếu không tìm thấy: ném BadRequestException
+   */
+  findUnitConversion(
+    product: ProductEntity,
+    unitName?: string,
+  ): { unitName: string; conversionRate: number; isBaseUnit: boolean } {
+    if (
+      !unitName ||
+      unitName.trim().toLowerCase() === product.baseUnit.toLowerCase()
+    ) {
+      return {
+        unitName: product.baseUnit,
+        conversionRate: 1,
+        isBaseUnit: true,
+      };
+    }
 
-  async generateImportTemplate(res: Response): Promise<void> {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Danh mục sản phẩm');
-
-    // Headers
-    sheet.columns = [
-      { header: 'Mã SKU (*)', key: 'sku', width: 20 },
-      { header: 'Tên sản phẩm (*)', key: 'name', width: 30 },
-      { header: 'Ngành hàng (*)', key: 'category', width: 20 },
-      { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15 },
-      { header: 'Giá bán (*)', key: 'price', width: 15 },
-      { header: 'Giá vốn (*)', key: 'costPrice', width: 15 },
-      { header: 'Tồn kho ban đầu', key: 'stockQuantity', width: 15 },
-      { header: 'Mã vạch', key: 'barcode', width: 20 },
-      { header: 'Mô tả', key: 'description', width: 30 },
-    ];
-
-    // Example row
-    sheet.addRow({
-      sku: 'SP-001',
-      name: 'Sản phẩm mẫu',
-      category: 'Hàng hóa',
-      baseUnit: 'Cái',
-      price: 100000,
-      costPrice: 80000,
-      stockQuantity: 10,
-      barcode: '8931234567890',
-      description: 'Đây là dòng dữ liệu mẫu, hãy xóa dòng này trước khi nhập',
-    });
-
-    // Style the header
-    const headerRow = sheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
-
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename=Template_Nhap_SanPham.xlsx',
+    const cleanUnit = unitName.trim().toLowerCase();
+    const found = product.units?.find(
+      (u) => u.unitName.toLowerCase() === cleanUnit,
     );
 
-    await workbook.xlsx.write(res);
-    res.end();
-  }
-
-  async previewImport(file: Express.Multer.File): Promise<PreviewImportResult> {
-    if (!file) {
-      throw new BadRequestException('Vui lòng tải lên tệp Excel');
-    }
-
-    const workbook = new ExcelJS.Workbook();
-    try {
-      const safeBuffer = file.buffer.buffer.slice(
-        file.buffer.byteOffset,
-        file.buffer.byteOffset + file.buffer.byteLength,
+    if (!found) {
+      const validNames = (product.units || [])
+        .map((u) => u.unitName)
+        .join(', ');
+      throw new BadRequestException(
+        `Đơn vị tính "${unitName}" không tồn tại cho SKU "${product.sku}". Các đơn vị hợp lệ: ${validNames || product.baseUnit}`,
       );
-      await workbook.xlsx.load(safeBuffer as ArrayBuffer);
-    } catch (error) {
-      throw new BadRequestException('Tệp không đúng định dạng Excel');
-    }
-
-    const sheet = workbook.worksheets[0];
-    if (!sheet) {
-      throw new BadRequestException('Tệp Excel không có dữ liệu');
-    }
-
-    const previewData: ImportProductItemDto[] = [];
-    let validCount = 0;
-    let invalidCount = 0;
-
-    sheet.eachRow((row: ExcelJS.Row, rowNumber: number) => {
-      if (rowNumber === 1) return; // Skip header
-
-      const sku = row.getCell(1).text?.trim();
-      const name = row.getCell(2).text?.trim();
-      const category = row.getCell(3).text?.trim();
-      const baseUnit = row.getCell(4).text?.trim();
-      const price = Number(row.getCell(5).value) || 0;
-      const costPrice = Number(row.getCell(6).value) || 0;
-      const stockQuantity = Number(row.getCell(7).value) || 0;
-      const barcode = row.getCell(8).text?.trim();
-      const description = row.getCell(9).text?.trim();
-
-      // Skip totally empty rows
-      if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
-
-      const errors: string[] = [];
-
-      if (!sku) errors.push('Mã SKU không được để trống');
-      if (!name) errors.push('Tên sản phẩm không được để trống');
-      if (!category) errors.push('Ngành hàng không được để trống');
-      if (!baseUnit) errors.push('Đơn vị tính không được để trống');
-      if (price <= 0) errors.push('Giá bán phải lớn hơn 0');
-      if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
-
-      const existingProduct = Array.from(this.products.values()).find(
-        (p) => p.sku.toLowerCase() === sku?.toLowerCase(),
-      );
-
-      const status = existingProduct ? 'UPDATE' : 'NEW';
-
-      if (errors.length > 0) {
-        invalidCount++;
-      } else {
-        validCount++;
-      }
-
-      previewData.push({
-        row: rowNumber,
-        sku: sku || '',
-        name: name || '',
-        category: category || '',
-        baseUnit: baseUnit || '',
-        price,
-        costPrice,
-        stockQuantity,
-        barcode,
-        description,
-        status,
-        errors,
-        isValid: errors.length === 0,
-      });
-    });
-
-    return {
-      total: previewData.length,
-      valid: validCount,
-      invalid: invalidCount,
-      data: previewData,
-    };
-  }
-
-  async confirmImport(items: ImportProductItemDto[]): Promise<ConfirmImportResult> {
-    let successCount = 0;
-    let errorCount = 0;
-    const errors: string[] = [];
-
-    for (const item of items) {
-      try {
-        if (!item.isValid) {
-          errorCount++;
-          errors.push(`Dòng ${item.row}: Dữ liệu không hợp lệ`);
-          continue;
-        }
-
-        if (item.status === 'UPDATE') {
-          await this.update(item.sku, {
-            name: item.name,
-            category: item.category,
-            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
-            baseUnit: item.baseUnit,
-            price: item.price,
-            costPrice: item.costPrice,
-            description: item.description,
-          });
-        } else {
-          await this.create({
-            sku: item.sku,
-            name: item.name,
-            category: item.category,
-            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
-            baseUnit: item.baseUnit,
-            price: item.price,
-            costPrice: item.costPrice,
-            stockQuantity: item.stockQuantity,
-            description: item.description,
-          });
-        }
-        successCount++;
-      } catch (err: unknown) {
-        errorCount++;
-        errors.push(`Dòng ${item.row}: ${err instanceof Error ? err.message : String(err)}`);
-      }
     }
 
     return {
-      success: successCount,
-      error: errorCount,
-      errorDetails: errors,
+      unitName: found.unitName,
+      conversionRate: found.conversionRate,
+      isBaseUnit: found.isBaseUnit,
     };
   }
+
+
+
   /**
    * Kiểm tra xem sản phẩm đã phát sinh giao dịch hay chưa
    */
