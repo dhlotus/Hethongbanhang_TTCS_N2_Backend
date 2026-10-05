@@ -11,6 +11,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductEntity } from './entities/product.entity';
+import { ProductUnitEntity } from './entities/product-unit.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
 
 /**
@@ -156,6 +157,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Sữa & Chế phẩm sữa / Sữa bột công thức / Sữa bột người lớn & cao tuổi',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 520000,
         costPrice: 380000,
         margin: 26.92,
@@ -177,6 +183,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Sữa & Chế phẩm sữa / Sữa hạt organic',
         baseUnit: 'Hộp',
         packagingSpec: '48 hộp/thùng (12 lốc x 4 hộp)',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 4, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 48, isBaseUnit: false }),
+        ],
         price: 18000,
         costPrice: 11500,
         margin: 36.11,
@@ -198,6 +209,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước yến & Bổ dưỡng / Nước yến chưng sẵn',
         baseUnit: 'Hũ',
         packagingSpec: '30 hũ/thùng (5 hộp x 6 hũ)',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hũ', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 30, isBaseUnit: false }),
+        ],
         price: 65000,
         costPrice: 42000,
         margin: 35.38,
@@ -219,6 +235,10 @@ export class ProductsService implements OnModuleInit {
         category: 'Ngũ cốc & Hạt dinh dưỡng / Ngũ cốc hạt mầm',
         baseUnit: 'Túi',
         packagingSpec: '20 túi/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Túi', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 20, isBaseUnit: false }),
+        ],
         price: 145000,
         costPrice: 95000,
         margin: 34.48,
@@ -237,6 +257,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Thực phẩm chức năng / Collagen & Chống lão hóa',
         baseUnit: 'Chai',
         packagingSpec: '30 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 10, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 30, isBaseUnit: false }),
+        ],
         price: 85000,
         costPrice: 55000,
         margin: 35.29,
@@ -256,6 +281,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 15000,
         costPrice: 9200,
         margin: 38.67,
@@ -277,6 +307,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước giải khát & Trà / Nước khoáng thiên nhiên',
         baseUnit: 'Chai',
         packagingSpec: '24 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 12000,
         costPrice: 6800,
         margin: 43.33,
@@ -298,6 +333,10 @@ export class ProductsService implements OnModuleInit {
         category: 'Sữa & Chế phẩm sữa / Sữa tươi & Tiệt trùng',
         baseUnit: 'Chai',
         packagingSpec: '12 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 12, isBaseUnit: false }),
+        ],
         price: 38000,
         costPrice: 26000,
         margin: 31.58,
@@ -318,6 +357,10 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước yến & Bổ dưỡng / Tổ yến sào tinh chế',
         baseUnit: 'Hộp',
         packagingSpec: '10 hộp/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 10, isBaseUnit: false }),
+        ],
         price: 4200000,
         costPrice: 3100000,
         margin: 26.19,
@@ -339,6 +382,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Ngũ cốc & Hạt dinh dưỡng / Hạt dinh dưỡng sấy giòn',
         baseUnit: 'Hũ',
         packagingSpec: '24 hũ/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hũ', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 135000,
         costPrice: 88000,
         margin: 34.81,
@@ -360,6 +408,11 @@ export class ProductsService implements OnModuleInit {
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 14000,
         costPrice: 9000,
         margin: 35.71,
@@ -537,6 +590,67 @@ export class ProductsService implements OnModuleInit {
       dto.category?.trim() ||
       (parentCat && subCat ? `${parentCat} / ${subCat}` : parentCat || subCat);
 
+    // Chuẩn hóa và xác thực danh sách đơn vị quy đổi (units - SN-23)
+    const baseUnitName = dto.baseUnit.trim();
+    let productUnits: ProductUnitEntity[] = [];
+
+    if (dto.units && dto.units.length > 0) {
+      const seenNames = new Set<string>();
+      for (const u of dto.units) {
+        const uName = (u.unitName || '').trim();
+        if (!uName) {
+          throw new BadRequestException('Tên đơn vị quy đổi không được để trống');
+        }
+        const lower = uName.toLowerCase();
+        if (seenNames.has(lower)) {
+          throw new BadRequestException(`Đơn vị quy đổi "${uName}" bị trùng lặp`);
+        }
+        seenNames.add(lower);
+
+        const rate = Number(u.conversionRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new BadRequestException(
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0`,
+          );
+        }
+
+        const isBase =
+          lower === baseUnitName.toLowerCase() || Boolean(u.isBaseUnit);
+        productUnits.push(
+          new ProductUnitEntity({
+            unitName: uName,
+            conversionRate: isBase ? 1 : rate,
+            isBaseUnit: isBase,
+            barcode: u.barcode,
+            price: u.price,
+            costPrice: u.costPrice,
+          }),
+        );
+      }
+
+      // Đảm bảo đơn vị cơ sở có mặt trong danh sách units
+      const hasBase = productUnits.some(
+        (u) => u.unitName.toLowerCase() === baseUnitName.toLowerCase(),
+      );
+      if (!hasBase) {
+        productUnits.unshift(
+          new ProductUnitEntity({
+            unitName: baseUnitName,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+    } else {
+      productUnits = [
+        new ProductUnitEntity({
+          unitName: baseUnitName,
+          conversionRate: 1,
+          isBaseUnit: true,
+        }),
+      ];
+    }
+
     const newProduct = new ProductEntity({
       id: `prod-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
       sku: cleanSku,
@@ -545,8 +659,9 @@ export class ProductsService implements OnModuleInit {
       parentCategory: parentCat,
       subCategory: subCat,
       category,
-      baseUnit: dto.baseUnit.trim(),
+      baseUnit: baseUnitName,
       packagingSpec: dto.packagingSpec?.trim(),
+      units: productUnits,
       price: Number(dto.price),
       costPrice,
       margin,
@@ -720,6 +835,63 @@ export class ProductsService implements OnModuleInit {
       product.description = dto.description?.trim();
     }
 
+    // Cập nhật danh sách đơn vị quy đổi (units - SN-23)
+    if (dto.units !== undefined) {
+      const baseUnitName = (dto.baseUnit ? dto.baseUnit.trim() : product.baseUnit).trim();
+      const seenNames = new Set<string>();
+      const updatedUnits: ProductUnitEntity[] = [];
+
+      for (const u of dto.units) {
+        const uName = (u.unitName || '').trim();
+        if (!uName) {
+          throw new BadRequestException('Tên đơn vị quy đổi không được để trống');
+        }
+        const lower = uName.toLowerCase();
+        if (seenNames.has(lower)) {
+          throw new BadRequestException(`Đơn vị quy đổi "${uName}" bị trùng lặp`);
+        }
+        seenNames.add(lower);
+
+        const rate = Number(u.conversionRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new BadRequestException(
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0`,
+          );
+        }
+
+        const isBase =
+          lower === baseUnitName.toLowerCase() || Boolean(u.isBaseUnit);
+        updatedUnits.push(
+          new ProductUnitEntity({
+            productId: product.id,
+            unitName: uName,
+            conversionRate: isBase ? 1 : rate,
+            isBaseUnit: isBase,
+            barcode: u.barcode,
+            price: u.price,
+            costPrice: u.costPrice,
+          }),
+        );
+      }
+
+      // Đảm bảo đơn vị cơ sở có mặt trong danh sách units
+      const hasBase = updatedUnits.some(
+        (u) => u.unitName.toLowerCase() === baseUnitName.toLowerCase(),
+      );
+      if (!hasBase) {
+        updatedUnits.unshift(
+          new ProductUnitEntity({
+            productId: product.id,
+            unitName: baseUnitName,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+
+      product.units = updatedUnits;
+    }
+
     product.updatedAt = new Date();
     this.products.set(product.id, product);
 
@@ -822,6 +994,48 @@ export class ProductsService implements OnModuleInit {
     product.updatedAt = new Date();
     this.products.set(product.id, product);
     return product;
+  }
+
+  /**
+   * Tra cứu hệ số quy đổi của một đơn vị đối với SKU (SN-23):
+   * - Nếu không truyền unitName hoặc unitName trùng baseUnit: rate = 1
+   * - Nếu truyền unitName: tra cứu trong product.units
+   * - Nếu không tìm thấy: ném BadRequestException
+   */
+  findUnitConversion(
+    product: ProductEntity,
+    unitName?: string,
+  ): { unitName: string; conversionRate: number; isBaseUnit: boolean } {
+    if (
+      !unitName ||
+      unitName.trim().toLowerCase() === product.baseUnit.toLowerCase()
+    ) {
+      return {
+        unitName: product.baseUnit,
+        conversionRate: 1,
+        isBaseUnit: true,
+      };
+    }
+
+    const cleanUnit = unitName.trim().toLowerCase();
+    const found = product.units?.find(
+      (u) => u.unitName.toLowerCase() === cleanUnit,
+    );
+
+    if (!found) {
+      const validNames = (product.units || [])
+        .map((u) => u.unitName)
+        .join(', ');
+      throw new BadRequestException(
+        `Đơn vị tính "${unitName}" không tồn tại cho SKU "${product.sku}". Các đơn vị hợp lệ: ${validNames || product.baseUnit}`,
+      );
+    }
+
+    return {
+      unitName: found.unitName,
+      conversionRate: found.conversionRate,
+      isBaseUnit: found.isBaseUnit,
+    };
   }
 
 

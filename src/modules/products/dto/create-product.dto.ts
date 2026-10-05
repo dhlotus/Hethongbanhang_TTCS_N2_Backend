@@ -1,5 +1,6 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsArray,
   IsEnum,
   IsNotEmpty,
   IsNumber,
@@ -7,8 +8,10 @@ import {
   IsString,
   Matches,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { ProductStatus } from '../../../common/enums/product-status.enum';
+import { ProductUnitDto } from './product-unit.dto';
 
 /**
  * DTO Tạo mới Sản phẩm / SKU (SN-138 & SN-20):
@@ -135,4 +138,13 @@ export class CreateProductDto {
   @IsOptional()
   @IsString({ message: 'Mô tả phải là chuỗi ký tự' })
   description?: string;
+
+  @IsOptional()
+  @IsArray({ message: 'Danh sách đơn vị quy đổi phải là mảng' })
+  @ValidateNested({ each: true })
+  @Type(() => ProductUnitDto)
+  @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
+    return value ?? obj.product_units;
+  })
+  units?: ProductUnitDto[];
 }

@@ -1,9 +1,10 @@
 import { ProductStatus } from '../../../common/enums/product-status.enum';
+import { ProductUnitEntity } from './product-unit.entity';
 
 /**
- * Thực thể Sản phẩm / SKU (Bảng products) - SN-138 & SN-20:
- * Quản lý thông tin SKU, danh mục 2 cấp, quy cách đóng gói, tồn kho,
- * giá bán và giá vốn nhạy cảm (bảo mật theo vai trò RBAC).
+ * Thực thể Sản phẩm / SKU (Bảng products) - SN-138, SN-20 & SN-23:
+ * Quản lý thông tin SKU, danh mục 2 cấp, quy cách đóng gói, danh sách đơn vị quy đổi,
+ * tồn kho, giá bán và giá vốn nhạy cảm (bảo mật theo vai trò RBAC).
  */
 export class ProductEntity {
   id: string;
@@ -23,6 +24,7 @@ export class ProductEntity {
   imageUrl?: string;
   description?: string;
   hasTransactions: boolean;
+  units: ProductUnitEntity[];
   createdAt: Date;
   updatedAt: Date;
 
@@ -83,6 +85,29 @@ export class ProductEntity {
       this.margin = 0;
     }
 
+    // Đơn vị quy đổi (units)
+    const rawUnits = (partial.units || partial.product_units || []) as unknown[];
+    this.units = Array.isArray(rawUnits)
+      ? rawUnits.map((u) => (u instanceof ProductUnitEntity ? u : new ProductUnitEntity(u as Record<string, unknown>)))
+      : [];
+
+    // Luôn đảm bảo đơn vị cơ sở (baseUnit) có mặt trong danh sách units với conversionRate = 1 và isBaseUnit = true
+    if (this.baseUnit) {
+      const hasBase = this.units.some(
+        (u) => u.unitName.toLowerCase() === this.baseUnit.toLowerCase() || u.isBaseUnit,
+      );
+      if (!hasBase) {
+        this.units.unshift(
+          new ProductUnitEntity({
+            productId: this.id,
+            unitName: this.baseUnit,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+    }
+
     if (this.stockQuantity === undefined) this.stockQuantity = 0;
     if (!this.status) this.status = ProductStatus.ACTIVE;
     if (this.hasTransactions === undefined) this.hasTransactions = false;
@@ -120,6 +145,10 @@ export class ProductEntity {
 
   get image_url(): string | undefined {
     return this.imageUrl;
+  }
+
+  get product_units(): ProductUnitEntity[] {
+    return this.units;
   }
 
   get created_at(): Date {
@@ -160,6 +189,8 @@ export class ProductEntity {
       image_url: this.imageUrl,
       description: this.description,
       hasTransactions: this.hasTransactions,
+      units: this.units ? this.units.map((u) => (typeof u.toJSON === 'function' ? u.toJSON() : u)) : [],
+      product_units: this.units ? this.units.map((u) => (typeof u.toJSON === 'function' ? u.toJSON() : u)) : [],
       createdAt: this.createdAt,
       created_at: this.createdAt,
       updatedAt: this.updatedAt,
