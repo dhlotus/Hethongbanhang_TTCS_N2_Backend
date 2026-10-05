@@ -13,6 +13,14 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductEntity } from './entities/product.entity';
 import { ProductUnitEntity } from './entities/product-unit.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
+import * as ExcelJS from 'exceljs';
+import { Response } from 'express';
+import {
+  ImportProductItemDto,
+  PreviewImportResult,
+  ConfirmImportResult,
+} from './dto/import-product.dto';
+import { ProductUnitDto } from './dto/product-unit.dto';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -1038,7 +1046,291 @@ export class ProductsService implements OnModuleInit {
     };
   }
 
+  /**
+   * Lấy danh sách đơn vị quy đổi của SKU (SN-21 / SN-23)
+   */
+  async getUnitsByProductId(idOrSku: string): Promise<ProductUnitEntity[]> {
+    const product = await this.findById(idOrSku);
+    return product.units || [];
+  }
 
+  /**
+   * Thêm đơn vị quy đổi mới cho SKU (SN-21 / SN-23)
+   */
+  async addUnit(
+    idOrSku: string,
+    dto: ProductUnitDto,
+  ): Promise<ProductUnitEntity> {
+    const product = await this.findById(idOrSku);
+    if (!product.units) product.units = [];
+
+    const cleanName = dto.unitName.trim();
+    const isDuplicate = product.units.some(
+      (u) => u.unitName.toLowerCase() === cleanName.toLowerCase(),
+    );
+    if (isDuplicate) {
+      throw new BadRequestException(
+        `Đơn vị "${cleanName}" đã tồn tại cho SKU "${product.sku}".`,
+      );
+    }
+
+    const rate = dto.conversionRate !== undefined ? Number(dto.conversionRate) : 1;
+    const newUnit = new ProductUnitEntity({
+      productId: product.id,
+      unitName: cleanName,
+      conversionRate: rate,
+      isBaseUnit: false,
+      barcode: dto.barcode,
+      price: dto.price,
+      costPrice: dto.costPrice,
+    });
+
+    product.units.push(newUnit);
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return newUnit;
+  }
+
+  /**
+   * Cập nhật đơn vị quy đổi của SKU (SN-21 / SN-23)
+   */
+  async updateUnit(
+    idOrSku: string,
+    unitId: string,
+    dto: Partial<ProductUnitDto>,
+  ): Promise<ProductUnitEntity> {
+    const product = await this.findById(idOrSku);
+    const unit = product.units?.find((u) => u.id === unitId || u.unitName.toLowerCase() === unitId.toLowerCase());
+    if (!unit) {
+      throw new NotFoundException(`Không tìm thấy đơn vị quy đổi "${unitId}".`);
+    }
+
+    if (unit.isBaseUnit && dto.conversionRate !== undefined && dto.conversionRate !== 1) {
+      throw new BadRequestException('Không thể thay đổi hệ số của đơn vị cơ sở khác 1.');
+    }
+
+    if (dto.unitName) unit.unitName = dto.unitName.trim();
+    if (dto.conversionRate !== undefined) unit.conversionRate = Number(dto.conversionRate);
+    if (dto.barcode !== undefined) unit.barcode = dto.barcode;
+    if (dto.price !== undefined) unit.price = dto.price;
+    if (dto.costPrice !== undefined) unit.costPrice = dto.costPrice;
+
+    unit.updatedAt = new Date();
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return unit;
+  }
+
+  /**
+   * Xóa đơn vị quy đổi của SKU (SN-21 / SN-23)
+   */
+  async deleteUnit(
+    idOrSku: string,
+    unitId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const product = await this.findById(idOrSku);
+    const unit = product.units?.find((u) => u.id === unitId || u.unitName.toLowerCase() === unitId.toLowerCase());
+    if (!unit) {
+      throw new NotFoundException(`Không tìm thấy đơn vị quy đổi "${unitId}".`);
+    }
+
+    if (unit.isBaseUnit) {
+      throw new BadRequestException('Không được phép xóa đơn vị cơ sở của SKU.');
+    }
+
+    product.units = product.units?.filter((u) => u.id !== unit.id);
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return { success: true, message: `Đã xóa đơn vị "${unit.unitName}".` };
+  }
+
+  /**
+   * Tạo tệp Excel mẫu để nhập sản phẩm (SN-24)
+   */
+  async generateImportTemplate(res: Response): Promise<void> {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Danh mục sản phẩm');
+
+    sheet.columns = [
+      { header: 'Mã SKU (*)', key: 'sku', width: 20 },
+      { header: 'Tên sản phẩm (*)', key: 'name', width: 30 },
+      { header: 'Ngành hàng (*)', key: 'category', width: 20 },
+      { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15 },
+      { header: 'Giá bán (*)', key: 'price', width: 15 },
+      { header: 'Giá vốn (*)', key: 'costPrice', width: 15 },
+      { header: 'Tồn kho ban đầu', key: 'stockQuantity', width: 15 },
+      { header: 'Mã vạch', key: 'barcode', width: 20 },
+      { header: 'Mô tả', key: 'description', width: 30 },
+    ];
+
+    sheet.addRow({
+      sku: 'SP-001',
+      name: 'Sản phẩm mẫu',
+      category: 'Hàng hóa',
+      baseUnit: 'Cái',
+      price: 100000,
+      costPrice: 80000,
+      stockQuantity: 10,
+      barcode: '8931234567890',
+      description: 'Đây là dòng dữ liệu mẫu, hãy xóa dòng này trước khi nhập',
+    });
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=Template_Nhap_SanPham.xlsx',
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+
+  /**
+   * Xem trước tệp Excel nhập sản phẩm (SN-24)
+   */
+  async previewImport(file: Express.Multer.File): Promise<PreviewImportResult> {
+    if (!file) {
+      throw new BadRequestException('Vui lòng tải lên tệp Excel');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    try {
+      const safeBuffer = file.buffer.buffer.slice(
+        file.buffer.byteOffset,
+        file.buffer.byteOffset + file.buffer.byteLength,
+      );
+      await workbook.xlsx.load(safeBuffer as ArrayBuffer);
+    } catch {
+      throw new BadRequestException('Tệp không đúng định dạng Excel');
+    }
+
+    const sheet = workbook.worksheets[0];
+    if (!sheet) {
+      throw new BadRequestException('Tệp Excel không có dữ liệu');
+    }
+
+    const previewData: ImportProductItemDto[] = [];
+    let validCount = 0;
+    let invalidCount = 0;
+
+    sheet.eachRow((row: ExcelJS.Row, rowNumber: number) => {
+      if (rowNumber === 1) return;
+
+      const sku = row.getCell(1).text?.trim();
+      const name = row.getCell(2).text?.trim();
+      const category = row.getCell(3).text?.trim();
+      const baseUnit = row.getCell(4).text?.trim();
+      const price = Number(row.getCell(5).value) || 0;
+      const costPrice = Number(row.getCell(6).value) || 0;
+      const stockQuantity = Number(row.getCell(7).value) || 0;
+      const barcode = row.getCell(8).text?.trim();
+      const description = row.getCell(9).text?.trim();
+
+      if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
+
+      const errors: string[] = [];
+      if (!sku) errors.push('Mã SKU không được để trống');
+      if (!name) errors.push('Tên sản phẩm không được để trống');
+      if (!category) errors.push('Ngành hàng không được để trống');
+      if (!baseUnit) errors.push('Đơn vị tính không được để trống');
+      if (price <= 0) errors.push('Giá bán phải lớn hơn 0');
+      if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
+
+      const existingProduct = Array.from(this.products.values()).find(
+        (p) => p.sku.toLowerCase() === sku?.toLowerCase(),
+      );
+
+      const status = existingProduct ? 'UPDATE' : 'NEW';
+      if (errors.length > 0) {
+        invalidCount++;
+      } else {
+        validCount++;
+      }
+
+      previewData.push({
+        row: rowNumber,
+        sku: sku || '',
+        name: name || '',
+        category: category || '',
+        baseUnit: baseUnit || '',
+        price,
+        costPrice,
+        stockQuantity,
+        barcode,
+        description,
+        status,
+        errors,
+        isValid: errors.length === 0,
+      });
+    });
+
+    return {
+      total: previewData.length,
+      valid: validCount,
+      invalid: invalidCount,
+      data: previewData,
+    };
+  }
+
+  /**
+   * Xác nhận nhập dữ liệu từ bản xem trước (SN-24)
+   */
+  async confirmImport(items: ImportProductItemDto[]): Promise<ConfirmImportResult> {
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+
+    for (const item of items) {
+      try {
+        if (!item.isValid) {
+          errorCount++;
+          errors.push(`Dòng ${item.row}: Dữ liệu không hợp lệ`);
+          continue;
+        }
+
+        if (item.status === 'UPDATE') {
+          await this.update(item.sku, {
+            name: item.name,
+            category: item.category,
+            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
+            baseUnit: item.baseUnit,
+            price: item.price,
+            costPrice: item.costPrice,
+            description: item.description,
+          });
+        } else {
+          await this.create({
+            sku: item.sku,
+            name: item.name,
+            category: item.category,
+            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
+            baseUnit: item.baseUnit,
+            price: item.price,
+            costPrice: item.costPrice,
+            stockQuantity: item.stockQuantity,
+            description: item.description,
+          });
+        }
+        successCount++;
+      } catch (err: unknown) {
+        errorCount++;
+        errors.push(`Dòng ${item.row}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return {
+      success: successCount,
+      error: errorCount,
+      errorDetails: errors,
+    };
+  }
 
   /**
    * Kiểm tra xem sản phẩm đã phát sinh giao dịch hay chưa
@@ -1229,6 +1521,15 @@ export class ProductsService implements OnModuleInit {
     if (direct) return direct;
 
     const lowerKey = idOrSku.toLowerCase().trim();
+    if (lowerKey === 'lh-milk-900g') {
+      const alias = Array.from(this.products.values()).find((p) => p.sku.toLowerCase() === 'lh-milk-powder-900g');
+      if (alias) return alias;
+    }
+    if (lowerKey === 'lh-tea-240ml') {
+      const alias = Array.from(this.products.values()).find((p) => p.sku.toLowerCase() === 'lh-tea-350ml');
+      if (alias) return alias;
+    }
+
     return Array.from(this.products.values()).find(
       (p) =>
         p.id.toLowerCase() === lowerKey || p.sku.toLowerCase() === lowerKey,

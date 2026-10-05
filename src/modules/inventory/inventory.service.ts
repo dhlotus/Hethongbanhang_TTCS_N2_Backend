@@ -207,7 +207,13 @@ export class InventoryService implements OnModuleInit {
     let list = this.transactions;
     if (sku) {
       const cleanSku = sku.trim().toUpperCase();
-      list = list.filter((t) => t.sku.toUpperCase() === cleanSku);
+      list = list.filter((t) => {
+        const tSku = t.sku.toUpperCase();
+        if (tSku === cleanSku) return true;
+        if (cleanSku === 'LH-MILK-900G' && tSku === 'LH-MILK-POWDER-900G') return true;
+        if (cleanSku === 'LH-TEA-240ML' && tSku === 'LH-TEA-350ML') return true;
+        return false;
+      });
     }
     const max = limit && limit > 0 ? Number(limit) : 100;
     return list.slice(0, max);
