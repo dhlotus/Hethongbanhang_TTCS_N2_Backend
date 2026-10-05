@@ -34,17 +34,23 @@ export class InventoryTransactionEntity {
   performedBy: string;        // ID hoặc tên người thực hiện giao dịch
   createdAt: Date;            // Thời điểm ghi sổ
 
+  // Các trường alias tương thích với UI Frontend (SN-21 / SN-23)
+  type?: 'IMPORT' | 'EXPORT' | 'ADJUSTMENT' | 'TRANSFER' | 'ORDER';
+  unitName?: string;
+  conversionFactor?: number;
+  adjustedBy?: string;
+
   constructor(partial: Partial<InventoryTransactionEntity> & Record<string, unknown>) {
     this.id = (partial.id as string) || `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     this.productId = (partial.productId || partial.product_id) as string;
     this.sku = (partial.sku as string) || '';
     this.productName = (partial.productName || partial.product_name) as string || '';
-    this.transactionType = (partial.transactionType || partial.transaction_type) as 'IMPORT' | 'EXPORT' | 'ADJUSTMENT' | 'TRANSFER' | 'ORDER' || 'ADJUSTMENT';
+    this.transactionType = (partial.transactionType || partial.transaction_type || partial.type) as 'IMPORT' | 'EXPORT' | 'ADJUSTMENT' | 'TRANSFER' | 'ORDER' || 'ADJUSTMENT';
 
     this.inputQuantity = Number(partial.inputQuantity !== undefined ? partial.inputQuantity : partial.input_quantity);
-    this.inputUnit = (partial.inputUnit || partial.input_unit) as string || '';
+    this.inputUnit = (partial.inputUnit || partial.input_unit || partial.unitName) as string || '';
 
-    const rate = Number(partial.conversionRate !== undefined ? partial.conversionRate : partial.conversion_rate);
+    const rate = Number(partial.conversionRate !== undefined ? partial.conversionRate : (partial.conversion_rate !== undefined ? partial.conversion_rate : partial.conversionFactor));
     this.conversionRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
 
     const baseChange = partial.baseQuantityChange !== undefined 
@@ -59,8 +65,14 @@ export class InventoryTransactionEntity {
     this.reason = (partial.reason as string) || '';
     this.referenceCode = (partial.referenceCode || partial.reference_code) as string || `PK-${Date.now().toString().slice(-6)}`;
     this.warehouse = (partial.warehouse as string) || 'Kho Tổng Miền Nam - LOHA WH01';
-    this.performedBy = (partial.performedBy || partial.performed_by) as string || 'system';
+    this.performedBy = (partial.performedBy || partial.performed_by || partial.adjustedBy) as string || 'system';
     this.createdAt = partial.createdAt ? new Date(partial.createdAt) : new Date();
+
+    // Đồng bộ các trường alias
+    this.type = this.transactionType;
+    this.unitName = this.inputUnit;
+    this.conversionFactor = this.conversionRate;
+    this.adjustedBy = this.performedBy;
   }
 
   toJSON(): Record<string, unknown> {
@@ -70,9 +82,12 @@ export class InventoryTransactionEntity {
       sku: this.sku,
       productName: this.productName,
       transactionType: this.transactionType,
+      type: this.transactionType,
       inputQuantity: this.inputQuantity,
       inputUnit: this.inputUnit,
+      unitName: this.inputUnit,
       conversionRate: this.conversionRate,
+      conversionFactor: this.conversionRate,
       baseQuantityChange: this.baseQuantityChange,
       baseUnit: this.baseUnit,
       previousStock: this.previousStock,
@@ -81,6 +96,7 @@ export class InventoryTransactionEntity {
       referenceCode: this.referenceCode,
       warehouse: this.warehouse,
       performedBy: this.performedBy,
+      adjustedBy: this.performedBy,
       createdAt: this.createdAt.toISOString(),
     };
   }

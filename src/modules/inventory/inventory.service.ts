@@ -10,7 +10,9 @@ export interface StockAdjustmentResult {
   productName: string;
   inputQuantity: number;
   inputUnit: string;
+  unitName?: string;
   conversionRate: number;
+  conversionFactor?: number;
   baseQuantityChange: number;
   baseUnit: string;
   previousQuantity: number;
@@ -126,7 +128,7 @@ export class InventoryService implements OnModuleInit {
     // 1. Phân giải đơn vị tính và hệ số quy đổi về đơn vị cơ sở
     const unitConversion = this.productsService.findUnitConversion(
       product,
-      dto.unit,
+      dto.unit || dto.unitName,
     );
     const { unitName, conversionRate } = unitConversion;
 
@@ -184,7 +186,9 @@ export class InventoryService implements OnModuleInit {
       productName: product.name,
       inputQuantity: dto.quantityChange,
       inputUnit: unitName,
+      unitName,
       conversionRate,
+      conversionFactor: conversionRate,
       baseQuantityChange,
       baseUnit: product.baseUnit,
       previousQuantity,

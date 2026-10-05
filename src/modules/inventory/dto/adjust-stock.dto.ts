@@ -29,6 +29,25 @@ export class AdjustStockDto {
   )
   unit?: string;
 
+  @IsOptional()
+  @IsString({ message: 'Đơn vị tính phải là chuỗi ký tự' })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  unitName?: string;
+
+  @IsOptional()
+  @IsString()
+  unitId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  conversionFactor?: number;
+
+  @IsOptional()
+  @IsNumber()
+  baseQuantityChange?: number;
+
   @IsNotEmpty({ message: 'Lý do điều chỉnh không được để trống' })
   @IsString({ message: 'Lý do điều chỉnh phải là chuỗi ký tự' })
   @Transform(({ value }: { value: unknown }) =>
