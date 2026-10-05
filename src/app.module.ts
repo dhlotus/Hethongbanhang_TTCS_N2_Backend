@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ProductsModule } from './modules/products/products.module';
+import { CategoriesModule } from './modules/categories/categories.module';
 import { PriceBooksModule } from './modules/price-books/price-books.module';
 import { PriceListsModule } from './modules/price-lists/price-lists.module';
 import { CustomersModule } from './modules/customers/customers.module';
@@ -24,6 +25,7 @@ import { MailModule } from './modules/mail/mail.module';
     MailModule,
     AuthModule,
     UsersModule,
+    CategoriesModule,
     ProductsModule,
     PriceBooksModule,
     PriceListsModule,

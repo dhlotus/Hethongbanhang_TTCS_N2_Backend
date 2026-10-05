@@ -1,0 +1,1064 @@
+import {
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { CategoryStatus } from '../../common/enums/category-status.enum';
+import { DatabaseService } from '../../database/database.service';
+import { ProductsService } from '../products/products.service';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { MoveProductsDto } from './dto/move-products.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+import { CategoryEntity } from './entities/category.entity';
+import { CategoryTreeNode } from './interfaces/category-tree.interface';
+
+/**
+ * Service Quản lý Nhóm Hàng Đa Cấp (Tree Structure) - SN-150 / SN-22 (Sprint 2):
+ * - Quản lý cấu trúc cây đệ quy tối thiểu 3 cấp (Ngành hàng cha -> Nhóm phụ -> Phân loại con)
+ * - Ràng buộc toàn vẹn: Chặn xóa nhóm còn nhóm con hoặc còn sản phẩm
+ * - Di chuyển sản phẩm an toàn giữa các nhóm hàng
+ * - Ngăn chặn vòng lặp vô tận (circular dependency) khi thay đổi nhóm cha
+ */
+@Injectable()
+export class CategoriesService implements OnModuleInit {
+  private categories = new Map<string, CategoryEntity>();
+  private legacyAliasMap = new Map<string, string>();
+
+  constructor(
+    @Optional() private readonly dbService?: DatabaseService,
+    @Optional()
+    @Inject(forwardRef(() => ProductsService))
+    private readonly productsService?: ProductsService,
+  ) {
+    this.seedInitialCategories();
+  }
+
+  async onModuleInit(): Promise<void> {
+    if (this.categories.size === 0) {
+      this.seedInitialCategories();
+    }
+    if (this.dbService?.isConnected()) {
+      await this.syncAndLoadCategoriesFromDatabase();
+    }
+  }
+
+  /**
+   * Lấy toàn bộ cây danh mục nhóm hàng phân cấp (Tree Structure)
+   * GET /api/categories/tree
+   */
+  async getCategoryTree(): Promise<CategoryTreeNode[]> {
+    const all = Array.from(this.categories.values());
+
+    // Tìm các node gốc (parentId là null hoặc rỗng hoặc không trỏ tới node hợp lệ)
+    const categoryIds = new Set(all.map((c) => c.id));
+    const roots = all.filter(
+      (c) => !c.parentId || !categoryIds.has(c.parentId),
+    );
+
+    const buildNode = (cat: CategoryEntity): CategoryTreeNode => {
+      const children = all
+        .filter((c) => c.parentId === cat.id)
+        .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
+        .map(buildNode);
+
+      let productCount = 0;
+      if (this.productsService) {
+        const descendantIds = this.getDescendantIds(cat.id);
+        const targetIds = [cat.id, ...descendantIds];
+        productCount = this.productsService.findProductsByBranch(
+          targetIds,
+          cat.code,
+          cat.name,
+        ).length;
+      } else {
+        productCount = cat.productCount ?? 0;
+      }
+
+      return {
+        id: cat.id,
+        code: cat.code,
+        name: cat.name,
+        parentId: cat.parentId,
+        parent_id: cat.parentId,
+        level: cat.level,
+        description: cat.description,
+        status: cat.status,
+        productCount,
+        product_count: productCount,
+        children,
+        createdAt: cat.createdAt,
+        created_at: cat.createdAt,
+        updatedAt: cat.updatedAt,
+        updated_at: cat.updatedAt,
+      };
+    };
+
+    return roots
+      .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
+      .map(buildNode);
+  }
+
+  /**
+   * Lấy danh sách nhóm hàng dạng mảng phẳng
+   * GET /api/categories
+   */
+  async findAll(): Promise<CategoryEntity[]> {
+    const list = Array.from(this.categories.values());
+    for (const cat of list) {
+      if (this.productsService) {
+        const descendantIds = this.getDescendantIds(cat.id);
+        const targetIds = [cat.id, ...descendantIds];
+        cat.productCount = this.productsService.findProductsByBranch(
+          targetIds,
+          cat.code,
+          cat.name,
+        ).length;
+      }
+    }
+    return list.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Lấy chi tiết nhóm hàng theo ID hoặc Code
+   * GET /api/categories/:id
+   */
+  async findById(idOrCode: string): Promise<CategoryEntity> {
+    const category = this.findCategoryInternal(idOrCode);
+    if (!category) {
+      throw new NotFoundException(
+        `Không tìm thấy nhóm hàng có mã hoặc ID: ${idOrCode}`,
+      );
+    }
+
+    if (this.productsService) {
+      const descendantIds = this.getDescendantIds(category.id);
+      const targetIds = [category.id, ...descendantIds];
+      category.productCount = this.productsService.findProductsByBranch(
+        targetIds,
+        category.code,
+        category.name,
+      ).length;
+    }
+
+    // Gán danh sách nhóm con trực tiếp
+    category.children = Array.from(this.categories.values()).filter(
+      (c) => c.parentId === category.id,
+    );
+
+    return category;
+  }
+
+  /**
+   * Lấy danh sách sản phẩm thuộc một nhóm hàng và toàn bộ nhóm con/cháu bên dưới
+   * GET /api/categories/:id/products
+   */
+  async getProductsByCategoryId(idOrCode: string): Promise<any[]> {
+    const category = await this.findById(idOrCode);
+    if (!this.productsService) return [];
+    const descendantIds = this.getDescendantIds(category.id);
+    const targetIds = [category.id, ...descendantIds];
+    return this.productsService.findProductsByBranch(
+      targetIds,
+      category.code,
+      category.name,
+    );
+  }
+
+  /**
+   * Lấy danh sách ID của tất cả nhóm hàng con và cháu phân cấp đệ quy
+   */
+  public getDescendantIds(categoryId: string): string[] {
+    const results: string[] = [];
+    const directChildren = Array.from(this.categories.values()).filter(
+      (c) => c.parentId === categoryId,
+    );
+    for (const child of directChildren) {
+      results.push(child.id);
+      results.push(...this.getDescendantIds(child.id));
+    }
+    return results;
+  }
+
+  /**
+   * Tạo nhóm hàng mới
+   * POST /api/categories
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  async create(dto: CreateCategoryDto): Promise<CategoryEntity> {
+    const cleanCode = dto.code.trim().toUpperCase();
+
+    // 1. Kiểm tra mã đã tồn tại trong bộ nhớ
+    if (this.findCategoryInternal(cleanCode)) {
+      throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
+    }
+
+    // 2. Kiểm tra mã trong PostgreSQL nếu đang kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        const check = await this.dbService.query<{ id: number }>(
+          'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+          [cleanCode],
+        );
+        if (check.length > 0) {
+          throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+      }
+    }
+
+    let level = 1;
+    let parentId: string | null = null;
+    let parentDbId: number | null = null;
+
+    if (dto.parentId) {
+      const parent = this.findCategoryInternal(dto.parentId);
+      if (!parent) {
+        throw new NotFoundException('Nhóm hàng cha không tồn tại');
+      }
+      parentId = parent.id;
+      level = parent.level + 1;
+
+      if (this.dbService?.isConnected()) {
+        const num = parseInt(parent.id, 10);
+        if (!isNaN(num)) {
+          parentDbId = num;
+        } else {
+          try {
+            const pRows = await this.dbService.query<{ id: number }>(
+              'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+              [parent.code.toUpperCase()],
+            );
+            if (pRows.length > 0) {
+              parentDbId = pRows[0].id;
+            }
+          } catch {
+            // Tiếp tục fallback
+          }
+        }
+      }
+    }
+
+    // 3. Lưu vào cơ sở dữ liệu PostgreSQL nếu có kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        const insertRes = await this.dbService.query<{
+          id: number;
+          code: string;
+          name: string;
+          parent_id: number | null;
+          level: number;
+          path: string;
+          status: string;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          `INSERT INTO categories (code, name, parent_id, level, path, status)
+           VALUES ($1, $2, $3, $4, '', $5)
+           RETURNING id, code, name, parent_id, level, path, status, created_at, updated_at;`,
+          [
+            cleanCode,
+            dto.name.trim(),
+            parentDbId,
+            level,
+            dto.status ?? CategoryStatus.ACTIVE,
+          ],
+        );
+
+        if (insertRes.length > 0) {
+          const row = insertRes[0];
+
+          // Cập nhật đường dẫn path
+          await this.dbService.query(
+            `UPDATE categories
+             SET path = CASE 
+               WHEN parent_id IS NULL THEN '/' || id || '/' 
+               ELSE (SELECT p.path FROM categories p WHERE p.id = categories.parent_id) || id || '/' 
+             END
+             WHERE id = $1;`,
+            [row.id],
+          );
+
+          const newCategory = new CategoryEntity({
+            id: String(row.id),
+            code: row.code,
+            name: row.name,
+            parentId: row.parent_id !== null ? String(row.parent_id) : null,
+            level: Number(row.level),
+            description: dto.description?.trim() || null,
+            status: (row.status as CategoryStatus) || CategoryStatus.ACTIVE,
+            productCount: 0,
+            createdAt: new Date(row.created_at),
+            updatedAt: new Date(row.updated_at),
+          });
+
+          this.categories.set(newCategory.id, newCategory);
+          return newCategory;
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException || err instanceof NotFoundException) {
+          throw err;
+        }
+      }
+    }
+
+    // 4. Fallback bộ nhớ (hỗ trợ môi trường kiểm thử cô lập)
+    const id = `cat-${randomUUID()}`;
+    const newCategory = new CategoryEntity({
+      id,
+      code: cleanCode,
+      name: dto.name.trim(),
+      parentId,
+      level,
+      description: dto.description?.trim() || null,
+      status: dto.status ?? CategoryStatus.ACTIVE,
+      productCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    this.categories.set(newCategory.id, newCategory);
+    return newCategory;
+  }
+
+  /**
+   * Cập nhật thông tin nhóm hàng và kiểm soát chống vòng lặp đệ quy
+   * PATCH /api/categories/:id
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  async update(id: string, dto: UpdateCategoryDto): Promise<CategoryEntity> {
+    const category = await this.findById(id);
+
+    // 1. Kiểm tra tính duy nhất nếu đổi code
+    if (dto.code !== undefined) {
+      const cleanCode = dto.code.trim().toUpperCase();
+      const existing = this.findCategoryInternal(cleanCode);
+      if (existing && existing.id !== category.id) {
+        throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
+      }
+      if (this.dbService?.isConnected()) {
+        try {
+          const check = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE UPPER(code) = $1 AND id::text != $2 LIMIT 1;',
+            [cleanCode, category.id],
+          );
+          if (check.length > 0) {
+            throw new BadRequestException('Mã nhóm hàng đã tồn tại trên hệ thống');
+          }
+        } catch (err) {
+          if (err instanceof BadRequestException) throw err;
+        }
+      }
+      category.code = cleanCode;
+    }
+
+    if (dto.name !== undefined) {
+      category.name = dto.name.trim();
+    }
+
+    if (dto.description !== undefined) {
+      category.description = dto.description?.trim() || null;
+    }
+
+    if (dto.status !== undefined) {
+      category.status = dto.status;
+    }
+
+    // 2. Kiểm tra thay đổi parentId và chống Circular Dependency
+    let newParentDbId: number | null = null;
+    if (dto.parentId !== undefined) {
+      if (dto.parentId === category.id) {
+        throw new BadRequestException(
+          'Không thể chọn chính nhóm hàng làm nhóm cha (vòng lặp vô tận)',
+        );
+      }
+
+      if (dto.parentId) {
+        const newParent = this.findCategoryInternal(dto.parentId);
+        if (!newParent) {
+          throw new NotFoundException('Nhóm hàng cha không tồn tại');
+        }
+
+        // Chặn chọn nhóm con hoặc cháu làm nhóm cha
+        if (this.isDescendant(category.id, newParent.id)) {
+          throw new BadRequestException(
+            'Không thể chọn nhóm con/cháu làm nhóm cha (vòng lặp vô tận)',
+          );
+        }
+
+        category.parentId = newParent.id;
+        category.level = newParent.level + 1;
+
+        if (this.dbService?.isConnected()) {
+          const num = parseInt(newParent.id, 10);
+          if (!isNaN(num)) {
+            newParentDbId = num;
+          } else {
+            try {
+              const pRow = await this.dbService.query<{ id: number }>(
+                'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+                [newParent.code.toUpperCase()],
+              );
+              if (pRow.length > 0) newParentDbId = pRow[0].id;
+            } catch {}
+          }
+        }
+      } else {
+        category.parentId = null;
+        category.level = 1;
+        newParentDbId = null;
+      }
+
+      // Cập nhật lại level của toàn bộ cây con bên dưới trong bộ nhớ
+      this.updateDescendantLevels(category);
+    }
+
+    category.updatedAt = new Date();
+
+    // 3. Cập nhật vào PostgreSQL nếu có kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        let dbId: number | null = null;
+        const num = parseInt(category.id, 10);
+        if (!isNaN(num)) {
+          dbId = num;
+        } else {
+          const row = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+            [category.code.toUpperCase()],
+          );
+          if (row.length > 0) dbId = row[0].id;
+        }
+
+        if (dbId !== null) {
+          if (dto.parentId !== undefined) {
+            await this.dbService.query(
+              `UPDATE categories
+               SET code = $1, name = $2, parent_id = $3, level = $4, status = $5, updated_at = CURRENT_TIMESTAMP
+               WHERE id = $6;`,
+              [
+                category.code,
+                category.name,
+                newParentDbId,
+                category.level,
+                category.status,
+                dbId,
+              ],
+            );
+
+            // Cập nhật đệ quy path và level cho node này và toàn bộ con cháu trong DB
+            await this.dbService.query(
+              `WITH RECURSIVE cat_tree AS (
+                 SELECT id, parent_id, level, 
+                        CASE WHEN parent_id IS NULL THEN '/' || id || '/' 
+                             ELSE (SELECT p.path FROM categories p WHERE p.id = categories.parent_id) || id || '/' 
+                        END as new_path
+                 FROM categories
+                 WHERE id = $1
+                 UNION ALL
+                 SELECT c.id, c.parent_id, ct.level + 1, ct.new_path || c.id || '/'
+                 FROM categories c
+                 JOIN cat_tree ct ON c.parent_id = ct.id
+               )
+               UPDATE categories
+               SET path = cat_tree.new_path,
+                   level = cat_tree.level,
+                   updated_at = CURRENT_TIMESTAMP
+               FROM cat_tree
+               WHERE categories.id = cat_tree.id;`,
+              [dbId],
+            );
+          } else {
+            await this.dbService.query(
+              `UPDATE categories
+               SET code = $1, name = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+               WHERE id = $4;`,
+              [category.code, category.name, category.status, dbId],
+            );
+          }
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
+    return category;
+  }
+
+  /**
+   * Di chuyển sản phẩm giữa các nhóm hàng
+   * POST /api/categories/move-products
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  async moveProducts(
+    dto: MoveProductsDto,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    sourceCategoryId: string;
+    targetCategoryId: string;
+    movedCount: number;
+  }> {
+    if (dto.sourceCategoryId === dto.targetCategoryId) {
+      throw new BadRequestException(
+        'Nhóm hàng đích phải khác nhóm hàng nguồn',
+      );
+    }
+
+    const sourceCat = await this.findById(dto.sourceCategoryId);
+    const targetCat = await this.findById(dto.targetCategoryId);
+
+    let movedCount = 0;
+    if (this.productsService) {
+      movedCount = await this.productsService.moveProductsBetweenCategories(
+        sourceCat.id,
+        targetCat.id,
+        targetCat.name,
+        dto.productIds,
+        sourceCat.code,
+        sourceCat.name,
+      );
+    }
+
+    return {
+      success: true,
+      message: `Đã chuyển thành công ${movedCount} sản phẩm từ nhóm [${sourceCat.name}] sang nhóm [${targetCat.name}]`,
+      sourceCategoryId: sourceCat.id,
+      targetCategoryId: targetCat.id,
+      movedCount,
+    };
+  }
+
+  /**
+   * Xóa nhóm hàng với ràng buộc toàn vẹn cứng
+   * DELETE /api/categories/:id
+   * Quyền: ADMIN, SALES_MANAGER
+   * Ràng buộc:
+   * 1. Không có nhóm con
+   * 2. Không có sản phẩm
+   */
+  async delete(id: string): Promise<{ success: boolean; message: string }> {
+    const category = await this.findById(id);
+
+    // 1. Kiểm tra nhóm con trong bộ nhớ
+    const hasChildren = Array.from(this.categories.values()).some(
+      (c) => c.parentId === category.id,
+    );
+    if (hasChildren) {
+      throw new BadRequestException(
+        'Nhóm hàng đang chứa nhóm hàng con. Vui lòng chuyển hoặc xóa nhóm con trước.',
+      );
+    }
+
+    // 2. Kiểm tra sản phẩm trong nhóm
+    const productCount = this.productsService
+      ? this.productsService.countProductsByCategoryId(
+          category.id,
+          category.code,
+          category.name,
+        )
+      : (category.productCount ?? 0);
+
+    if (productCount > 0) {
+      throw new BadRequestException(
+        'Nhóm còn sản phẩm thì không xoá được. Vui lòng chuyển sản phẩm sang nhóm khác trước khi xoá.',
+      );
+    }
+
+    // 3. Kiểm tra ràng buộc cứng trực tiếp trên PostgreSQL nếu đã kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        let dbId: number | null = null;
+        const num = parseInt(category.id, 10);
+        if (!isNaN(num)) {
+          dbId = num;
+        } else {
+          const row = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE UPPER(code) = $1 LIMIT 1;',
+            [category.code.toUpperCase()],
+          );
+          if (row.length > 0) dbId = row[0].id;
+        }
+
+        if (dbId !== null) {
+          const childRows = await this.dbService.query<{ id: number }>(
+            'SELECT id FROM categories WHERE parent_id = $1 LIMIT 1;',
+            [dbId],
+          );
+          if (childRows.length > 0) {
+            throw new BadRequestException(
+              'Nhóm hàng đang chứa nhóm hàng con. Vui lòng chuyển hoặc xóa nhóm con trước.',
+            );
+          }
+
+          const prodRows = await this.dbService.query<{ id: string }>(
+            'SELECT id FROM products WHERE category_id = $1 LIMIT 1;',
+            [dbId],
+          );
+          if (prodRows.length > 0) {
+            throw new BadRequestException(
+              'Nhóm còn sản phẩm thì không xoá được. Vui lòng chuyển sản phẩm sang nhóm khác trước khi xoá.',
+            );
+          }
+
+          await this.dbService.query('DELETE FROM categories WHERE id = $1;', [dbId]);
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+      }
+    }
+
+    // 4. Xóa khỏi bộ nhớ
+    this.categories.delete(category.id);
+
+    return {
+      success: true,
+      message: `Đã xóa thành công nhóm hàng [${category.name}].`,
+    };
+  }
+
+  /**
+   * Kiểm tra xem targetId có phải là hậu duệ (con/cháu) của ancestorId không
+   */
+  private isDescendant(ancestorId: string, targetId: string): boolean {
+    let current = this.categories.get(targetId);
+    const visited = new Set<string>();
+
+    while (current && current.parentId) {
+      if (current.parentId === ancestorId) {
+        return true;
+      }
+      if (visited.has(current.parentId)) {
+        break;
+      }
+      visited.add(current.parentId);
+      current = this.categories.get(current.parentId);
+    }
+
+    return false;
+  }
+
+  /**
+   * Cập nhật đệ quy cấp bậc (level) cho tất cả các nhóm con bên dưới
+   */
+  private updateDescendantLevels(parent: CategoryEntity): void {
+    const directChildren = Array.from(this.categories.values()).filter(
+      (c) => c.parentId === parent.id,
+    );
+
+    for (const child of directChildren) {
+      child.level = parent.level + 1;
+      child.updatedAt = new Date();
+      this.updateDescendantLevels(child);
+    }
+  }
+
+  /**
+   * Tìm kiếm nhóm hàng nội bộ theo id hoặc code hoặc name (không ném lỗi nếu không thấy)
+   */
+  public findCategoryInternal(idOrCode: string): CategoryEntity | undefined {
+    if (!idOrCode) return undefined;
+    const direct = this.categories.get(idOrCode);
+    if (direct) return direct;
+
+    const lower = idOrCode.toLowerCase().trim();
+    const aliasId =
+      this.legacyAliasMap.get(lower) ||
+      this.legacyAliasMap.get(idOrCode.toUpperCase().trim());
+    if (aliasId) {
+      const aliasCat = this.categories.get(aliasId);
+      if (aliasCat) return aliasCat;
+    }
+
+    return Array.from(this.categories.values()).find(
+      (c) =>
+        c.id.toLowerCase() === lower ||
+        c.code.toLowerCase() === lower ||
+        c.name.toLowerCase() === lower,
+    );
+  }
+
+  /**
+   * Đồng bộ hai chiều giữa bộ nhớ và cơ sở dữ liệu PostgreSQL:
+   * 1. Đồng bộ các nhóm hàng khởi tạo mẫu (seeds) vào DB nếu chưa có
+   * 2. Xóa sạch các node tạm thời trong bộ nhớ trước khi nạp từ DB (chống nhân đôi dữ liệu cây)
+   * 3. Tải toàn bộ cây nhóm hàng chuẩn xác từ PostgreSQL vào bộ nhớ
+   */
+  private async syncAndLoadCategoriesFromDatabase(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+
+    try {
+      // 1. Dọn dẹp các nhóm rác và nhánh BEV dư thừa (trùng lặp với BEVERAGE có sẵn trong DB)
+      await this.dbService.query(
+        "DELETE FROM categories WHERE code IN ('SAMPLE_EMPTY', 'BEV', 'BEV_TEA', 'BEV_WATER');",
+      );
+
+      // 2. Lấy danh sách nhóm hàng hiện có trong PostgreSQL
+      const existingRows = await this.dbService.query<{
+        id: number;
+        code: string;
+        name: string;
+        parent_id: number | null;
+        level: number;
+        path: string;
+        status: string;
+      }>('SELECT id, code, name, parent_id, level, path, status FROM categories;');
+
+      const dbCodeToId = new Map<string, number>();
+      for (const row of existingRows) {
+        dbCodeToId.set(row.code.toUpperCase(), row.id);
+      }
+
+      // 3. Chèn các nhóm hàng mẫu (seeds) nếu DB chưa có, theo thứ tự level từ thấp đến cao (1 -> 2 -> 3)
+      const seeds = Array.from(this.categories.values()).sort(
+        (a, b) => a.level - b.level,
+      );
+
+      for (const seed of seeds) {
+        const seedCode = seed.code.toUpperCase();
+        // Bỏ qua các nhóm rác hoặc nhóm dư thừa
+        if (
+          seedCode === 'SAMPLE_EMPTY' ||
+          seedCode === 'BEV' ||
+          seedCode.startsWith('BEV_')
+        ) {
+          continue;
+        }
+
+        if (!dbCodeToId.has(seedCode)) {
+          let parentDbId: number | null = null;
+          if (seed.parentId) {
+            const parentCat = this.findCategoryInternal(seed.parentId);
+            if (parentCat) {
+              parentDbId = dbCodeToId.get(parentCat.code.toUpperCase()) ?? null;
+            }
+          }
+
+          try {
+            const insertRes = await this.dbService.query<{ id: number }>(
+              `INSERT INTO categories (code, name, parent_id, level, path, status)
+               VALUES ($1, $2, $3, $4, '', $5)
+               ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
+               RETURNING id;`,
+              [
+                seed.code,
+                seed.name,
+                parentDbId,
+                seed.level,
+                seed.status || CategoryStatus.ACTIVE,
+              ],
+            );
+
+            if (insertRes.length > 0) {
+              const newId = insertRes[0].id;
+              dbCodeToId.set(seedCode, newId);
+
+              // Cập nhật path
+              await this.dbService.query(
+                `UPDATE categories
+                 SET path = CASE 
+                   WHEN parent_id IS NULL THEN '/' || id || '/' 
+                   ELSE (SELECT p.path FROM categories p WHERE p.id = categories.parent_id) || id || '/' 
+                 END
+                 WHERE id = $1;`,
+                [newId],
+              );
+            }
+          } catch {
+            // Tiếp tục nếu có xung đột
+          }
+        }
+      }
+
+      // 4. XÓA SẠCH DỮ LIỆU TẠM THỜI TRONG BỘ NHỚ ĐỂ TRÁNH TRÙNG LẶP / NHÂN ĐÔI TRÊN FRONTEND
+      this.categories.clear();
+      this.legacyAliasMap.clear();
+
+      // 5. Tải lại toàn bộ cây danh mục chuẩn duy nhất từ PostgreSQL vào bộ nhớ
+      const allRows = await this.dbService.query<{
+        id: number;
+        code: string;
+        name: string;
+        parent_id: number | null;
+        level: number;
+        path: string;
+        status: string;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT id, code, name, parent_id, level, path, status, created_at, updated_at
+         FROM categories
+         ORDER BY level ASC, id ASC;`,
+      );
+
+      for (const row of allRows) {
+        const idStr = String(row.id);
+        const parentIdStr = row.parent_id !== null ? String(row.parent_id) : null;
+
+        const entity = new CategoryEntity({
+          id: idStr,
+          code: row.code,
+          name: row.name,
+          parentId: parentIdStr,
+          level: Number(row.level) || 1,
+          status: (row.status as CategoryStatus) || CategoryStatus.ACTIVE,
+          productCount: 0,
+          createdAt: row.created_at ? new Date(row.created_at) : new Date(),
+          updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
+        });
+
+        this.categories.set(entity.id, entity);
+      }
+
+      // 6. Xây dựng bảng ánh xạ alias (legacy alias map) để các mã cũ (cat-milk, cat-cereal...) trỏ chính xác về ID DB
+      for (const entity of this.categories.values()) {
+        const code = entity.code.toUpperCase();
+        this.legacyAliasMap.set(code.toLowerCase(), entity.id);
+        this.legacyAliasMap.set(`cat-${code.toLowerCase().replace(/_/g, '-')}`, entity.id);
+      }
+
+      // Ánh xạ các alias đặc biệt
+      this.legacyAliasMap.set('cat-bev', '1');
+      this.legacyAliasMap.set('cat-bev-tea', '4');
+      this.legacyAliasMap.set('cat-bev-water', '3');
+      this.legacyAliasMap.set('bev', '1');
+      this.legacyAliasMap.set('bev_tea', '4');
+      this.legacyAliasMap.set('bev_water', '3');
+    } catch {
+      // Fallback an toàn
+    }
+  }
+
+  /**
+   * Khởi tạo cây danh mục mẫu 3 cấp chuẩn hóa ngành FMCG & Thực phẩm Đồ uống
+   */
+  private seedInitialCategories(): void {
+    const seeds: Partial<CategoryEntity>[] = [
+      // 1. Sữa & Chế phẩm sữa (Cấp 1)
+      {
+        id: 'cat-milk',
+        code: 'MILK',
+        name: 'Sữa & Chế phẩm sữa',
+        parentId: null,
+        level: 1,
+        description: 'Các sản phẩm sữa bột, sữa hạt, sữa tươi thanh trùng',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 1.1 Sữa bột công thức (Cấp 2)
+      {
+        id: 'cat-milk-powder',
+        code: 'MILK_POWDER',
+        name: 'Sữa bột công thức',
+        parentId: 'cat-milk',
+        level: 2,
+        description: 'Sữa bột dinh dưỡng cho trẻ nhỏ và người cao tuổi',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 1.1.1 Sữa bột trẻ em (Cấp 3)
+      {
+        id: 'cat-milk-powder-baby',
+        code: 'MILK_POWDER_BABY',
+        name: 'Sữa bột cho trẻ em',
+        parentId: 'cat-milk-powder',
+        level: 3,
+        description: 'Sữa bột phát triển chiều cao và trí não cho trẻ',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 1.1.2 Sữa bột người lớn (Cấp 3)
+      {
+        id: 'cat-milk-powder-adult',
+        code: 'MILK_POWDER_ADULT',
+        name: 'Sữa bột người lớn & cao tuổi',
+        parentId: 'cat-milk-powder',
+        level: 3,
+        description: 'Sữa canxi ngừa loãng xương cho người lớn',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 1.2 Sữa hạt organic (Cấp 2)
+      {
+        id: 'cat-milk-nut',
+        code: 'MILK_NUT',
+        name: 'Sữa hạt organic',
+        parentId: 'cat-milk',
+        level: 2,
+        description: 'Sữa hạt óc chó, hạnh nhân, mắc ca nguyên chất',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 1.3 Sữa tươi & Tiệt trùng (Cấp 2)
+      {
+        id: 'cat-milk-ready',
+        code: 'MILK_READY',
+        name: 'Sữa tươi & Tiệt trùng',
+        parentId: 'cat-milk',
+        level: 2,
+        description: 'Sữa bò tươi thanh trùng và tiệt trùng đóng chai',
+        status: CategoryStatus.ACTIVE,
+      },
+
+      // 2. Nước yến & Bổ dưỡng (Cấp 1)
+      {
+        id: 'cat-nest',
+        code: 'NEST',
+        name: 'Nước yến & Bổ dưỡng',
+        parentId: null,
+        level: 1,
+        description: 'Nước yến chưng sẵn và tổ yến sào tự nhiên',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 2.1 Nước yến chưng sẵn (Cấp 2)
+      {
+        id: 'cat-nest-ready',
+        code: 'NEST_READY',
+        name: 'Nước yến chưng sẵn',
+        parentId: 'cat-nest',
+        level: 2,
+        description: 'Nước yến đóng hũ tiện dụng bồi bổ sức khỏe',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 2.1.1 Nước yến chưng đường phèn (Cấp 3)
+      {
+        id: 'cat-nest-ready-sugar',
+        code: 'NEST_READY_SUGAR',
+        name: 'Nước yến chưng đường phèn',
+        parentId: 'cat-nest-ready',
+        level: 3,
+        description: 'Yến hũ chưng đường phèn thanh mát',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 2.2 Tổ yến sào tinh chế (Cấp 2)
+      {
+        id: 'cat-nest-pure',
+        code: 'NEST_PURE',
+        name: 'Tổ yến sào tinh chế',
+        parentId: 'cat-nest',
+        level: 2,
+        description: 'Tổ yến sào làm sạch lông cao cấp hộp quà',
+        status: CategoryStatus.ACTIVE,
+      },
+
+      // 3. Ngũ cốc & Hạt dinh dưỡng (Cấp 1)
+      {
+        id: 'cat-cereal',
+        code: 'CEREAL',
+        name: 'Ngũ cốc & Hạt dinh dưỡng',
+        parentId: null,
+        level: 1,
+        description: 'Ngũ cốc hạt mầm và hạt sấy giòn nguyên chất',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 3.1 Ngũ cốc hạt mầm (Cấp 2)
+      {
+        id: 'cat-cereal-sprout',
+        code: 'CEREAL_SPROUT',
+        name: 'Ngũ cốc hạt mầm',
+        parentId: 'cat-cereal',
+        level: 2,
+        description: 'Bột ngũ cốc hạt mầm dinh dưỡng bữa ăn lành mạnh',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 3.2 Hạt dinh dưỡng sấy giòn (Cấp 2)
+      {
+        id: 'cat-cereal-nuts',
+        code: 'CEREAL_NUTS',
+        name: 'Hạt dinh dưỡng sấy giòn',
+        parentId: 'cat-cereal',
+        level: 2,
+        description: 'Macca, óc chó, hạnh nhân nhập khẩu sấy giòn',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 3.2.1 Hạt Macca sấy (Cấp 3)
+      {
+        id: 'cat-cereal-nuts-macca',
+        code: 'CEREAL_NUTS_MACCA',
+        name: 'Hạt Macca sấy nứt vỏ',
+        parentId: 'cat-cereal-nuts',
+        level: 3,
+        description: 'Macca Tây Nguyên sấy giòn tự nhiên',
+        status: CategoryStatus.ACTIVE,
+      },
+
+      // 4. Thực phẩm chức năng (Cấp 1)
+      {
+        id: 'cat-supp',
+        code: 'SUPP',
+        name: 'Thực phẩm chức năng',
+        parentId: null,
+        level: 1,
+        description: 'Collagen và các sản phẩm đông trùng hạ thảo',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 4.1 Collagen & Chống lão hóa (Cấp 2)
+      {
+        id: 'cat-supp-collagen',
+        code: 'SUPP_COLLAGEN',
+        name: 'Collagen & Chống lão hóa',
+        parentId: 'cat-supp',
+        level: 2,
+        description: 'Nước uống collagen thủy phân làm đẹp da',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 4.2 Đông trùng & Thảo dược (Cấp 2)
+      {
+        id: 'cat-supp-herb',
+        code: 'SUPP_HERB',
+        name: 'Đông trùng & Thảo dược',
+        parentId: 'cat-supp',
+        level: 2,
+        description: 'Chiết xuất nấm đông trùng hạ thảo tự nhiên',
+        status: CategoryStatus.ACTIVE,
+      },
+
+      // 5. Nước giải khát & Trà (Cấp 1)
+      {
+        id: 'cat-bev',
+        code: 'BEV',
+        name: 'Nước giải khát & Trà',
+        parentId: null,
+        level: 1,
+        description: 'Trà thảo mộc và nước khoáng đóng chai',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 5.1 Trà thảo mộc thanh nhiệt (Cấp 2)
+      {
+        id: 'cat-bev-tea',
+        code: 'BEV_TEA',
+        name: 'Trà thảo mộc thanh nhiệt',
+        parentId: 'cat-bev',
+        level: 2,
+        description: 'Trà hoa cúc, la hán quả mát lành thanh nhiệt',
+        status: CategoryStatus.ACTIVE,
+      },
+      // 5.2 Nước khoáng thiên nhiên (Cấp 2)
+      {
+        id: 'cat-bev-water',
+        code: 'BEV_WATER',
+        name: 'Nước khoáng thiên nhiên',
+        parentId: 'cat-bev',
+        level: 2,
+        description: 'Nước khoáng kiềm tự nhiên đóng chai PET',
+        status: CategoryStatus.ACTIVE,
+      },
+
+      // 6. Nhóm hàng thử nghiệm (Trống - không có sản phẩm hay nhóm con, phục vụ test xóa)
+      {
+        id: 'cat-empty-sample',
+        code: 'SAMPLE_EMPTY',
+        name: 'Nhóm hàng thử nghiệm (Trống)',
+        parentId: null,
+        level: 1,
+        description: 'Nhóm trống mẫu phục vụ kiểm thử nghiệp vụ xóa',
+        status: CategoryStatus.ACTIVE,
+      },
+    ];
+
+    for (const seed of seeds) {
+      const entity = new CategoryEntity(seed as Partial<CategoryEntity>);
+      this.categories.set(entity.id, entity);
+    }
+  }
+}
