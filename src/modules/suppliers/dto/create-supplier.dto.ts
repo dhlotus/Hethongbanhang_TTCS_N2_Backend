@@ -33,34 +33,55 @@ export class CreateSupplierDto {
 
   @IsOptional()
   @IsString({ message: 'Mã số thuế phải là chuỗi ký tự' })
+  @Matches(/^[0-9]{12}$/, { message: 'Mã số thuế phải bao gồm đúng 12 chữ số' })
   @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
-    if (value) return typeof value === 'string' ? value.trim() : value;
-    if (obj.tax_code) {
-      return typeof obj.tax_code === 'string' ? obj.tax_code.trim() : obj.tax_code;
+    const raw = value ?? obj.tax_code;
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      return trimmed === '' ? undefined : trimmed;
     }
-    return value;
+    return raw;
   })
   taxCode?: string;
 
   @IsOptional()
   @IsString({ message: 'Người liên hệ phải là chuỗi ký tự' })
+  @Matches(/^[a-zA-ZÀ-ỹ\s]+$/u, {
+    message: 'Tên người liên hệ không được chứa chữ số',
+  })
   @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
-    if (value) return typeof value === 'string' ? value.trim() : value;
-    if (obj.contact_name) {
-      return typeof obj.contact_name === 'string'
-        ? obj.contact_name.trim()
-        : obj.contact_name;
+    const raw = value ?? obj.contact_name;
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      return trimmed === '' ? undefined : trimmed;
     }
-    return value;
+    return raw;
   })
   contactName?: string;
 
   @IsOptional()
   @IsString({ message: 'Số điện thoại phải là chuỗi ký tự' })
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Matches(/^0/, { message: 'Số điện thoại phải bắt đầu bằng số 0' })
+  @Matches(/^0[0-9]{9,11}$/, {
+    message: 'Số điện thoại phải từ 10 đến 12 chữ số',
+  })
+  @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
+    const raw = value ?? obj.contactPhone ?? obj.contact_phone;
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      return trimmed === '' ? undefined : trimmed;
+    }
+    return raw;
+  })
   phone?: string;
+
+  @IsOptional()
+  @IsString({ message: 'Số điện thoại phải là chuỗi ký tự' })
+  @Matches(/^0/, { message: 'Số điện thoại phải bắt đầu bằng số 0' })
+  @Matches(/^0[0-9]{9,11}$/, {
+    message: 'Số điện thoại phải từ 10 đến 12 chữ số',
+  })
+  contactPhone?: string;
 
   @IsOptional()
   @IsEmail({}, { message: 'Email không đúng định dạng hợp lệ' })

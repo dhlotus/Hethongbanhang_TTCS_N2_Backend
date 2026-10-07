@@ -325,7 +325,7 @@ export class SuppliersService implements OnModuleInit {
       name: dto.name.trim(),
       taxCode: dto.taxCode?.trim(),
       contactName: dto.contactName?.trim(),
-      phone: dto.phone?.trim(),
+      phone: (dto.phone || dto.contactPhone)?.trim(),
       email: dto.email?.trim(),
       address: dto.address?.trim(),
       paymentTerms: dto.paymentTerms?.trim() || 'NET_30',
@@ -392,7 +392,8 @@ export class SuppliersService implements OnModuleInit {
     if (dto.taxCode !== undefined) supplier.taxCode = dto.taxCode?.trim();
     if (dto.contactName !== undefined)
       supplier.contactName = dto.contactName?.trim();
-    if (dto.phone !== undefined) supplier.phone = dto.phone?.trim();
+    if (dto.phone !== undefined || dto.contactPhone !== undefined)
+      supplier.phone = (dto.phone ?? dto.contactPhone)?.trim();
     if (dto.email !== undefined) supplier.email = dto.email?.trim();
     if (dto.address !== undefined) supplier.address = dto.address?.trim();
     if (dto.paymentTerms !== undefined)

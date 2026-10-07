@@ -741,3 +741,40 @@ Time:        1.783 s
   - ✅ Unit Test `categories-tree-sn150.spec.ts`: 41/41 Passed.
   - ✅ Live Test PostgreSQL: Kiểm thử trực tiếp trên PostgreSQL thực tế (`htbh_db`) thành công 100%: 29 nhóm ngành hàng được đồng bộ, nhóm mới tạo lập tức ghi nhận vào bảng `categories`, cập nhật `path` và liên kết `parent_id` chính xác.
 
+---
+
+### [TASK] SN-25: CẬP NHẬT UI & FORM VALIDATION CHO MODAL THÊM MỚI NHÀ CUNG CẤP
+- **User Story:** SN-25 - Quản lý Nhà cung cấp (Supplier Management).
+- **Nhánh thực hiện (Git Branches):**
+  - Backend: `feature/SN-25-supplier-validation-be` (checkout từ `Develop`).
+  - Frontend: `feature/SN-25-supplier-validation-fe` (checkout từ `main`).
+  - *Strict Rule:* Tuân thủ giữ nguyên uncommitted changes, tuyệt đối không tự ý `git commit` hay `git push`.
+- **Chi tiết kỹ thuật cập nhật:**
+  - **Frontend (`HTBH_Frontend`):**
+    - File: `src/pages/suppliers-page.tsx`
+      + Thẻ thống kê (Stats Card): Đổi chữ "Ngừng hoạt động" thành "Ngừng giao dịch" để đồng bộ chuẩn xác với tên trạng thái hệ thống, giữ nguyên toàn bộ layout và logic đếm.
+    - File: `src/components/supplier-form-modal.tsx`
+      + Trường `Mã nhà cung cấp`: Thiết lập thuộc tính `readOnly`, `disabled`, placeholder `"Mã nhà cung cấp tự sinh"`, ngăn chặn tương tác nhập tay khi tạo mới, hiển thị gợi ý hệ thống tự động sinh mã định danh khi lưu.
+      + Trường `Mã số thuế`: Cập nhật nhãn chuẩn hóa thành "Mã số thuế" (loại bỏ "(MST)"), ràng buộc chỉ cho phép nhập ký tự số và bắt buộc đúng 12 chữ số (`^[0-9]{12}$`), hiển thị lỗi realtime và submit: *"Mã số thuế phải bao gồm đúng 12 chữ số"*.
+      + Trường `Người liên hệ`: Kiểm tra regex `^[a-zA-ZÀ-ỹ\s]+$`, chặn ký tự số, hiển thị lỗi realtime và submit: *"Tên người liên hệ không được chứa chữ số"*.
+      + Trường `Số điện thoại`: Bắt buộc bắt đầu bằng `0`, độ dài từ 10 đến 12 chữ số (`^0[0-9]{9,11}$`). Hiển thị thông báo tương ứng:
+        * Không bắt đầu bằng 0: *"Số điện thoại phải bắt đầu bằng số 0"*.
+        * Độ dài < 10 hoặc > 12 số: *"Số điện thoại phải từ 10 đến 12 chữ số"*.
+      + Giao diện: Hiển thị thông báo lỗi chi tiết màu đỏ ngay dưới từng trường dữ liệu, highlight viền đỏ input khi vi phạm.
+  - **Backend (`HTBH_Backend`):**
+    - File: `src/modules/suppliers/dto/create-supplier.dto.ts`
+      + `taxCode`: Bổ sung `@Matches(/^[0-9]{12}$/, { message: 'Mã số thuế phải bao gồm đúng 12 chữ số' })`.
+      + `contactName`: Bổ sung `@Matches(/^[a-zA-ZÀ-ỹ\s]+$/u, { message: 'Tên người liên hệ không được chứa chữ số' })`.
+      + `phone` & `contactPhone`: Bổ sung `@Matches(/^0/, { message: 'Số điện thoại phải bắt đầu bằng số 0' })` và `@Matches(/^0[0-9]{9,11}$/, { message: 'Số điện thoại phải từ 10 đến 12 chữ số' })`.
+      + `@Transform`: Chuẩn hóa chuỗi rỗng thành `undefined` để bảo đảm `@IsOptional()` hoạt động chính xác khi không nhập dữ liệu optional.
+    - File: `src/modules/suppliers/suppliers.service.ts`
+      + Đảm bảo tương thích fallback đa trường giữa `dto.phone` và `dto.contactPhone` trong cả `create()` và `update()`.
+    - File test: `test/create-supplier-dto-validation.spec.ts`
+      + 6 kịch bản kiểm thử validation DTO cho các trường `taxCode` (bắt buộc đúng 12 chữ số), `contactName`, `phone`.
+- **Trạng thái kiểm thử:**
+  - ✅ Backend Type Check: `npx tsc --noEmit` -> Passed 100% (0 lỗi).
+  - ✅ Backend Unit Test: `test/suppliers-sn25.spec.ts` -> 11/11 tests passed.
+  - ✅ Backend DTO Validation Test: `test/create-supplier-dto-validation.spec.ts` -> 6/6 tests passed.
+  - ✅ Frontend Build: `npm run build` (`tsc -b && vite build`) -> 0 lỗi, build production thành công.
+
+
