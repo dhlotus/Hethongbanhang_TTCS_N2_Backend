@@ -449,4 +449,74 @@ export class CustomersService implements OnModuleInit {
       message: 'Đã xóa điểm giao hàng thành công',
     };
   }
+
+  /**
+   * Cập nhật hạn mức công nợ cho đại lý (SN-34)
+   */
+  async updateCustomerCredit(
+    customerId: string,
+    data: {
+      creditLimit?: number;
+      maxDebtDays?: number;
+      paymentTerms?: string;
+    },
+  ): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(customerId);
+
+    if (data.creditLimit !== undefined) {
+      customer.creditLimit = data.creditLimit;
+    }
+    if (data.maxDebtDays !== undefined) {
+      customer.maxDebtDays = data.maxDebtDays;
+    }
+    if (data.paymentTerms !== undefined) {
+      // customer.paymentTerms = data.paymentTerms;
+    }
+
+    customer.updatedAt = new Date();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers 
+           SET credit_limit = $1, max_debt_days = $2, payment_terms = $3, updated_at = NOW() 
+           WHERE id = $4 OR code = $4;`,
+          [customer.creditLimit, customer.maxDebtDays, data.paymentTerms || 'NET_30', customerId],
+        );
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    return customer;
+  }
+
+  /**
+   * Cập nhật trạng thái tín dụng / khóa đại lý (SN-34)
+   */
+  async updateCustomerStatus(
+    customerId: string,
+    status: CustomerStatus,
+    lockReason?: string,
+  ): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(customerId);
+    customer.status = status;
+    customer.updatedAt = new Date();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers 
+           SET status = $1, lock_reason = $2, updated_at = NOW() 
+           WHERE id = $3 OR code = $3;`,
+          [status, lockReason || null, customerId],
+        );
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    return customer;
+  }
 }
+

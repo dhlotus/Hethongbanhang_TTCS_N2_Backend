@@ -16,6 +16,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { DiscountPoliciesModule } from './modules/discount-policies/discount-policies.module';
+import { CreditLimitModule } from './modules/credit-limit/credit-limit.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
 
@@ -31,6 +32,7 @@ import { MailModule } from './modules/mail/mail.module';
     PriceBooksModule,
     PriceListsModule,
     CustomersModule,
+    CreditLimitModule,
     OrdersModule,
     InventoryModule,
     SuppliersModule,
@@ -43,3 +45,4 @@ import { MailModule } from './modules/mail/mail.module';
   ],
 })
 export class AppModule { }
+
