@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsOptional,
@@ -23,6 +24,18 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString({ message: 'Số điện thoại phải là chuỗi ký tự' })
   phone?: string;
+
+  @IsOptional()
+  @IsString({ message: 'Ngày sinh phải là chuỗi định dạng YYYY-MM-DD' })
+  dateOfBirth?: string;
+
+  @IsOptional()
+  @IsString({ message: 'Giới tính phải là chuỗi ký tự' })
+  gender?: string;
+
+  @IsOptional()
+  @IsBoolean({ message: 'isIdentityLocked phải là giá trị boolean' })
+  isIdentityLocked?: boolean;
 
   @IsOptional()
   @IsEnum(UserRole, { message: 'Vai trò không hợp lệ trong 7 vai trò hệ thống' })
