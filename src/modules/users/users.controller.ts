@@ -37,6 +37,7 @@ import {
   CreateUserResult,
   PaginatedUsersResult,
   UpdateUserStatusResult,
+  UserSummaryStats,
   UsersService,
 } from './users.service';
 
@@ -117,6 +118,24 @@ export class UsersController {
   @Roles(...Object.values(UserRole))
   async getMe(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
     return this.usersService.findSafeById(currentUser.userId);
+  }
+
+  /**
+   * Lấy thống kê số lượng nhân sự toàn hệ thống (KPI Cards)
+   * GET /api/users/statistics
+   */
+  @Get('statistics')
+  async getStatistics(): Promise<UserSummaryStats> {
+    return this.usersService.getSummary();
+  }
+
+  /**
+   * Lấy thống kê số lượng nhân sự toàn hệ thống (Alias)
+   * GET /api/users/summary
+   */
+  @Get('summary')
+  async getSummary(): Promise<UserSummaryStats> {
+    return this.usersService.getSummary();
   }
 
   /**
