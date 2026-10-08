@@ -4,6 +4,8 @@
 export enum OrderStatus {
   DRAFT = 'DRAFT', // Nháp (mở lại tiếp tục gõ)
   PENDING = 'PENDING', // Chờ duyệt
+  PENDING_APPROVAL = 'PENDING_APPROVAL', // Cần phê duyệt (do vượt hạn mức công nợ - SN-41)
+  PENDING_INVENTORY_APPROVAL = 'PENDING_INVENTORY_APPROVAL', // Chờ duyệt tồn kho
   APPROVED = 'APPROVED', // Đã duyệt
   PROCESSING = 'PROCESSING', // Đang soạn hàng
   SHIPPED = 'SHIPPED', // Đã xuất kho / giao vận

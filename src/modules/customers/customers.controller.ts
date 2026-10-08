@@ -23,6 +23,8 @@ import { PaginatedCustomersResult } from './interfaces/paginated-customers.inter
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { CustomerDebtStatusDto } from './dto/customer-debt-status.dto';
+import { Public } from '../../common/decorators/public.decorator';
 
 /**
  * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-37)
@@ -45,10 +47,23 @@ export class CustomersController {
   }
 
   /**
+   * Kiểm tra tình trạng công nợ của đại lý trước khi lập đơn (SN-41)
+   * GET /api/customers/:id/debt-status
+   */
+  @Get(':id/debt-status')
+  @Public()
+  async getCustomerDebtStatus(
+    @Param('id') id: string,
+  ): Promise<CustomerDebtStatusDto> {
+    return this.customersService.getCustomerDebtStatus(id);
+  }
+
+  /**
    * Lấy chi tiết đại lý theo ID
    * GET /api/customers/:id
    */
   @Get(':id')
+  @Public()
   async getCustomerById(@Param('id') id: string): Promise<CustomerEntity> {
     return this.customersService.getCustomerById(id);
   }
