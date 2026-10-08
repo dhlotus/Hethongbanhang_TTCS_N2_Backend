@@ -11,6 +11,7 @@ import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
+import { LockCustomerDto } from './dto/lock-customer.dto';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
@@ -448,5 +449,41 @@ export class CustomersService implements OnModuleInit {
       success: true,
       message: 'Đã xóa điểm giao hàng thành công',
     };
+  }
+
+  /**
+   * Khóa giao dịch với một đại lý kèm lý do bắt buộc (SN-36)
+   */
+  async lockCustomer(
+    id: string,
+    dto: LockCustomerDto,
+    currentUser?: { userId?: string; fullName?: string },
+  ): Promise<CustomerEntity> {
+    if (!dto.reason || dto.reason.trim() === '') {
+      throw new BadRequestException('Bắt buộc phải nhập lý do khi khóa đại lý');
+    }
+
+    const customer = await this.getCustomerById(id);
+    customer.status = CustomerStatus.LOCKED;
+    customer.lockReason = dto.reason.trim();
+    customer.lockedAt = new Date();
+    customer.lockedBy = currentUser?.fullName || currentUser?.userId || 'Hệ thống';
+    customer.updatedAt = new Date();
+
+    return customer;
+  }
+
+  /**
+   * Mở khóa giao dịch với đại lý (SN-36)
+   */
+  async unlockCustomer(id: string): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(id);
+    customer.status = CustomerStatus.ACTIVE;
+    customer.lockReason = undefined;
+    customer.lockedAt = undefined;
+    customer.lockedBy = undefined;
+    customer.updatedAt = new Date();
+
+    return customer;
   }
 }

@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { CustomersService } from '../customers/customers.service';
+import { CustomerStatus } from '../customers/entities/customer.entity';
 import { CreateOrderDto, CreateOrderLineDto } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -254,6 +255,13 @@ export class OrdersService implements OnModuleInit {
   ): Promise<OrderEntity> {
     const customer = await this.customersService.getCustomerById(dto.customerId);
 
+    // Kiểm tra trạng thái đại lý (SN-36: Đại lý bị khóa không tạo được đơn mới, kể cả trên cổng đặt hàng)
+    if (customer.status === CustomerStatus.LOCKED) {
+      throw new BadRequestException(
+        `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do khóa: ${customer.lockReason || 'Không xác định'}). Không thể tạo đơn hàng mới, kể cả trên cổng đặt hàng!`,
+      );
+    }
+
     // Xác thực điểm giao hàng (SN-31: Đơn hàng chọn điểm giao trong danh sách của đúng đại lý đó)
     let assignedDeliveryPoint: IOrderDeliveryPoint | undefined;
     if (dto.deliveryPoint?.id) {
@@ -386,6 +394,25 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
+   * Bổ sung cảnh báo nếu đại lý của đơn hàng dở đang bị khóa giao dịch (SN-36)
+   */
+  private async checkAndAttachLockWarning(order: OrderEntity): Promise<OrderEntity> {
+    try {
+      const customer = await this.customersService.getCustomerById(order.customerId);
+      if (customer.status === CustomerStatus.LOCKED) {
+        order.isCustomerLocked = true;
+        order.warningMessage = `CẢNH BÁO (SN-36): Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không xác định'}). Đơn đang dở vẫn xử lý tiếp được nhưng cần cảnh báo trước khi duyệt/xuất kho.`;
+      } else {
+        order.isCustomerLocked = false;
+        order.warningMessage = undefined;
+      }
+    } catch {
+      // Bỏ qua nếu không tìm thấy đại lý
+    }
+    return order;
+  }
+
+  /**
    * Lấy chi tiết đơn hàng theo ID
    */
   async findOrderById(id: string): Promise<OrderEntity> {
@@ -393,7 +420,7 @@ export class OrdersService implements OnModuleInit {
     if (!order) {
       throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
     }
-    return order;
+    return this.checkAndAttachLockWarning(order);
   }
 
   /**
@@ -408,6 +435,13 @@ export class OrdersService implements OnModuleInit {
 
     if (dto.customerId && dto.customerId !== order.customerId) {
       const customer = await this.customersService.getCustomerById(dto.customerId);
+
+      if (customer.status === CustomerStatus.LOCKED) {
+        throw new BadRequestException(
+          `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không có'}). Không thể đổi đơn hàng sang đại lý bị khóa!`,
+        );
+      }
+
       order.customerId = customer.id;
       order.customerCode = customer.code;
       order.customerName = customer.name;
@@ -438,7 +472,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     order.updatedAt = new Date();
-    return order;
+    return this.checkAndAttachLockWarning(order);
   }
 
   /**

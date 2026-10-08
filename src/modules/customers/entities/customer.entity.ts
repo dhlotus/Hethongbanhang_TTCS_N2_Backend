@@ -29,6 +29,9 @@ export class CustomerEntity {
   email?: string;
   address?: string;
   status: CustomerStatus;
+  lockReason?: string;
+  lockedAt?: Date;
+  lockedBy?: string;
   deliveryPoints: DeliveryPointEntity[];
   createdAt: Date;
   updatedAt: Date;
@@ -39,6 +42,9 @@ export class CustomerEntity {
     this.currentDebt = partial.currentDebt ?? 0;
     this.maxDebtDays = partial.maxDebtDays ?? 30;
     this.status = partial.status ?? CustomerStatus.ACTIVE;
+    this.lockReason = partial.lockReason;
+    this.lockedAt = partial.lockedAt ? new Date(partial.lockedAt) : undefined;
+    this.lockedBy = partial.lockedBy;
     this.deliveryPoints = (partial.deliveryPoints || []).map(
       (dp) => (dp instanceof DeliveryPointEntity ? dp : new DeliveryPointEntity(dp)),
     );
