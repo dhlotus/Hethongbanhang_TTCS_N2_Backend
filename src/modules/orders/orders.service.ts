@@ -57,7 +57,10 @@ export class OrdersService implements OnModuleInit {
       const convRate = item.conversionRate > 0 ? item.conversionRate : 1;
       const baseQty = Math.round(item.quantity * convRate);
       const listPrice = item.listPrice >= 0 ? item.listPrice : item.unitPrice;
-      const unitPrice = item.unitPrice >= 0 ? item.unitPrice : listPrice;
+      let unitPrice = item.unitPrice >= 0 ? item.unitPrice : listPrice;
+      if (item.discountPercent && item.discountPercent > 0 && unitPrice === listPrice) {
+        unitPrice = Math.round(listPrice * (1 - item.discountPercent / 100));
+      }
       const lineTotal = Math.round(item.quantity * unitPrice);
       const listTotal = Math.round(item.quantity * listPrice);
 

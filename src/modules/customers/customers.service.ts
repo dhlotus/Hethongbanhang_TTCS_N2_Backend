@@ -15,6 +15,7 @@ import { FilterCustomersDto } from './dto/filter-customers.dto';
 import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { INITIAL_AGENCIES } from './agencies.seed';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
@@ -37,6 +38,12 @@ export class CustomersService implements OnModuleInit {
    * Khởi tạo dữ liệu mẫu thực tế 100% cho các đại lý và nhiều điểm giao hàng (SN-31)
    */
   private seedInitialCustomers(): void {
+    for (const c of INITIAL_AGENCIES) {
+      this.customers.set(c.id, c);
+    }
+  }
+
+  private unusedLegacy(): void {
     const list: CustomerEntity[] = [
       new CustomerEntity({
         id: 'cust-001',
