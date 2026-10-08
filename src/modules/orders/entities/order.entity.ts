@@ -36,6 +36,8 @@ export class OrderEntity {
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   priceListId?: string;
+  requiresApproval: boolean;
+  approvalReasons: string[];
   createdAt: Date;
   updatedAt: Date;
 
@@ -47,6 +49,8 @@ export class OrderEntity {
     this.subtotal = partial.subtotal ?? 0;
     this.totalDiscount = partial.totalDiscount ?? 0;
     this.grandTotal = partial.grandTotal ?? 0;
+    this.requiresApproval = partial.requiresApproval ?? false;
+    this.approvalReasons = partial.approvalReasons ?? [];
     this.status = partial.status ?? OrderStatus.DRAFT;
     this.paymentStatus = partial.paymentStatus ?? PaymentStatus.UNPAID;
     this.createdAt = partial.createdAt ?? new Date();

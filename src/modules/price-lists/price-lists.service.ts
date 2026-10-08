@@ -412,6 +412,45 @@ export class PriceListsService implements OnModuleInit {
   }
 
   /**
+   * Tìm giá và giá sàn hiệu lực cho SKU theo nhóm đại lý tại thời điểm tạo đơn.
+   */
+  findEffectivePrice(
+    customerGroup: string,
+    productId: string,
+    productCode: string,
+    effectiveDate = new Date(),
+  ): { priceList: PriceListEntity; item: PriceListItemEntity } {
+    const date = effectiveDate.toISOString().slice(0, 10);
+    const candidates = Array.from(this.priceLists.values())
+      .filter(
+        (priceList) =>
+          priceList.customerGroup === customerGroup &&
+          priceList.status === PriceListStatus.ACTIVE &&
+          priceList.startDate <= date &&
+          (!priceList.endDate || priceList.endDate >= date),
+      )
+      .sort((first, second) => second.startDate.localeCompare(first.startDate));
+
+    if (candidates.length === 0) {
+      throw new BadRequestException(
+        `Không có bảng giá đang hiệu lực cho nhóm đại lý ${customerGroup}`,
+      );
+    }
+
+    const priceList = candidates[0];
+    const item = priceList.items.find(
+      (priceListItem) =>
+        priceListItem.productId === productId ||
+        priceListItem.productCode.toLowerCase() === productCode.toLowerCase(),
+    );
+    if (item) return { priceList, item };
+
+    throw new BadRequestException(
+      `SKU ${productCode} không có trong bảng giá đang hiệu lực của nhóm đại lý ${customerGroup}`,
+    );
+  }
+
+  /**
    * Lấy danh sách bảng giá phân trang, tìm kiếm đa trường và lọc nhóm khách hàng / trạng thái
    * GET /api/price-lists
    */
