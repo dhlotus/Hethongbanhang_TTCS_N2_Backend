@@ -15,6 +15,7 @@ import { ReturnsModule } from './modules/returns/returns.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
+import { DiscountPoliciesModule } from './modules/discount-policies/discount-policies.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
 
@@ -33,6 +34,7 @@ import { MailModule } from './modules/mail/mail.module';
     OrdersModule,
     InventoryModule,
     SuppliersModule,
+    DiscountPoliciesModule,
     ShipmentsModule,
     InvoicesModule,
     ReturnsModule,
