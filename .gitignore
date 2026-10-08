@@ -26,3 +26,7 @@ Thumbs.db
 uploads/*
 !uploads/**/.gitkeep
 
+# TypeScript Build Info
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+

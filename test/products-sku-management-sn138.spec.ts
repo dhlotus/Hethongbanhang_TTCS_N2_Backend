@@ -409,7 +409,8 @@ async function runTestSuite(): Promise<void> {
   }
 }
 
-runTestSuite().catch((err: unknown) => {
-  console.error('Lỗi khi thực thi test suite SN-138:', err);
+runTestSuite().catch((err) => {
+  console.error('Lỗi thực thi kiểm thử SN-138:', err);
   process.exit(1);
 });
+

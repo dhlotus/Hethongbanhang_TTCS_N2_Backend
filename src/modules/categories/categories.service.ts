@@ -170,6 +170,51 @@ export class CategoriesService implements OnModuleInit {
   }
 
   /**
+   * Tính tổng doanh số bán được từ các đơn hàng thực tế thuộc nhóm hàng (và toàn bộ nhóm con)
+   * GET /api/categories/:id/revenue
+   */
+  async getCategoryRevenue(idOrCode: string): Promise<number> {
+    try {
+      const category = await this.findById(idOrCode);
+      const descendantIds = this.getDescendantIds(category.id);
+      const allIds = [category.id, ...descendantIds];
+
+      if (this.dbService?.isConnected()) {
+        const numIds: number[] = [];
+        for (const id of allIds) {
+          const n = parseInt(id, 10);
+          if (!isNaN(n)) numIds.push(n);
+        }
+
+        const res = await this.dbService.query<{ total_revenue: string }>(
+          `SELECT COALESCE(SUM(oi.total_price), 0) as total_revenue
+           FROM order_items oi
+           JOIN orders o ON oi.order_id = o.id
+           JOIN products p ON oi.product_id = p.id
+           WHERE o.status != 'CANCELLED'
+             AND (
+               p.category_id::text = ANY($1::text[])
+               OR (p.category_id IS NOT NULL AND p.category_id = ANY($2::int[]))
+               OR p.category_id IN (
+                 SELECT id FROM categories 
+                 WHERE id::text = ANY($1::text[]) 
+                    OR UPPER(code) = ANY(SELECT UPPER(code) FROM categories WHERE id::text = ANY($1::text[]))
+               )
+             );`,
+          [allIds, numIds.length > 0 ? numIds : [-1]],
+        );
+
+        if (res.length > 0) {
+          return Number(res[0].total_revenue || 0);
+        }
+      }
+    } catch (err) {
+      console.error('[CategoriesService] Lỗi tính doanh số ngành hàng:', err);
+    }
+    return 0;
+  }
+
+  /**
    * Lấy danh sách ID của tất cả nhóm hàng con và cháu phân cấp đệ quy
    */
   public getDescendantIds(categoryId: string): string[] {
@@ -513,15 +558,38 @@ export class CategoriesService implements OnModuleInit {
     const sourceCat = await this.findById(dto.sourceCategoryId);
     const targetCat = await this.findById(dto.targetCategoryId);
 
+    let targetParentName: string | undefined;
+    if (targetCat.parentId) {
+      const parentCat = this.findCategoryInternal(targetCat.parentId);
+      if (parentCat) {
+        if (parentCat.parentId) {
+          const rootCat = this.findCategoryInternal(parentCat.parentId);
+          targetParentName = rootCat ? rootCat.name : parentCat.name;
+        } else {
+          targetParentName = parentCat.name;
+        }
+      }
+    }
+
+    const descendantIds = this.getDescendantIds(sourceCat.id);
+    const sourceBranchIds = [sourceCat.id, ...descendantIds];
+
     let movedCount = 0;
     if (this.productsService) {
       movedCount = await this.productsService.moveProductsBetweenCategories(
-        sourceCat.id,
+        sourceBranchIds,
         targetCat.id,
         targetCat.name,
         dto.productIds,
         sourceCat.code,
         sourceCat.name,
+        targetParentName,
+      );
+    }
+
+    if (movedCount === 0) {
+      throw new BadRequestException(
+        `Nhóm hàng [${sourceCat.name}] không có sản phẩm nào để di chuyển.`,
       );
     }
 
@@ -1060,5 +1128,6 @@ export class CategoriesService implements OnModuleInit {
       const entity = new CategoryEntity(seed as Partial<CategoryEntity>);
       this.categories.set(entity.id, entity);
     }
+    this.legacyAliasMap.set('38', 'cat-milk-powder-adult');
   }
 }
