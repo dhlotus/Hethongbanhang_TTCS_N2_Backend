@@ -22,6 +22,7 @@ export class CustomerEntity {
   region?: string;
   salesRepId?: string;
   salesRepName?: string;
+  salesRep?: { id: string; name: string };
   creditLimit: number;
   currentDebt: number;
   maxDebtDays: number;
@@ -39,6 +40,14 @@ export class CustomerEntity {
     this.currentDebt = partial.currentDebt ?? 0;
     this.maxDebtDays = partial.maxDebtDays ?? 30;
     this.status = partial.status ?? CustomerStatus.ACTIVE;
+    if (partial.salesRep) {
+      this.salesRep = partial.salesRep;
+    } else if (partial.salesRepId || partial.salesRepName) {
+      this.salesRep = {
+        id: partial.salesRepId ?? '',
+        name: partial.salesRepName ?? '',
+      };
+    }
     this.deliveryPoints = (partial.deliveryPoints || []).map(
       (dp) => (dp instanceof DeliveryPointEntity ? dp : new DeliveryPointEntity(dp)),
     );
