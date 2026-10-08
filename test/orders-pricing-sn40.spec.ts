@@ -6,13 +6,48 @@ import { PriceListsService } from '../src/modules/price-lists/price-lists.servic
 
 describe('Order pricing (SN-40)', () => {
   let ordersService: OrdersService;
+  let discountPoliciesService: DiscountPoliciesService;
 
   beforeEach(() => {
+    discountPoliciesService = new DiscountPoliciesService();
     ordersService = new OrdersService(
       new CustomersService(),
       new PriceListsService(),
-      new DiscountPoliciesService(),
+      discountPoliciesService,
     );
+  });
+
+  it('preserves an explicit zero discount tier instead of applying the fallback', () => {
+    expect(
+      discountPoliciesService.calculateBestDiscount(
+        'prod-002',
+        '',
+        10,
+        'LH-NUT-180ML',
+      ),
+    ).toBe(0);
+  });
+
+  it('does not apply fallback volume discounts outside a matching policy tier', () => {
+    expect(
+      discountPoliciesService.calculateBestDiscount(
+        'prod-002',
+        '',
+        101,
+        'LH-NUT-180ML',
+      ),
+    ).toBe(0);
+  });
+
+  it('keeps fallback volume discounts for products without a matching policy', () => {
+    expect(
+      discountPoliciesService.calculateBestDiscount(
+        'prod-unconfigured',
+        '',
+        50,
+        'SKU-UNCONFIGURED',
+      ),
+    ).toBe(5);
   });
 
   it('applies the active customer price and recalculates volume discount when quantity changes', async () => {
@@ -79,6 +114,40 @@ describe('Order pricing (SN-40)', () => {
     expect(order.requiresApproval).toBe(true);
     expect(order.approvalReasons).toHaveLength(1);
     expect(order.status).toBe(OrderStatus.PENDING);
+  });
+
+  it('does not allow an order payload to approve itself during creation', async () => {
+    const order = await ordersService.createOrder({
+      customerId: 'cust-001',
+      status: OrderStatus.APPROVED,
+      lines: [
+        {
+          productId: 'prod-001',
+          productSku: 'LH-MILK-900G',
+          productName: 'Sữa bột',
+          unit: 'Lon',
+          baseUnit: 'Lon',
+          conversionRate: 1,
+          quantity: 1,
+        },
+      ],
+    });
+
+    expect(order.status).toBe(OrderStatus.PENDING);
+  });
+
+  it('rejects status changes through the general order update endpoint', async () => {
+    const order = await ordersService.createOrder({
+      customerId: 'cust-001',
+      status: OrderStatus.DRAFT,
+      lines: [],
+    });
+
+    await expect(
+      ordersService.updateOrder(order.id, {
+        status: OrderStatus.APPROVED,
+      }),
+    ).rejects.toThrow('cập nhật trạng thái qua chức năng duyệt đơn');
   });
 
   it('blocks adding an SKU that has no current price', async () => {

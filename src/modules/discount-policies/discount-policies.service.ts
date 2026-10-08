@@ -173,9 +173,9 @@ export class DiscountPoliciesService {
       }
     }
 
-    // Fallback: nếu không có policy nào khớp thì áp dụng bảng mẫu:
+    // Chỉ dùng mức mặc định khi không có chính sách nào áp dụng cho SKU này.
     // >= 2001: 25% | >= 100: 10% | >= 50: 5% | >= 10: 2%
-    if (maxDiscountPercent === 0) {
+    if (activePolicies.length === 0) {
       if (quantity >= 2001) maxDiscountPercent = 25;
       else if (quantity >= 100) maxDiscountPercent = 10;
       else if (quantity >= 50) maxDiscountPercent = 5;

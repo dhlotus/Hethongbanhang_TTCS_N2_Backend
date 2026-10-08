@@ -473,8 +473,9 @@ export class OrdersService implements OnModuleInit {
     const orderId = `ord-${Date.now()}`;
     const orderCode = this.generateOrderCode();
     const requestedStatus = dto.status || OrderStatus.PENDING;
+    // Approval is only allowed through the guarded status endpoint.
     const orderStatus =
-      requiresApproval && requestedStatus === OrderStatus.APPROVED
+      requestedStatus === OrderStatus.APPROVED
         ? OrderStatus.PENDING
         : requestedStatus;
 
@@ -579,6 +580,12 @@ export class OrdersService implements OnModuleInit {
   async updateOrder(id: string, dto: UpdateOrderDto): Promise<OrderEntity> {
     const order = await this.findOrderById(id);
 
+    if (dto.status !== undefined) {
+      throw new BadRequestException(
+        'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
+      );
+    }
+
     if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
     }
@@ -604,8 +611,6 @@ export class OrdersService implements OnModuleInit {
 
     if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
     if (dto.note !== undefined) order.note = dto.note;
-    if (dto.status !== undefined) order.status = dto.status;
-
     if (dto.lines && dto.lines.length > 0) {
       const pricing = this.resolveOrderPricing(
         dto.lines,
@@ -627,9 +632,6 @@ export class OrdersService implements OnModuleInit {
       order.requiresApproval = requiresApproval;
       order.approvalReasons = approvalReasons;
       order.priceListId = pricing.priceListId || order.priceListId;
-      if (requiresApproval && dto.status === OrderStatus.APPROVED) {
-        order.status = OrderStatus.PENDING;
-      }
     }
 
     order.updatedAt = new Date();
