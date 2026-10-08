@@ -41,6 +41,7 @@ import {
 } from './users.service';
 
 import { ExcelImportService } from './excel-import.service';
+import { EXCEL_IMPORT_MAX_FILE_SIZE } from './constants/excel-import.constant';
 
 /**
  * Controller Quản lý Người dùng & Phân quyền Hệ thống (SN-10 & EP-01):
@@ -138,6 +139,19 @@ export class UsersController {
   }
 
   /**
+   * Cập nhật thông tin hồ sơ của chính mình (SN-17)
+   * PATCH /api/users/me
+   */
+  @Patch('me')
+  @Roles(...Object.values(UserRole))
+  async updateMe(
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<SafeUser> {
+    return this.usersService.update(currentUser.userId, dto, currentUser);
+  }
+
+  /**
    * Cập nhật thông tin nhân sự
    * PATCH /api/users/:id
    */
@@ -147,7 +161,8 @@ export class UsersController {
     @Body() dto: UpdateUserDto,
     @CurrentUser() currentUser: ICurrentUser,
   ): Promise<SafeUser> {
-    return this.usersService.update(id, dto, currentUser);
+    const targetId = id === 'me' ? currentUser.userId : id;
+    return this.usersService.update(targetId, dto, currentUser);
   }
 
   /**
@@ -195,7 +210,13 @@ export class UsersController {
    */
   @Post('import-excel')
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: EXCEL_IMPORT_MAX_FILE_SIZE,
+      },
+    }),
+  )
   @HttpCode(HttpStatus.OK)
   async importUsersFromExcel(
     @UploadedFile() file?: Express.Multer.File,

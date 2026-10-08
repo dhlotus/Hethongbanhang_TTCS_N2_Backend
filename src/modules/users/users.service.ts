@@ -39,6 +39,14 @@ export interface CreateUserResult {
   temporaryPassword?: string;
 }
 
+export interface CreateUserOptions {
+  skipEmail?: boolean;
+  skipDiskSync?: boolean;
+  saltRounds?: number;
+}
+
+
+
 export interface AssignedCustomerItem {
   id: string;
   code: string;
@@ -256,6 +264,52 @@ export class UsersService implements OnModuleInit {
 
     // Sau khi seed xong, khôi phục avatarUrl từ file đã lưu trên đĩa
     this.restoreAvatarsFromDisk();
+
+    // Khôi phục và đồng bộ các thay đổi người dùng đã lưu từ đĩa
+    this.loadUsersFromDisk();
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'users.json');
+  }
+
+  private loadUsersFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<UserEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const existing = this.users.get(item.id);
+        if (existing) {
+          Object.assign(existing, {
+            ...item,
+            createdAt: item.createdAt ? new Date(item.createdAt) : existing.createdAt,
+            updatedAt: item.updatedAt ? new Date(item.updatedAt) : existing.updatedAt,
+          });
+        } else {
+          this.users.set(item.id, new UserEntity(item));
+        }
+      }
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi khi nạp dữ liệu người dùng từ đĩa:', err);
+    }
+  }
+
+  private saveUsersToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.users.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi khi lưu dữ liệu người dùng ra đĩa:', err);
+    }
   }
 
   /**
@@ -383,9 +437,17 @@ export class UsersService implements OnModuleInit {
     }
 
     // Sắp xếp người dùng mới nhất lên trước
-    userList.sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-    );
+    userList.sort((a, b) => {
+      const timeA =
+        a.createdAt instanceof Date
+          ? a.createdAt.getTime()
+          : new Date(a.createdAt || 0).getTime();
+      const timeB =
+        b.createdAt instanceof Date
+          ? b.createdAt.getTime()
+          : new Date(b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
 
     const total = userList.length;
     const totalPages = Math.ceil(total / limit) || 1;
@@ -437,7 +499,10 @@ export class UsersService implements OnModuleInit {
    * - Tự động sinh mật khẩu tạm an toàn nếu không nhập
    * - Gửi email kích hoạt tài khoản kèm mật khẩu tạm thời cho nhân viên mới
    */
-  async create(dto: CreateUserDto): Promise<CreateUserResult> {
+  async create(
+    dto: CreateUserDto,
+    options?: CreateUserOptions,
+  ): Promise<CreateUserResult> {
     const username = dto.username.trim().toLowerCase();
     const email = dto.email.trim().toLowerCase();
 
@@ -480,7 +545,9 @@ export class UsersService implements OnModuleInit {
     const rawPassword =
       dto.password?.trim() ||
       `Loha@${Math.floor(100000 + Math.random() * 900000)}`;
-    const passwordHash = bcrypt.hashSync(rawPassword, BCRYPT_SALT_ROUNDS);
+    const saltRounds = options?.saltRounds ?? BCRYPT_SALT_ROUNDS;
+    const passwordHash = await bcrypt.hash(rawPassword, saltRounds);
+
 
     const newUser = new UserEntity({
       id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -500,28 +567,34 @@ export class UsersService implements OnModuleInit {
     });
 
     this.users.set(newUser.id, newUser);
+    if (!options?.skipDiskSync) {
+      this.saveUsersToDisk();
+    }
 
     // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
-    if (this.mailService) {
-      try {
-        await this.mailService.sendAccountActivationEmail({
-          to: newUser.email,
-          fullName: newUser.fullName,
-          username: newUser.username,
-          temporaryPassword: rawPassword,
-          role: roles.join(', '),
-          assignedWarehouse: newUser.assignedWarehouse,
-        });
-      } catch (err) {
-        console.warn(
-          `[USERS_SERVICE] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
-          err,
+    // Khi batch import hàng loạt (options?.skipEmail = true), bỏ qua gửi email để đạt hiệu năng siêu tốc, mật khẩu tạm được tổng hợp trong báo cáo cho Admin
+    if (!options?.skipEmail) {
+      if (this.mailService) {
+        try {
+          await this.mailService.sendAccountActivationEmail({
+            to: newUser.email,
+            fullName: newUser.fullName,
+            username: newUser.username,
+            temporaryPassword: rawPassword,
+            role: roles.join(', '),
+            assignedWarehouse: newUser.assignedWarehouse,
+          });
+        } catch (err) {
+          console.warn(
+            `[USERS_SERVICE] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
+            err,
+          );
+        }
+      } else {
+        console.log(
+          `✉️ [ACCOUNT ACTIVATION SIMULATION] Đã kích hoạt tài khoản: ${newUser.fullName} (${newUser.email}) | Username: ${newUser.username} | Mật khẩu tạm: ${rawPassword}`,
         );
       }
-    } else {
-      console.log(
-        `✉️ [ACCOUNT ACTIVATION SIMULATION] Đã kích hoạt tài khoản: ${newUser.fullName} (${newUser.email}) | Username: ${newUser.username} | Mật khẩu tạm: ${rawPassword}`,
-      );
     }
 
     return {
@@ -529,6 +602,14 @@ export class UsersService implements OnModuleInit {
       temporaryPassword: rawPassword,
     };
   }
+
+  /**
+   * Lưu toàn bộ dữ liệu người dùng ra đĩa (Dùng sau khi hoàn thành batch import)
+   */
+  public flushUsersToDisk(): void {
+    this.saveUsersToDisk();
+  }
+
 
   /**
    * Cập nhật thông tin người dùng (PATCH /api/users/:id - SN-13 & SN-14):
@@ -621,6 +702,28 @@ export class UsersService implements OnModuleInit {
       user.phone = dto.phone.trim();
     }
 
+    // Quản lý thông tin định danh cá nhân (Ngày sinh & Giới tính)
+    if (user.isIdentityLocked) {
+      if (
+        (dto.dateOfBirth && dto.dateOfBirth !== user.dateOfBirth) ||
+        (dto.gender && dto.gender !== user.gender)
+      ) {
+        throw new BadRequestException(
+          'Thông tin Ngày sinh và Giới tính đã được xác thực định danh và khóa cố định, không thể thay đổi.',
+        );
+      }
+    } else {
+      if (dto.dateOfBirth !== undefined) {
+        user.dateOfBirth = dto.dateOfBirth.trim() || null;
+      }
+      if (dto.gender !== undefined) {
+        user.gender = dto.gender.trim() || null;
+      }
+      if (dto.isIdentityLocked) {
+        user.isIdentityLocked = true;
+      }
+    }
+
     if (targetRoles) {
       user.roles = targetRoles;
       user.role = targetRoles[0];
@@ -636,6 +739,9 @@ export class UsersService implements OnModuleInit {
 
     user.updatedAt = new Date();
     this.users.set(user.id, user);
+
+    // Lưu dữ liệu cập nhật ra đĩa vĩnh viễn
+    this.saveUsersToDisk();
 
     return user.toSafeUser();
   }
