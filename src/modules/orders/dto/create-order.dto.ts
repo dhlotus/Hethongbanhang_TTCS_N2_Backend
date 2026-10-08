@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -73,17 +74,24 @@ export class CreateOrderLineDto {
   @Min(1, { message: 'Số lượng phải ≥ 1' })
   quantity: number;
 
+  @IsOptional()
   @IsNumber({}, { message: 'Đơn giá phải là số' })
   @Min(0, { message: 'Đơn giá không được âm' })
-  unitPrice: number;
+  unitPrice?: number;
 
+  @IsOptional()
   @IsNumber({}, { message: 'Giá niêm yết phải là số' })
   @Min(0, { message: 'Giá niêm yết không được âm' })
-  listPrice: number;
+  listPrice?: number;
 
+  @IsOptional()
   @IsNumber({}, { message: 'Chiết khấu phải là số' })
   @Min(0)
-  discountPercent: number;
+  discountPercent?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isPriceManuallyEdited?: boolean;
 
   @IsOptional()
   @IsNumber()

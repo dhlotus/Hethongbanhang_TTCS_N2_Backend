@@ -33,6 +33,26 @@ export class DiscountPoliciesService {
       ],
     });
     this.discountPolicies.set(defaultPolicy.id, defaultPolicy);
+
+    // Keep the SN-40 sample policy for the nut milk SKU available after backend restarts.
+    const nutMilkPolicy = new DiscountPolicyEntity({
+      id: 'dp-205133',
+      code: 'DP-205133',
+      name: 'Chiết khấu sản lượng tháng 10 #1',
+      targetType: 'SKU' as any,
+      targetId: 'LH-NUT-180ML',
+      targetIds: ['LH-NUT-180ML'],
+      appliedProductSkus: ['LH-NUT-180ML'],
+      discountType: 'PERCENTAGE' as any,
+      startDate: '2026-10-08',
+      endDate: '2027-10-08',
+      status: DiscountPolicyStatus.ACTIVE,
+      tiers: [
+        { id: 'tier-nut-1', minQuantity: 1, maxQuantity: 10, discountValue: 0 },
+        { id: 'tier-nut-2', minQuantity: 11, maxQuantity: 100, discountValue: 2 },
+      ],
+    });
+    this.discountPolicies.set(nutMilkPolicy.id, nutMilkPolicy);
   }
 
   findAll(): DiscountPolicyEntity[] {
@@ -91,19 +111,33 @@ export class DiscountPoliciesService {
     this.discountPolicies.delete(policy.id);
   }
 
-  calculateBestDiscount(productId: string, categoryId: string, quantity: number): number {
-    const todayStr = new Date().toISOString().split('T')[0];
+  calculateBestDiscount(
+    productId: string,
+    categoryId: string,
+    quantity: number,
+    productSku?: string,
+  ): number {
+    const today = new Date().toISOString().split('T')[0];
     const activePolicies = Array.from(this.discountPolicies.values()).filter(
       p => {
         if (p.status !== DiscountPolicyStatus.ACTIVE) return false;
-        if (p.startDate && p.startDate.split('T')[0] > todayStr) return false;
-        if (p.endDate && p.endDate.split('T')[0] < todayStr) return false;
+        if (p.startDate && p.startDate.split('T')[0] > today) return false;
+        if (p.endDate && p.endDate.split('T')[0] < today) return false;
 
-        const matchesProduct = (p.appliedProductSkus && (p.appliedProductSkus.includes(productId) || p.appliedProductSkus.includes('all'))) ||
-                               (p.targetType === 'SKU' && (p.targetIds?.includes(productId) || p.targetId === productId)) ||
-                               (!p.targetId && (!p.targetIds || p.targetIds.length === 0) && (!p.appliedProductSkus || p.appliedProductSkus.length === 0));
-        const matchesCategory = (p.appliedCategoryIds && (p.appliedCategoryIds.includes(categoryId) || p.appliedCategoryIds.includes('all'))) ||
-                                (p.targetType === 'CATEGORY' && (p.targetIds?.includes(categoryId) || p.targetId === categoryId));
+        const productIdentifiers = [productId, productSku].filter(Boolean) as string[];
+        const policyTargetIds = (p.targetIds?.length ? p.targetIds : p.targetId.split(','))
+          .map((target) => target.trim());
+        const matchesProduct =
+          p.appliedProductSkus?.includes('all') ||
+          productIdentifiers.some((identifier) =>
+            p.appliedProductSkus?.includes(identifier) || policyTargetIds.includes(identifier),
+          ) ||
+          (!p.targetId && policyTargetIds.length === 0 && (!p.appliedProductSkus || p.appliedProductSkus.length === 0));
+        const matchesCategory =
+          p.appliedCategoryIds?.includes('all') ||
+          p.appliedCategoryIds?.includes(categoryId) ||
+          ((p.targetType === 'CATEGORY' || (p.targetType as any) === 'HYBRID') &&
+            (policyTargetIds.includes(categoryId) || p.targetId === categoryId));
         const matchesHybrid = (p.targetType as any) === 'HYBRID' && (matchesProduct || matchesCategory);
         return matchesProduct || matchesCategory || matchesHybrid;
       }
@@ -139,9 +173,9 @@ export class DiscountPoliciesService {
       }
     }
 
-    // Fallback: nếu không có policy nào khớp thì áp dụng bảng mẫu:
+    // Chỉ dùng mức mặc định khi không có chính sách nào áp dụng cho SKU này.
     // >= 2001: 25% | >= 100: 10% | >= 50: 5% | >= 10: 2%
-    if (maxDiscountPercent === 0) {
+    if (activePolicies.length === 0) {
       if (quantity >= 2001) maxDiscountPercent = 25;
       else if (quantity >= 100) maxDiscountPercent = 10;
       else if (quantity >= 50) maxDiscountPercent = 5;

@@ -17,6 +17,8 @@ export class OrderLineEntity {
   discountPercent: number; // % Chiết khấu
   lineTotal: number; // Thành tiền = quantity * unitPrice
   stockAvailable?: number; // Tồn khả dụng tham khảo
+  minPrice?: number; // Giá sàn theo đơn vị đặt hàng
+  requiresApproval: boolean;
 
   constructor(partial: Partial<OrderLineEntity>) {
     Object.assign(this, partial);
@@ -27,5 +29,6 @@ export class OrderLineEntity {
     this.listPrice = partial.listPrice ?? this.unitPrice;
     this.discountPercent = partial.discountPercent ?? 0;
     this.lineTotal = partial.lineTotal ?? Math.round(this.quantity * this.unitPrice);
+    this.requiresApproval = partial.requiresApproval ?? false;
   }
 }
