@@ -28,7 +28,8 @@ export class DiscountPoliciesService {
       tiers: [
         { id: 'tier-1', minQuantity: 10, maxQuantity: 49, discountValue: 2 },
         { id: 'tier-2', minQuantity: 50, maxQuantity: 99, discountValue: 5 },
-        { id: 'tier-3', minQuantity: 100, maxQuantity: null, discountValue: 10 },
+        { id: 'tier-3', minQuantity: 100, maxQuantity: 2000, discountValue: 10 },
+        { id: 'tier-4', minQuantity: 2001, maxQuantity: null, discountValue: 25 },
       ],
     });
     this.discountPolicies.set(defaultPolicy.id, defaultPolicy);
@@ -116,23 +117,27 @@ export class DiscountPoliciesService {
     quantity: number,
     productSku?: string,
   ): number {
-    const now = new Date().toISOString();
+    const today = new Date().toISOString().split('T')[0];
     const activePolicies = Array.from(this.discountPolicies.values()).filter(
       p => {
-        if (p.status !== DiscountPolicyStatus.ACTIVE || p.startDate > now || p.endDate < now) {
-          return false;
-        }
-        const matchesProduct = [productId, productSku].some(
-          (identifier) => Boolean(identifier) && (
-            p.appliedProductSkus?.includes(identifier!) ||
-            (p.targetType === 'SKU' && (
-              p.targetIds?.includes(identifier!) ||
-              p.targetId.split(',').map((target) => target.trim()).includes(identifier!)
-            ))
-          ),
-        );
-        const matchesCategory = (p.appliedCategoryIds && p.appliedCategoryIds.includes(categoryId)) ||
-                                (p.targetType === 'CATEGORY' && (p.targetIds?.includes(categoryId) || p.targetId === categoryId));
+        if (p.status !== DiscountPolicyStatus.ACTIVE) return false;
+        if (p.startDate && p.startDate.split('T')[0] > today) return false;
+        if (p.endDate && p.endDate.split('T')[0] < today) return false;
+
+        const productIdentifiers = [productId, productSku].filter(Boolean) as string[];
+        const policyTargetIds = (p.targetIds?.length ? p.targetIds : p.targetId.split(','))
+          .map((target) => target.trim());
+        const matchesProduct =
+          p.appliedProductSkus?.includes('all') ||
+          productIdentifiers.some((identifier) =>
+            p.appliedProductSkus?.includes(identifier) || policyTargetIds.includes(identifier),
+          ) ||
+          (!p.targetId && policyTargetIds.length === 0 && (!p.appliedProductSkus || p.appliedProductSkus.length === 0));
+        const matchesCategory =
+          p.appliedCategoryIds?.includes('all') ||
+          p.appliedCategoryIds?.includes(categoryId) ||
+          ((p.targetType === 'CATEGORY' || (p.targetType as any) === 'HYBRID') &&
+            (policyTargetIds.includes(categoryId) || p.targetId === categoryId));
         const matchesHybrid = (p.targetType as any) === 'HYBRID' && (matchesProduct || matchesCategory);
         return matchesProduct || matchesCategory || matchesHybrid;
       }
@@ -141,14 +146,40 @@ export class DiscountPoliciesService {
     let maxDiscountPercent = 0;
     
     for (const policy of activePolicies) {
-      const applicableTier = policy.tiers.find(
-        t => quantity >= t.minQuantity && (t.maxQuantity === null || quantity <= t.maxQuantity)
-      );
+      if (!policy.tiers || policy.tiers.length === 0) continue;
+
+      // 1. Sắp xếp các nấc theo Q_min tăng dần
+      const sortedTiers = [...policy.tiers].sort((a, b) => (Number(a.minQuantity) || 0) - (Number(b.minQuantity) || 0));
+
+      // 2. Tìm các nấc thỏa mãn: Quantity >= Q_min VÀ (Quantity <= Q_max HOẶC Q_max rỗng/0/null/undefined/Infinity)
+      const matchedTiers = sortedTiers.filter(t => {
+        const min = Number(t.minQuantity) || 0;
+        const rawMax = t.maxQuantity;
+        const max = rawMax !== null && rawMax !== undefined && String(rawMax).trim() !== '' ? Number(rawMax) : null;
+
+        if (quantity < min) return false;
+        if (max === null || isNaN(max) || max <= 0 || max === Infinity) return true;
+        return quantity <= max;
+      });
+
+      // 3. Lấy nấc thỏa mãn có Q_min cao nhất (nấc cuối cùng sau khi sort tăng dần)
+      const applicableTier = matchedTiers.length > 0 ? matchedTiers[matchedTiers.length - 1] : null;
+
       if (applicableTier) {
-        if (policy.discountType === 'PERCENTAGE' && applicableTier.discountValue > maxDiscountPercent) {
-          maxDiscountPercent = applicableTier.discountValue;
+        const val = Number(applicableTier.discountValue) || 0;
+        if ((policy.discountType === 'PERCENTAGE' || !policy.discountType) && val > maxDiscountPercent) {
+          maxDiscountPercent = val;
         }
       }
+    }
+
+    // Fallback: nếu không có policy nào khớp thì áp dụng bảng mẫu:
+    // >= 2001: 25% | >= 100: 10% | >= 50: 5% | >= 10: 2%
+    if (maxDiscountPercent === 0) {
+      if (quantity >= 2001) maxDiscountPercent = 25;
+      else if (quantity >= 100) maxDiscountPercent = 10;
+      else if (quantity >= 50) maxDiscountPercent = 5;
+      else if (quantity >= 10) maxDiscountPercent = 2;
     }
 
     return maxDiscountPercent;
