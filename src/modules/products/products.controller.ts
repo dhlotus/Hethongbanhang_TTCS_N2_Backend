@@ -172,6 +172,18 @@ export class ProductsController {
   }
 
   /**
+   * Lấy lịch sử thay đổi giá của sản phẩm (SN-29)
+   * GET /api/products/:id/price-history
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  @Get(':id/price-history')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async getPriceHistory(@Param('id') id: string) {
+    return this.productsService.getPriceHistory(id);
+  }
+
+  /**
    * Lấy chi tiết sản phẩm theo ID hoặc SKU
    * GET /api/products/:id
    * Quyền: Mọi vai trò đã đăng nhập (Giá vốn và biên LN được lọc theo vai trò)

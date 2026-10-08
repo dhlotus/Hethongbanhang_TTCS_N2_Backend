@@ -576,6 +576,40 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
+   * Lấy lịch sử thay đổi giá của 1 sản phẩm (SN-29)
+   */
+  async getPriceHistory(productId: string): Promise<any[]> {
+    if (!this.dbService?.isConnected()) {
+      return []; // Fallback khi không có DB
+    }
+    
+    // Kiểm tra sản phẩm có tồn tại không
+    await this.findById(productId);
+
+    try {
+      const rows = await this.dbService.query(
+        `SELECT id, product_id, old_price, new_price, changed_by, changed_at
+         FROM product_price_histories
+         WHERE product_id = $1
+         ORDER BY changed_at DESC`,
+        [productId]
+      );
+      
+      return rows.map(row => ({
+        id: row.id,
+        productId: row.product_id,
+        oldPrice: Number(row.old_price),
+        newPrice: Number(row.new_price),
+        changedBy: row.changed_by,
+        changedAt: new Date(row.changed_at),
+      }));
+    } catch (err) {
+      console.error(`[ProductsService] Lỗi khi lấy lịch sử giá SP ${productId}:`, err);
+      return [];
+    }
+  }
+
+  /**
    * Lấy chi tiết sản phẩm theo ID hoặc SKU
    * GET /api/products/:id
    */
