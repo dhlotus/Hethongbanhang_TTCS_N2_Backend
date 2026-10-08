@@ -41,6 +41,7 @@ export class CustomersService implements OnModuleInit {
     for (const c of INITIAL_AGENCIES) {
       this.customers.set(c.id, c);
     }
+    this.unusedLegacy();
   }
 
   private unusedLegacy(): void {
