@@ -1,7 +1,6 @@
 import {
   IsBoolean,
   IsDateString,
-  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -10,65 +9,65 @@ import {
   MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { PaymentTerm } from '../enums/payment-term.enum';
 
 /**
- * DTO Khai báo / Cập nhật Hạn mức Công nợ Đại lý (SN-34)
+ * DTO Khai báo & Cập nhật Hạn mức Công nợ Đại lý (SN-34)
+ * Validate hạn mức tiền, số ngày nợ và BẮT BUỘC có lý do thay đổi
  */
 export class UpdateCreditLimitDto {
   /**
-   * Hạn mức công nợ tối đa (VND)
+   * Hạn mức tiền tối đa (VND)
    */
-  @IsNotEmpty({ message: 'Hạn mức công nợ không được để trống' })
+  @IsNotEmpty({ message: 'Hạn mức tiền tối đa không được để trống' })
   @Type(() => Number)
-  @IsNumber({}, { message: 'Hạn mức công nợ phải là chữ số' })
-  @Min(0, { message: 'Hạn mức công nợ không được âm' })
+  @IsNumber({}, { message: 'Hạn mức tiền tối đa phải là số' })
+  @Min(0, { message: 'Hạn mức tiền tối đa không được nhỏ hơn 0' })
   creditLimit: number;
 
   /**
-   * Thời hạn nợ tối đa (Số ngày)
+   * Số ngày nợ tối đa
    */
-  @IsOptional()
+  @IsNotEmpty({ message: 'Số ngày nợ tối đa không được để trống' })
   @Type(() => Number)
-  @IsNumber({}, { message: 'Thời hạn nợ phải là chữ số' })
-  @Min(0, { message: 'Thời hạn nợ không được âm' })
-  maxDebtDays?: number;
+  @IsNumber({}, { message: 'Số ngày nợ tối đa phải là số' })
+  @Min(0, { message: 'Số ngày nợ tối đa không được nhỏ hơn 0' })
+  maxDebtDays: number;
 
   /**
-   * Điều khoản thanh toán
+   * Lý do thay đổi hạn mức công nợ (BẮT BUỘC cho kiểm toán)
+   */
+  @IsNotEmpty({ message: 'Lý do thay đổi hạn mức là bắt buộc' })
+  @IsString({ message: 'Lý do thay đổi phải là chuỗi ký tự' })
+  @MinLength(5, { message: 'Lý do thay đổi phải có ít nhất 5 ký tự' })
+  reason: string;
+
+  /**
+   * Điều khoản thanh toán (NET_30, NET_45, COD...)
    */
   @IsOptional()
   @IsString({ message: 'Điều khoản thanh toán phải là chuỗi ký tự' })
   paymentTerms?: string;
 
   /**
-   * Hạn mức tín dụng tạm thời (Mùa vụ / Đợt khuyến mãi)
+   * Hạn mức cấp thêm tạm thời (Mùa vụ)
    */
   @IsOptional()
   @Type(() => Number)
-  @IsNumber({}, { message: 'Hạn mức tạm thời phải là chữ số' })
-  @Min(0, { message: 'Hạn mức tạm thời không được âm' })
+  @IsNumber({}, { message: 'Hạn mức tạm thời phải là số' })
+  @Min(0, { message: 'Hạn mức tạm thời không được nhỏ hơn 0' })
   temporaryCreditLimit?: number;
 
   /**
-   * Ngày hết hạn của hạn mức tạm thời
+   * Ngày hết hạn hạn mức tạm thời
    */
   @IsOptional()
-  @IsDateString({}, { message: 'Ngày hết hạn hạn mức tạm thời không hợp lệ' })
+  @IsDateString({}, { message: 'Ngày hết hạn hạn mức tạm thời không đúng định dạng' })
   temporaryLimitExpiry?: string;
 
   /**
-   * Cho phép tạo đơn hàng vượt hạn mức (Cần duyệt đơn)
+   * Cho phép đặt đơn hàng vượt hạn mức khi có xét duyệt
    */
   @IsOptional()
   @IsBoolean({ message: 'Cho phép vượt hạn mức phải là boolean' })
   allowOverLimitOrder?: boolean;
-
-  /**
-   * Lý do điều chỉnh hạn mức (Bắt buộc phục vụ Audit Log)
-   */
-  @IsNotEmpty({ message: 'Lý do điều chỉnh hạn mức là bắt buộc' })
-  @IsString({ message: 'Lý do điều chỉnh phải là chuỗi ký tự' })
-  @MinLength(5, { message: 'Lý do điều chỉnh phải có ít nhất 5 ký tự' })
-  reason: string;
 }
