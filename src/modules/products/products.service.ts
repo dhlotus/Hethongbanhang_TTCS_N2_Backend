@@ -781,6 +781,7 @@ export class ProductsService implements OnModuleInit {
   async update(
     idOrSku: string,
     dto: UpdateProductDto,
+    updatedBy: string = 'Quản trị viên',
   ): Promise<ProductEntity> {
     const product = await this.findById(idOrSku);
 
@@ -874,7 +875,25 @@ export class ProductsService implements OnModuleInit {
       if (dto.price <= 0) {
         throw new BadRequestException('Giá bán phải là số dương lớn hơn 0');
       }
-      product.price = Number(dto.price);
+      
+      const oldPrice = product.price || 0;
+      const newPrice = Number(dto.price);
+      
+      // BẮT ĐẦU LOGIC SN-29: LƯU LỊCH SỬ GIÁ
+      if (oldPrice !== newPrice && oldPrice > 0) {
+        if (this.dbService?.isConnected()) {
+          this.dbService.query(
+            `INSERT INTO product_price_histories (product_id, old_price, new_price, changed_by)
+             VALUES ($1, $2, $3, $4)`,
+            [product.id, oldPrice, newPrice, updatedBy]
+          ).catch(err => {
+            console.error(`[ProductsService] Lỗi khi lưu lịch sử giá SP ${product.id}:`, err);
+          });
+        }
+      }
+      // KẾT THÚC LOGIC SN-29
+      
+      product.price = newPrice;
     }
 
     if (dto.costPrice !== undefined) {

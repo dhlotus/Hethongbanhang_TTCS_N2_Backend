@@ -15,6 +15,7 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
@@ -201,10 +202,12 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async update(
+    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
   ): Promise<ProductEntity> {
-    return this.productsService.update(id, updateDto);
+    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    return this.productsService.update(id, updateDto, userName);
   }
 
   /**
@@ -214,10 +217,12 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async updatePut(
+    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
   ): Promise<ProductEntity> {
-    return this.productsService.update(id, updateDto);
+    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    return this.productsService.update(id, updateDto, userName);
   }
 
   /**
