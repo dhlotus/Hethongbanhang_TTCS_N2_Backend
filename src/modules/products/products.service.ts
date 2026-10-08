@@ -1,17 +1,29 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import { CategoriesService } from '../categories/categories.service';
 import { DatabaseService } from '../../database/database.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
 import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductEntity } from './entities/product.entity';
+import { ProductUnitEntity } from './entities/product-unit.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
+import * as ExcelJS from 'exceljs';
+import { Response } from 'express';
+import {
+  ImportProductItemDto,
+  PreviewImportResult,
+  ConfirmImportResult,
+} from './dto/import-product.dto';
+import { ProductUnitDto } from './dto/product-unit.dto';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -44,7 +56,12 @@ export class ProductsService implements OnModuleInit {
     'LH-OLD-COFFEE-CAN',
   ]);
 
-  constructor(@Optional() private readonly dbService?: DatabaseService) {
+  constructor(
+    @Optional() private readonly dbService?: DatabaseService,
+    @Optional()
+    @Inject(forwardRef(() => CategoriesService))
+    private readonly categoriesService?: CategoriesService,
+  ) {
     this.seedInitialProducts();
   }
 
@@ -68,6 +85,8 @@ export class ProductsService implements OnModuleInit {
         name: string;
         category_id: number;
         category_name?: string;
+        category_code?: string;
+        parent_category_name?: string;
         base_unit: string;
         cost_price: string | number;
         status: string;
@@ -75,24 +94,51 @@ export class ProductsService implements OnModuleInit {
         created_at: Date;
         updated_at: Date;
       }>(
-        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at, c.name as category_name
+        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at,
+                c.name as category_name, c.code as category_code,
+                pcat.name as parent_category_name
          FROM products p
-         LEFT JOIN categories c ON p.category_id = c.id;`,
+         LEFT JOIN categories c ON p.category_id = c.id
+         LEFT JOIN categories pcat ON c.parent_id = pcat.id;`,
       );
 
       for (const row of rows) {
         const existing = Array.from(this.products.values()).find(
-          (p) => p.sku.toUpperCase() === row.sku.toUpperCase() || p.id === row.id,
+          (p) =>
+            p.sku.toUpperCase() === row.sku.toUpperCase() ||
+            p.id === row.id ||
+            (row.sku.toUpperCase() === 'LH-MILK-POWDER-900G' && p.sku.toUpperCase() === 'LH-MILK-900G'),
         );
-        if (!existing) {
-          const catName = row.category_name || 'Đồ uống & Nước giải khát';
-          const costPrice = Number(row.cost_price) || 0;
+        const catName = row.category_name || 'Đồ uống & Nước giải khát';
+        const parentName = row.parent_category_name || catName;
+        const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
+        const costPrice = Number(row.cost_price) || 0;
+
+        if (existing) {
+          existing.sku = row.sku;
+          if (row.category_id) {
+            existing.categoryId = String(row.category_id);
+            existing.category = fullCat;
+            existing.parentCategory = parentName;
+            existing.subCategory = catName;
+          }
+          if (costPrice > 0) {
+            existing.costPrice = costPrice;
+          }
+          if (row.base_unit) {
+            existing.baseUnit = row.base_unit;
+          }
+          if (row.name) {
+            existing.name = row.name;
+          }
+        } else {
           const entity = new ProductEntity({
             id: row.id,
             sku: row.sku,
             name: row.name,
-            category: catName,
-            parentCategory: catName,
+            categoryId: row.category_id ? String(row.category_id) : undefined,
+            category: fullCat,
+            parentCategory: parentName,
             subCategory: catName,
             baseUnit: row.base_unit,
             costPrice,
@@ -121,11 +167,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-001',
         sku: 'LH-MILK-900G',
         name: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        categoryId: 'cat-milk-powder',
         parentCategory: 'Sữa & Chế phẩm sữa',
         subCategory: 'Sữa bột công thức',
         category: 'Sữa & Chế phẩm sữa / Sữa bột công thức',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 520000,
         costPrice: 380000,
         margin: 26.92,
@@ -141,11 +193,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-002',
         sku: 'LH-NUT-180ML',
         name: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        categoryId: 'cat-milk-nut',
         parentCategory: 'Sữa & Chế phẩm sữa',
         subCategory: 'Sữa hạt organic',
         category: 'Sữa & Chế phẩm sữa / Sữa hạt organic',
         baseUnit: 'Hộp',
         packagingSpec: '48 hộp/thùng (12 lốc x 4 hộp)',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 4, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 48, isBaseUnit: false }),
+        ],
         price: 18000,
         costPrice: 11500,
         margin: 36.11,
@@ -161,11 +219,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-003',
         sku: 'LH-NEST-70ML',
         name: 'Nước Yến Sào Chưng Đường Phèn Loha Nest 70ml',
+        categoryId: 'cat-nest-ready',
         parentCategory: 'Nước yến & Bổ dưỡng',
         subCategory: 'Nước yến chưng sẵn',
         category: 'Nước yến & Bổ dưỡng / Nước yến chưng sẵn',
         baseUnit: 'Hũ',
         packagingSpec: '30 hũ/thùng (5 hộp x 6 hũ)',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hũ', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 30, isBaseUnit: false }),
+        ],
         price: 65000,
         costPrice: 42000,
         margin: 35.38,
@@ -181,11 +245,16 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-004',
         sku: 'LH-CEREAL-500G',
         name: 'Ngũ Cốc Dinh Dưỡng Hạt Mầm Loha Meal 500g',
+        categoryId: 'cat-cereal-sprout',
         parentCategory: 'Ngũ cốc & Hạt dinh dưỡng',
         subCategory: 'Ngũ cốc hạt mầm',
         category: 'Ngũ cốc & Hạt dinh dưỡng / Ngũ cốc hạt mầm',
         baseUnit: 'Túi',
         packagingSpec: '20 túi/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Túi', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 20, isBaseUnit: false }),
+        ],
         price: 145000,
         costPrice: 95000,
         margin: 34.48,
@@ -198,11 +267,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-005',
         sku: 'LH-COLLAGEN-50ML',
         name: 'Nước Uống Collagen Đông Trùng Hạ Thảo 50ml',
+        categoryId: 'cat-supp-collagen',
         parentCategory: 'Thực phẩm chức năng',
         subCategory: 'Collagen & Chống lão hóa',
         category: 'Thực phẩm chức năng / Collagen & Chống lão hóa',
         baseUnit: 'Chai',
         packagingSpec: '30 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 10, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 30, isBaseUnit: false }),
+        ],
         price: 85000,
         costPrice: 55000,
         margin: 35.29,
@@ -216,11 +291,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-006',
         sku: 'LH-TEA-240ML',
         name: 'Trà Hoa Cúc La Hán Quả Thanh Nhiệt 240ml',
+        categoryId: 'cat-bev-tea',
         parentCategory: 'Nước giải khát & Trà',
         subCategory: 'Trà thảo mộc thanh nhiệt',
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 15000,
         costPrice: 9200,
         margin: 38.67,
@@ -236,11 +317,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-007',
         sku: 'LH-WATER-500ML',
         name: 'Nước Khoáng Kiềm Thiên Nhiên Loha Ion 500ml',
+        categoryId: 'cat-bev-water',
         parentCategory: 'Nước giải khát & Trà',
         subCategory: 'Nước khoáng thiên nhiên',
         category: 'Nước giải khát & Trà / Nước khoáng thiên nhiên',
         baseUnit: 'Chai',
         packagingSpec: '24 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 12000,
         costPrice: 6800,
         margin: 43.33,
@@ -256,11 +343,16 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-008',
         sku: 'LH-MILK-PAST-1L',
         name: 'Sữa Tươi Thanh Trùng Nguyên Chất 1 Lít',
+        categoryId: 'cat-milk-ready',
         parentCategory: 'Sữa & Chế phẩm sữa',
         subCategory: 'Sữa tươi & Tiệt trùng',
         category: 'Sữa & Chế phẩm sữa / Sữa tươi & Tiệt trùng',
         baseUnit: 'Chai',
         packagingSpec: '12 chai/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Chai', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 12, isBaseUnit: false }),
+        ],
         price: 38000,
         costPrice: 26000,
         margin: 31.58,
@@ -275,11 +367,16 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-009',
         sku: 'LH-NEST-PREM-100G',
         name: 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g',
+        categoryId: 'cat-nest-pure',
         parentCategory: 'Nước yến & Bổ dưỡng',
         subCategory: 'Tổ yến sào tinh chế',
         category: 'Nước yến & Bổ dưỡng / Tổ yến sào tinh chế',
         baseUnit: 'Hộp',
         packagingSpec: '10 hộp/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hộp', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 10, isBaseUnit: false }),
+        ],
         price: 4200000,
         costPrice: 3100000,
         margin: 26.19,
@@ -295,11 +392,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-010',
         sku: 'LH-NUTS-MIX-250G',
         name: 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g',
+        categoryId: 'cat-cereal-nuts',
         parentCategory: 'Ngũ cốc & Hạt dinh dưỡng',
         subCategory: 'Hạt dinh dưỡng sấy giòn',
         category: 'Ngũ cốc & Hạt dinh dưỡng / Hạt dinh dưỡng sấy giòn',
         baseUnit: 'Hũ',
         packagingSpec: '24 hũ/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Hũ', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 135000,
         costPrice: 88000,
         margin: 34.81,
@@ -315,11 +418,17 @@ export class ProductsService implements OnModuleInit {
         id: 'prod-011',
         sku: 'LH-OLD-COFFEE-CAN',
         name: 'Cà Phê Sữa Đóng Lon Loha Classic 240ml (Mẫu Cũ)',
+        categoryId: 'cat-bev-tea',
         parentCategory: 'Nước giải khát & Trà',
         subCategory: 'Trà thảo mộc thanh nhiệt',
         category: 'Nước giải khát & Trà / Trà thảo mộc thanh nhiệt',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
+        units: [
+          new ProductUnitEntity({ unitName: 'Lon', conversionRate: 1, isBaseUnit: true }),
+          new ProductUnitEntity({ unitName: 'Lốc', conversionRate: 6, isBaseUnit: false }),
+          new ProductUnitEntity({ unitName: 'Thùng', conversionRate: 24, isBaseUnit: false }),
+        ],
         price: 14000,
         costPrice: 9000,
         margin: 35.71,
@@ -359,6 +468,7 @@ export class ProductsService implements OnModuleInit {
       page = 1,
       limit = 20,
       search,
+      categoryId,
       parentCategory,
       subCategory,
       category,
@@ -375,6 +485,45 @@ export class ProductsService implements OnModuleInit {
           p.sku.toLowerCase().includes(q) ||
           p.name.toLowerCase().includes(q),
       );
+    }
+
+    // 2. Lọc theo categoryId (hỗ trợ phân cấp cây: nhóm cha hiển thị tất cả sản phẩm của nhánh con/cháu)
+    if (categoryId && categoryId !== 'ALL') {
+      const cid = categoryId.trim().toLowerCase();
+      const targetSet = new Set<string>([cid]);
+
+      if (this.categoriesService) {
+        const cat = this.categoriesService.findCategoryInternal(categoryId);
+        if (cat) {
+          targetSet.add(cat.id.toLowerCase().trim());
+          if (cat.code) targetSet.add(cat.code.toLowerCase().trim());
+          const descendantIds = this.categoriesService.getDescendantIds(cat.id);
+          for (const dId of descendantIds) {
+            targetSet.add(dId.toLowerCase().trim());
+            const dCat = this.categoriesService.findCategoryInternal(dId);
+            if (dCat?.code) targetSet.add(dCat.code.toLowerCase().trim());
+          }
+        }
+      }
+
+      items = items.filter((p) => {
+        if (p.categoryId) {
+          const pCid = p.categoryId.toLowerCase().trim();
+          if (targetSet.has(pCid)) return true;
+          if (this.categoriesService) {
+            const resolved = this.categoriesService.findCategoryInternal(pCid);
+            if (
+              resolved &&
+              (targetSet.has(resolved.id.toLowerCase().trim()) ||
+                (resolved.code && targetSet.has(resolved.code.toLowerCase().trim())))
+            ) {
+              return true;
+            }
+          }
+          return false;
+        }
+        return p.id && targetSet.has(p.id.toLowerCase().trim());
+      });
     }
 
     // 2. Lọc theo nhóm hàng cấp 1 (parentCategory)
@@ -486,15 +635,84 @@ export class ProductsService implements OnModuleInit {
       dto.category?.trim() ||
       (parentCat && subCat ? `${parentCat} / ${subCat}` : parentCat || subCat);
 
+    // Chuẩn hóa và xác thực danh sách đơn vị quy đổi (units - SN-23)
+    const baseUnitName = dto.baseUnit.trim();
+    let productUnits: ProductUnitEntity[] = [];
+
+    if (dto.units && dto.units.length > 0) {
+      const seenNames = new Set<string>();
+      for (const u of dto.units) {
+        const uName = (u.unitName || '').trim();
+        if (!uName) {
+          throw new BadRequestException('Tên đơn vị quy đổi không được để trống');
+        }
+        const lower = uName.toLowerCase();
+        if (seenNames.has(lower)) {
+          throw new BadRequestException(`Đơn vị quy đổi "${uName}" bị trùng lặp`);
+        }
+        seenNames.add(lower);
+
+        // Fix #1: Merge hệ số quy đổi từ 3 alias theo priority
+        // conversionRate (canonical) > conversionFactor (camelCase FE) > conversion_factor (snake_case)
+        const rawRate =
+          u.conversionRate ??
+          (u as unknown as Record<string, unknown>)['conversionFactor'] ??
+          (u as unknown as Record<string, unknown>)['conversion_factor'];
+        const rate = Number(rawRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new BadRequestException(
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0 (nhận được: ${rawRate})`,
+          );
+        }
+
+        const isBase =
+          lower === baseUnitName.toLowerCase() || Boolean(u.isBaseUnit);
+        productUnits.push(
+          new ProductUnitEntity({
+            unitName: uName,
+            conversionRate: isBase ? 1 : rate,
+            isBaseUnit: isBase,
+            barcode: u.barcode,
+            price: u.price,
+            costPrice: u.costPrice,
+          }),
+        );
+      }
+
+      // Đảm bảo đơn vị cơ sở có mặt trong danh sách units
+      const hasBase = productUnits.some(
+        (u) => u.unitName.toLowerCase() === baseUnitName.toLowerCase(),
+      );
+      if (!hasBase) {
+        productUnits.unshift(
+          new ProductUnitEntity({
+            unitName: baseUnitName,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+    } else {
+      productUnits = [
+        new ProductUnitEntity({
+          unitName: baseUnitName,
+          conversionRate: 1,
+          isBaseUnit: true,
+        }),
+      ];
+    }
+
     const newProduct = new ProductEntity({
       id: `prod-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
       sku: cleanSku,
       name: dto.name.trim(),
+      categoryId: dto.categoryId?.trim(),
       parentCategory: parentCat,
       subCategory: subCat,
       category,
-      baseUnit: dto.baseUnit.trim(),
+      baseUnit: baseUnitName,
       packagingSpec: dto.packagingSpec?.trim(),
+      units: productUnits,
       price: Number(dto.price),
       costPrice,
       margin,
@@ -509,17 +727,38 @@ export class ProductsService implements OnModuleInit {
 
     if (this.dbService?.isConnected()) {
       try {
+        let dbCategoryId = 1;
+        if (newProduct.categoryId) {
+          const num = parseInt(newProduct.categoryId, 10);
+          if (!isNaN(num) && num > 0) {
+            dbCategoryId = num;
+          } else {
+            try {
+              const catRows = await this.dbService.query<{ id: number }>(
+                'SELECT id FROM categories WHERE UPPER(code) = $1 OR id::text = $1 LIMIT 1;',
+                [newProduct.categoryId.toUpperCase()],
+              );
+              if (catRows.length > 0) {
+                dbCategoryId = catRows[0].id;
+              }
+            } catch {}
+          }
+        }
+
         await this.dbService.query(
           `INSERT INTO products (sku, name, category_id, base_unit, cost_price, status, image_url)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (sku) DO UPDATE SET
              name = EXCLUDED.name,
              cost_price = EXCLUDED.cost_price,
+             category_id = EXCLUDED.category_id,
+             status = EXCLUDED.status,
+             image_url = EXCLUDED.image_url,
              updated_at = CURRENT_TIMESTAMP;`,
           [
             newProduct.sku,
             newProduct.name,
-            1,
+            dbCategoryId,
             newProduct.baseUnit,
             newProduct.costPrice,
             newProduct.status,
@@ -557,11 +796,9 @@ export class ProductsService implements OnModuleInit {
         throw new BadRequestException('Mã SKU không được chứa khoảng trắng');
       }
 
-      const duplicate = Array.from(this.products.values()).find(
-        (p) => p.sku.toUpperCase() === cleanSku && p.id !== product.id,
-      );
+      const duplicate = this.findProductInternal(cleanSku);
 
-      if (duplicate) {
+      if (duplicate && duplicate.id !== product.id) {
         throw new BadRequestException('Mã SKU đã tồn tại trên hệ thống');
       }
 
@@ -570,6 +807,30 @@ export class ProductsService implements OnModuleInit {
 
     if (dto.name !== undefined) {
       product.name = dto.name.trim();
+    }
+
+    if (dto.categoryId !== undefined) {
+      product.categoryId = dto.categoryId?.trim();
+      if (this.categoriesService && product.categoryId) {
+        const cat = this.categoriesService.findCategoryInternal(product.categoryId);
+        if (cat) {
+          if (dto.subCategory === undefined) {
+            product.subCategory = cat.name;
+          }
+          if (dto.parentCategory === undefined) {
+            const parent = cat.parentId
+              ? this.categoriesService.findCategoryInternal(cat.parentId)
+              : undefined;
+            product.parentCategory = parent ? parent.name : cat.name;
+          }
+          if (dto.category === undefined) {
+            product.category =
+              product.parentCategory !== product.subCategory
+                ? `${product.parentCategory} / ${product.subCategory}`
+                : product.subCategory;
+          }
+        }
+      }
     }
 
     if (dto.parentCategory !== undefined) {
@@ -590,7 +851,19 @@ export class ProductsService implements OnModuleInit {
     }
 
     if (dto.baseUnit !== undefined) {
-      product.baseUnit = dto.baseUnit.trim();
+      const newBaseUnit = dto.baseUnit.trim();
+      // Fix #3: Chặn đổi baseUnit khi còn tồn kho để tránh sai lệch nghĩa số tồn (SN-23 AC3)
+      // Ví dụ: 240 lon → đổi baseUnit thành "Thùng" → hệ thống hiểu là "240 thùng" (SAI)
+      if (
+        newBaseUnit.toLowerCase() !== product.baseUnit.toLowerCase() &&
+        product.stockQuantity > 0
+      ) {
+        throw new BadRequestException(
+          `Không thể đổi đơn vị cơ sở từ "${product.baseUnit}" sang "${newBaseUnit}" khi sản phẩm đang có tồn kho (${product.stockQuantity} ${product.baseUnit}). ` +
+          `Vui lòng xuất kho hết hàng về 0 trước khi thay đổi đơn vị cơ sở.`,
+        );
+      }
+      product.baseUnit = newBaseUnit;
     }
 
     if (dto.packagingSpec !== undefined) {
@@ -643,11 +916,94 @@ export class ProductsService implements OnModuleInit {
       product.description = dto.description?.trim();
     }
 
+    // Cập nhật danh sách đơn vị quy đổi (units - SN-23)
+    if (dto.units !== undefined) {
+      const baseUnitName = (dto.baseUnit ? dto.baseUnit.trim() : product.baseUnit).trim();
+      const seenNames = new Set<string>();
+      const updatedUnits: ProductUnitEntity[] = [];
+
+      for (const u of dto.units) {
+        const uName = (u.unitName || '').trim();
+        if (!uName) {
+          throw new BadRequestException('Tên đơn vị quy đổi không được để trống');
+        }
+        const lower = uName.toLowerCase();
+        if (seenNames.has(lower)) {
+          throw new BadRequestException(`Đơn vị quy đổi "${uName}" bị trùng lặp`);
+        }
+        seenNames.add(lower);
+
+        // Fix #1: Merge hệ số quy đổi từ 3 alias theo priority
+        // conversionRate (canonical) > conversionFactor (camelCase FE) > conversion_factor (snake_case)
+        const rawRate =
+          u.conversionRate ??
+          (u as unknown as Record<string, unknown>)['conversionFactor'] ??
+          (u as unknown as Record<string, unknown>)['conversion_factor'];
+        const rate = Number(rawRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new BadRequestException(
+            `Hệ số quy đổi của đơn vị "${uName}" phải là số lớn hơn 0 (nhận được: ${rawRate})`,
+          );
+        }
+
+        const isBase =
+          lower === baseUnitName.toLowerCase() || Boolean(u.isBaseUnit);
+        updatedUnits.push(
+          new ProductUnitEntity({
+            productId: product.id,
+            unitName: uName,
+            conversionRate: isBase ? 1 : rate,
+            isBaseUnit: isBase,
+            barcode: u.barcode,
+            price: u.price,
+            costPrice: u.costPrice,
+          }),
+        );
+      }
+
+      // Đảm bảo đơn vị cơ sở có mặt trong danh sách units
+      const hasBase = updatedUnits.some(
+        (u) => u.unitName.toLowerCase() === baseUnitName.toLowerCase(),
+      );
+      if (!hasBase) {
+        updatedUnits.unshift(
+          new ProductUnitEntity({
+            productId: product.id,
+            unitName: baseUnitName,
+            conversionRate: 1,
+            isBaseUnit: true,
+          }),
+        );
+      }
+
+      product.units = updatedUnits;
+    }
+
     product.updatedAt = new Date();
     this.products.set(product.id, product);
 
     if (this.dbService?.isConnected()) {
       try {
+        let dbCategoryId: number | null = null;
+        if (dto.categoryId !== undefined) {
+          if (dto.categoryId) {
+            const num = parseInt(dto.categoryId, 10);
+            if (!isNaN(num) && num > 0) {
+              dbCategoryId = num;
+            } else {
+              try {
+                const catRows = await this.dbService.query<{ id: number }>(
+                  'SELECT id FROM categories WHERE UPPER(code) = $1 OR id::text = $1 LIMIT 1;',
+                  [dto.categoryId.toUpperCase()],
+                );
+                if (catRows.length > 0) {
+                  dbCategoryId = catRows[0].id;
+                }
+              } catch {}
+            }
+          }
+        }
+
         await this.dbService.query(
           `UPDATE products 
            SET name = COALESCE($1, name),
@@ -655,6 +1011,7 @@ export class ProductsService implements OnModuleInit {
                cost_price = COALESCE($3, cost_price),
                status = COALESCE($4, status),
                image_url = COALESCE($5, image_url),
+               category_id = COALESCE($7, category_id),
                updated_at = CURRENT_TIMESTAMP
            WHERE sku = $6;`,
           [
@@ -664,6 +1021,7 @@ export class ProductsService implements OnModuleInit {
             dto.status || null,
             dto.imageUrl ? dto.imageUrl.trim() : null,
             product.sku,
+            dbCategoryId,
           ],
         );
       } catch {}
@@ -725,7 +1083,351 @@ export class ProductsService implements OnModuleInit {
     return product;
   }
 
+  /**
+   * Tra cứu hệ số quy đổi của một đơn vị đối với SKU (SN-23):
+   * - Nếu không truyền unitName hoặc unitName trùng baseUnit: rate = 1
+   * - Nếu truyền unitName: tra cứu trong product.units
+   * - Nếu không tìm thấy: ném BadRequestException
+   */
+  findUnitConversion(
+    product: ProductEntity,
+    unitName?: string,
+  ): { unitName: string; conversionRate: number; isBaseUnit: boolean } {
+    if (
+      !unitName ||
+      unitName.trim().toLowerCase() === product.baseUnit.toLowerCase()
+    ) {
+      return {
+        unitName: product.baseUnit,
+        conversionRate: 1,
+        isBaseUnit: true,
+      };
+    }
 
+    const cleanUnit = unitName.trim().toLowerCase();
+    const found = product.units?.find(
+      (u) => u.unitName.toLowerCase() === cleanUnit,
+    );
+
+    if (!found) {
+      const validNames = (product.units || [])
+        .map((u) => u.unitName)
+        .join(', ');
+      throw new BadRequestException(
+        `Đơn vị tính "${unitName}" không tồn tại cho SKU "${product.sku}". Các đơn vị hợp lệ: ${validNames || product.baseUnit}`,
+      );
+    }
+
+    return {
+      unitName: found.unitName,
+      conversionRate: found.conversionRate,
+      isBaseUnit: found.isBaseUnit,
+    };
+  }
+
+  /**
+   * Lấy danh sách đơn vị quy đổi của SKU (SN-21 / SN-23)
+   */
+  async getUnitsByProductId(idOrSku: string): Promise<ProductUnitEntity[]> {
+    const product = await this.findById(idOrSku);
+    return product.units || [];
+  }
+
+  /**
+   * Thêm đơn vị quy đổi mới cho SKU (SN-21 / SN-23)
+   */
+  async addUnit(
+    idOrSku: string,
+    dto: ProductUnitDto,
+  ): Promise<ProductUnitEntity> {
+    const product = await this.findById(idOrSku);
+    if (!product.units) product.units = [];
+
+    const cleanName = dto.unitName.trim();
+    const isDuplicate = product.units.some(
+      (u) => u.unitName.toLowerCase() === cleanName.toLowerCase(),
+    );
+    if (isDuplicate) {
+      throw new BadRequestException(
+        `Đơn vị "${cleanName}" đã tồn tại cho SKU "${product.sku}".`,
+      );
+    }
+
+    const rate = dto.conversionRate !== undefined ? Number(dto.conversionRate) : 1;
+    const newUnit = new ProductUnitEntity({
+      productId: product.id,
+      unitName: cleanName,
+      conversionRate: rate,
+      isBaseUnit: false,
+      barcode: dto.barcode,
+      price: dto.price,
+      costPrice: dto.costPrice,
+    });
+
+    product.units.push(newUnit);
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return newUnit;
+  }
+
+  /**
+   * Cập nhật đơn vị quy đổi của SKU (SN-21 / SN-23)
+   */
+  async updateUnit(
+    idOrSku: string,
+    unitId: string,
+    dto: Partial<ProductUnitDto>,
+  ): Promise<ProductUnitEntity> {
+    const product = await this.findById(idOrSku);
+    const unit = product.units?.find((u) => u.id === unitId || u.unitName.toLowerCase() === unitId.toLowerCase());
+    if (!unit) {
+      throw new NotFoundException(`Không tìm thấy đơn vị quy đổi "${unitId}".`);
+    }
+
+    if (unit.isBaseUnit && dto.conversionRate !== undefined && dto.conversionRate !== 1) {
+      throw new BadRequestException('Không thể thay đổi hệ số của đơn vị cơ sở khác 1.');
+    }
+
+    if (dto.unitName) unit.unitName = dto.unitName.trim();
+    if (dto.conversionRate !== undefined) unit.conversionRate = Number(dto.conversionRate);
+    if (dto.barcode !== undefined) unit.barcode = dto.barcode;
+    if (dto.price !== undefined) unit.price = dto.price;
+    if (dto.costPrice !== undefined) unit.costPrice = dto.costPrice;
+
+    unit.updatedAt = new Date();
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return unit;
+  }
+
+  /**
+   * Xóa đơn vị quy đổi của SKU (SN-21 / SN-23)
+   */
+  async deleteUnit(
+    idOrSku: string,
+    unitId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const product = await this.findById(idOrSku);
+    const unit = product.units?.find((u) => u.id === unitId || u.unitName.toLowerCase() === unitId.toLowerCase());
+    if (!unit) {
+      throw new NotFoundException(`Không tìm thấy đơn vị quy đổi "${unitId}".`);
+    }
+
+    if (unit.isBaseUnit) {
+      throw new BadRequestException('Không được phép xóa đơn vị cơ sở của SKU.');
+    }
+
+    product.units = product.units?.filter((u) => u.id !== unit.id);
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return { success: true, message: `Đã xóa đơn vị "${unit.unitName}".` };
+  }
+
+  /**
+   * Tạo tệp Excel mẫu để nhập sản phẩm (SN-24)
+   */
+  async generateImportTemplate(res: Response): Promise<void> {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Danh mục sản phẩm');
+
+    sheet.columns = [
+      { header: 'Mã SKU (*)', key: 'sku', width: 20, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Tên sản phẩm (*)', key: 'name', width: 30, style: { alignment: { horizontal: 'left' } } },
+      { header: 'Nhóm hàng (*)', key: 'category', width: 20, style: { alignment: { horizontal: 'left' } } },
+      { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Quy cách', key: 'packagingSpec', width: 20, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Giá niêm yết (*)', key: 'price', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Tồn kho', key: 'stockQuantity', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Giá vốn (*)', key: 'costPrice', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Mô tả', key: 'description', width: 30, style: { alignment: { horizontal: 'left' } } },
+    ];
+
+    sheet.addRow({
+      sku: 'SP-001',
+      name: 'Sản phẩm mẫu',
+      category: 'Hàng hóa',
+      baseUnit: 'Cái',
+      packagingSpec: '24 lon/thùng',
+      price: 100000,
+      stockQuantity: 10,
+      costPrice: 80000,
+      description: 'Đây là dòng dữ liệu mẫu, hãy xóa dòng này trước khi nhập',
+    });
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    const sampleRow = sheet.getRow(2);
+    sampleRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    const descCell = sampleRow.getCell(9);
+    descCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=Template_Nhap_SanPham.xlsx',
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+
+  /**
+   * Xem trước tệp Excel nhập sản phẩm (SN-24)
+   */
+  async previewImport(file: Express.Multer.File): Promise<PreviewImportResult> {
+    if (!file) {
+      throw new BadRequestException('Vui lòng tải lên tệp Excel');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    try {
+      const safeBuffer = file.buffer.buffer.slice(
+        file.buffer.byteOffset,
+        file.buffer.byteOffset + file.buffer.byteLength,
+      );
+      await workbook.xlsx.load(safeBuffer as ArrayBuffer);
+    } catch {
+      throw new BadRequestException('Tệp không đúng định dạng Excel');
+    }
+
+    const sheet = workbook.worksheets[0];
+    if (!sheet) {
+      throw new BadRequestException('Tệp Excel không có dữ liệu');
+    }
+
+    const previewData: ImportProductItemDto[] = [];
+    const seenSkus = new Map<string, number>();
+    let validCount = 0;
+    let invalidCount = 0;
+
+    sheet.eachRow((row: ExcelJS.Row, rowNumber: number) => {
+      if (rowNumber === 1) return;
+
+      const sku = row.getCell(1).text?.trim();
+      const name = row.getCell(2).text?.trim();
+      const category = row.getCell(3).text?.trim();
+      const baseUnit = row.getCell(4).text?.trim();
+      const packagingSpec = row.getCell(5).text?.trim();
+      const price = Number(row.getCell(6).value) || 0;
+      const stockQuantity = Number(row.getCell(7).value) || 0;
+      const costPrice = Number(row.getCell(8).value) || 0;
+      const description = row.getCell(9).text?.trim();
+
+      if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
+
+      const errors: string[] = [];
+      if (!sku) {
+        errors.push('Mã SKU không được để trống');
+      } else {
+        const lowerSku = sku.toLowerCase();
+        if (seenSkus.has(lowerSku)) {
+          errors.push(`Mã SKU '${sku}' bị trùng lặp với dòng ${seenSkus.get(lowerSku)} trong tệp`);
+        } else {
+          seenSkus.set(lowerSku, rowNumber - 1);
+        }
+      }
+      if (!name) errors.push('Tên sản phẩm không được để trống');
+      if (!category) errors.push('Nhóm hàng không được để trống');
+      if (!baseUnit) errors.push('Đơn vị tính không được để trống');
+      if (price <= 0) errors.push('Giá niêm yết phải lớn hơn 0');
+      if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
+
+      const existingProduct = Array.from(this.products.values()).find(
+        (p) => p.sku.toLowerCase() === sku?.toLowerCase(),
+      );
+
+      const status = existingProduct ? 'UPDATE' : 'NEW';
+      if (errors.length > 0) {
+        invalidCount++;
+      } else {
+        validCount++;
+      }
+
+      previewData.push({
+        row: rowNumber,
+        sku: sku || '',
+        name: name || '',
+        category: category || '',
+        baseUnit: baseUnit || '',
+        packagingSpec,
+        price,
+        costPrice,
+        stockQuantity,
+        description,
+        status,
+        errors,
+        isValid: errors.length === 0,
+      });
+    });
+
+    return {
+      total: previewData.length,
+      valid: validCount,
+      invalid: invalidCount,
+      data: previewData,
+    };
+  }
+
+  /**
+   * Xác nhận nhập dữ liệu từ bản xem trước (SN-24)
+   */
+  async confirmImport(items: ImportProductItemDto[]): Promise<ConfirmImportResult> {
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+
+    for (const item of items) {
+      try {
+        if (!item.isValid) {
+          errorCount++;
+          errors.push(`Dòng ${item.row}: Dữ liệu không hợp lệ`);
+          continue;
+        }
+
+        if (item.status === 'UPDATE') {
+          await this.update(item.sku, {
+            name: item.name,
+            category: item.category,
+            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
+            baseUnit: item.baseUnit,
+            packagingSpec: item.packagingSpec,
+            price: item.price,
+            costPrice: item.costPrice,
+            description: item.description,
+          });
+        } else {
+          await this.create({
+            sku: item.sku,
+            name: item.name,
+            category: item.category,
+            parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
+            baseUnit: item.baseUnit,
+            packagingSpec: item.packagingSpec,
+            price: item.price,
+            costPrice: item.costPrice,
+            stockQuantity: item.stockQuantity,
+            description: item.description,
+          });
+        }
+        successCount++;
+      } catch (err: unknown) {
+        errorCount++;
+        errors.push(`Dòng ${item.row}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return {
+      success: successCount,
+      error: errorCount,
+      errorDetails: errors,
+    };
+  }
 
   /**
    * Kiểm tra xem sản phẩm đã phát sinh giao dịch hay chưa
@@ -753,6 +1455,261 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
+   * Lấy danh sách sản phẩm thuộc một nhóm hàng (theo categoryId, code hoặc tên)
+   */
+  public findProductsByCategoryId(
+    categoryId: string,
+    categoryCode?: string,
+    categoryName?: string,
+  ): ProductEntity[] {
+    const cidLower = categoryId.toLowerCase().trim();
+    const codeLower = categoryCode ? categoryCode.toLowerCase().trim() : '';
+    const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
+
+    return Array.from(this.products.values()).filter((p) => {
+      // 1. Nếu sản phẩm đã có categoryId: ĐÂY LÀ ĐỊNH DANH DUY NHẤT VÀ CHÍNH XÁC NHẤT
+      if (p.categoryId) {
+        const pCid = p.categoryId.toLowerCase().trim();
+        if (pCid === cidLower) return true;
+        if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
+          return true;
+        }
+        if (this.categoriesService) {
+          const resolved = this.categoriesService.findCategoryInternal(pCid);
+          if (
+            resolved &&
+            (resolved.id.toLowerCase() === cidLower ||
+              (codeLower && resolved.code.toLowerCase() === codeLower))
+          ) {
+            return true;
+          }
+        }
+        return false; // Tuyệt đối không fallback sang so khớp tên cũ khi đã có categoryId
+      }
+
+      // 2. Fallback cho dữ liệu cũ (legacy seed) chưa có categoryId
+      if (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) return true;
+      if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) return true;
+      if (p.category && nameLower && p.category.toLowerCase().includes(nameLower)) return true;
+      return false;
+    });
+  }
+
+  /**
+   * Đếm số lượng sản phẩm thuộc một nhóm hàng
+   */
+  public countProductsByCategoryId(
+    categoryId: string,
+    categoryCode?: string,
+    categoryName?: string,
+  ): number {
+    return this.findProductsByCategoryId(categoryId, categoryCode, categoryName).length;
+  }
+
+  /**
+   * Đếm số lượng sản phẩm trực tiếp thuộc một nhóm hàng (phục vụ tính toán cây đa cấp)
+   */
+  public countDirectProductsByCategoryId(
+    categoryId: string,
+    categoryCode?: string,
+    categoryName?: string,
+    hasChildren: boolean = false,
+  ): number {
+    const cidLower = categoryId.toLowerCase().trim();
+    const codeLower = categoryCode ? categoryCode.toLowerCase().trim() : '';
+    const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
+
+    return Array.from(this.products.values()).filter((p) => {
+      if (p.categoryId) {
+        const pCid = p.categoryId.toLowerCase().trim();
+        if (pCid === cidLower) return true;
+        if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
+          return true;
+        }
+        if (this.categoriesService) {
+          const resolved = this.categoriesService.findCategoryInternal(pCid);
+          if (
+            resolved &&
+            (resolved.id.toLowerCase() === cidLower ||
+              (codeLower && resolved.code.toLowerCase() === codeLower))
+          ) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (!hasChildren) {
+        return (
+          (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) ||
+          (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower)
+        );
+      }
+      return false;
+    }).length;
+  }
+
+  /**
+   * Lấy danh sách sản phẩm thuộc nhánh phân cấp (nhóm chỉ định + tất cả nhóm con/cháu)
+   */
+  public findProductsByBranch(
+    categoryIds: string[],
+    categoryCode?: string,
+    categoryName?: string,
+  ): ProductEntity[] {
+    const targetSet = new Set(categoryIds.map((id) => id.toLowerCase().trim()));
+    const codeLower = categoryCode ? categoryCode.toLowerCase().trim() : '';
+    const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
+
+    return Array.from(this.products.values()).filter((p) => {
+      // 1. Nếu có categoryId: Phải thuộc targetSet hoặc code của nhánh này
+      if (p.categoryId) {
+        const pCid = p.categoryId.toLowerCase().trim();
+        if (targetSet.has(pCid)) {
+          return true;
+        }
+        if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
+          return true;
+        }
+        if (this.categoriesService) {
+          const resolved = this.categoriesService.findCategoryInternal(pCid);
+          if (
+            resolved &&
+            (targetSet.has(resolved.id.toLowerCase().trim()) ||
+              (resolved.code && targetSet.has(resolved.code.toLowerCase().trim())))
+          ) {
+            return true;
+          }
+        }
+        return false; // Tuyệt đối KHÔNG fallback sang chuỗi tên text nếu p.categoryId không khớp!
+      }
+
+      // 2. Fallback cho dữ liệu cũ chưa có categoryId
+      if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) {
+        return true;
+      }
+      if (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) {
+        return true;
+      }
+      if (p.category && nameLower && p.category.toLowerCase().includes(nameLower)) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  /**
+   * Chuyển sản phẩm giữa các nhóm hàng (SN-150)
+   */
+  public async moveProductsBetweenCategories(
+    sourceCategoryIdOrIds: string | string[],
+    targetCategoryId: string,
+    targetCategoryName: string,
+    productIds?: string[],
+    sourceCategoryCode?: string,
+    sourceCategoryName?: string,
+    targetParentCategoryName?: string,
+  ): Promise<number> {
+    const rawIds = Array.isArray(sourceCategoryIdOrIds)
+      ? sourceCategoryIdOrIds
+      : [sourceCategoryIdOrIds];
+
+    // Thu thập tất cả ID nhóm nguồn và các nhóm con/cháu đệ quy
+    const allSourceIds = new Set<string>(rawIds.map((id) => id.toLowerCase().trim()));
+    if (this.categoriesService) {
+      for (const sId of rawIds) {
+        const desc = this.categoriesService.getDescendantIds(sId);
+        for (const d of desc) {
+          allSourceIds.add(d.toLowerCase().trim());
+        }
+      }
+    }
+
+    const sourceIdsArray = Array.from(allSourceIds);
+
+    const candidates = this.findProductsByBranch(
+      sourceIdsArray,
+      sourceCategoryCode,
+      sourceCategoryName,
+    );
+
+    const toMove =
+      productIds && productIds.length > 0
+        ? Array.from(this.products.values()).filter(
+            (p) =>
+              (productIds.includes(p.id) || productIds.includes(p.sku)) &&
+              (candidates.length === 0 ||
+                candidates.some((c) => c.id === p.id || c.sku === p.sku) ||
+                (p.categoryId && allSourceIds.has(p.categoryId.toLowerCase().trim()))),
+          )
+        : candidates;
+
+    if (toMove.length === 0) {
+      return 0;
+    }
+
+    // Xác định numeric ID của nhóm đích trong database PostgreSQL
+    let dbCatId: number | null = null;
+    const num = parseInt(targetCategoryId, 10);
+    if (!isNaN(num) && num > 0) {
+      dbCatId = num;
+    } else if (this.categoriesService) {
+      const catObj = this.categoriesService.findCategoryInternal(targetCategoryId);
+      if (catObj) {
+        const cNum = parseInt(catObj.id, 10);
+        if (!isNaN(cNum) && cNum > 0) dbCatId = cNum;
+      }
+    }
+
+    if (this.dbService?.isConnected() && dbCatId === null) {
+      try {
+        const rows = await this.dbService.query<{ id: number }>(
+          `SELECT id FROM categories WHERE id::text = $1 OR UPPER(code) = UPPER($1) LIMIT 1;`,
+          [targetCategoryId],
+        );
+        if (rows.length > 0) {
+          dbCatId = rows[0].id;
+        }
+      } catch (err) {
+        console.error('[ProductsService] Lỗi tìm ID danh mục trong DB:', err);
+      }
+    }
+
+    const parentName = targetParentCategoryName || targetCategoryName;
+
+    for (const p of toMove) {
+      p.categoryId = targetCategoryId;
+      p.subCategory = targetCategoryName;
+      p.parentCategory = parentName;
+      p.category =
+        parentName !== targetCategoryName
+          ? `${parentName} / ${targetCategoryName}`
+          : targetCategoryName;
+      p.updatedAt = new Date();
+
+      if (this.dbService?.isConnected() && dbCatId !== null) {
+        try {
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p.id);
+          if (isUuid) {
+            await this.dbService.query(
+              `UPDATE products SET category_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid OR sku = $3;`,
+              [dbCatId, p.id, p.sku],
+            );
+          } else {
+            await this.dbService.query(
+              `UPDATE products SET category_id = $1, updated_at = CURRENT_TIMESTAMP WHERE sku = $2;`,
+              [dbCatId, p.sku],
+            );
+          }
+        } catch (dbErr) {
+          console.error(`[ProductsService] Lỗi cập nhật category_id vào DB cho sản phẩm ${p.sku}:`, dbErr);
+        }
+      }
+    }
+
+    return toMove.length;
+  }
+
+  /**
    * Hàm nội bộ tìm kiếm sản phẩm theo ID hoặc SKU
    */
   private findProductInternal(idOrSku: string): ProductEntity | undefined {
@@ -761,6 +1718,15 @@ export class ProductsService implements OnModuleInit {
     if (direct) return direct;
 
     const lowerKey = idOrSku.toLowerCase().trim();
+    if (lowerKey === 'lh-milk-900g') {
+      const alias = Array.from(this.products.values()).find((p) => p.sku.toLowerCase() === 'lh-milk-powder-900g');
+      if (alias) return alias;
+    }
+    if (lowerKey === 'lh-tea-240ml') {
+      const alias = Array.from(this.products.values()).find((p) => p.sku.toLowerCase() === 'lh-tea-350ml');
+      if (alias) return alias;
+    }
+
     return Array.from(this.products.values()).find(
       (p) =>
         p.id.toLowerCase() === lowerKey || p.sku.toLowerCase() === lowerKey,

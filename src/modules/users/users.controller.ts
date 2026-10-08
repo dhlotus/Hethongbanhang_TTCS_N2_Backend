@@ -37,10 +37,12 @@ import {
   CreateUserResult,
   PaginatedUsersResult,
   UpdateUserStatusResult,
+  UserSummaryStats,
   UsersService,
 } from './users.service';
 
 import { ExcelImportService } from './excel-import.service';
+import { EXCEL_IMPORT_MAX_FILE_SIZE } from './constants/excel-import.constant';
 
 /**
  * Controller Quản lý Người dùng & Phân quyền Hệ thống (SN-10 & EP-01):
@@ -116,6 +118,24 @@ export class UsersController {
   @Roles(...Object.values(UserRole))
   async getMe(@CurrentUser() currentUser: ICurrentUser): Promise<SafeUser> {
     return this.usersService.findSafeById(currentUser.userId);
+  }
+
+  /**
+   * Lấy thống kê số lượng nhân sự toàn hệ thống (KPI Cards)
+   * GET /api/users/statistics
+   */
+  @Get('statistics')
+  async getStatistics(): Promise<UserSummaryStats> {
+    return this.usersService.getSummary();
+  }
+
+  /**
+   * Lấy thống kê số lượng nhân sự toàn hệ thống (Alias)
+   * GET /api/users/summary
+   */
+  @Get('summary')
+  async getSummary(): Promise<UserSummaryStats> {
+    return this.usersService.getSummary();
   }
 
   /**
@@ -209,7 +229,13 @@ export class UsersController {
    */
   @Post('import-excel')
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: EXCEL_IMPORT_MAX_FILE_SIZE,
+      },
+    }),
+  )
   @HttpCode(HttpStatus.OK)
   async importUsersFromExcel(
     @UploadedFile() file?: Express.Multer.File,

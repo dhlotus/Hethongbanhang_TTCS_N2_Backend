@@ -26,18 +26,34 @@ import {
 } from './dto';
 import { SafeUser, UserEntity } from './entities/user.entity';
 
+export interface UserSummaryStats {
+  total: number;
+  active: number;
+  locked: number;
+  pendingReset: number;
+}
+
 export interface PaginatedUsersResult {
   data: SafeUser[];
   total: number;
   page: number;
   limit: number;
   totalPages: number;
+  summary: UserSummaryStats;
 }
 
 export interface CreateUserResult {
   user: SafeUser;
   temporaryPassword?: string;
 }
+
+export interface CreateUserOptions {
+  skipEmail?: boolean;
+  skipDiskSync?: boolean;
+  saltRounds?: number;
+}
+
+
 
 export interface AssignedCustomerItem {
   id: string;
@@ -55,6 +71,7 @@ export interface UpdateUserStatusResult extends SafeUser {
   assignedCustomers: AssignedCustomerItem[];
   assignedCustomersCount: number;
   handoverWarning?: string;
+  summary?: UserSummaryStats;
 }
 
 @Injectable()
@@ -429,9 +446,17 @@ export class UsersService implements OnModuleInit {
     }
 
     // Sắp xếp người dùng mới nhất lên trước
-    userList.sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-    );
+    userList.sort((a, b) => {
+      const timeA =
+        a.createdAt instanceof Date
+          ? a.createdAt.getTime()
+          : new Date(a.createdAt || 0).getTime();
+      const timeB =
+        b.createdAt instanceof Date
+          ? b.createdAt.getTime()
+          : new Date(b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
 
     const total = userList.length;
     const totalPages = Math.ceil(total / limit) || 1;
@@ -444,6 +469,25 @@ export class UsersService implements OnModuleInit {
       page,
       limit,
       totalPages,
+      summary: this.getSummary(),
+    };
+  }
+
+  /**
+   * Thống kê tổng số lượng nhân sự toàn hệ thống (không phụ thuộc phân trang limit/page)
+   */
+  getSummary(): UserSummaryStats {
+    const allUsers = Array.from(this.users.values());
+    const total = allUsers.length;
+    const active = allUsers.filter((u) => u.status === UserStatus.ACTIVE).length;
+    const locked = allUsers.filter((u) => u.status === UserStatus.LOCKED).length;
+    const pendingReset = allUsers.filter((u) => Boolean(u.resetCode)).length;
+
+    return {
+      total,
+      active,
+      locked,
+      pendingReset,
     };
   }
 
@@ -483,7 +527,10 @@ export class UsersService implements OnModuleInit {
    * - Tự động sinh mật khẩu tạm an toàn nếu không nhập
    * - Gửi email kích hoạt tài khoản kèm mật khẩu tạm thời cho nhân viên mới
    */
-  async create(dto: CreateUserDto): Promise<CreateUserResult> {
+  async create(
+    dto: CreateUserDto,
+    options?: CreateUserOptions,
+  ): Promise<CreateUserResult> {
     const username = dto.username.trim().toLowerCase();
     const email = dto.email.trim().toLowerCase();
 
@@ -526,7 +573,9 @@ export class UsersService implements OnModuleInit {
     const rawPassword =
       dto.password?.trim() ||
       `Loha@${Math.floor(100000 + Math.random() * 900000)}`;
-    const passwordHash = bcrypt.hashSync(rawPassword, BCRYPT_SALT_ROUNDS);
+    const saltRounds = options?.saltRounds ?? BCRYPT_SALT_ROUNDS;
+    const passwordHash = await bcrypt.hash(rawPassword, saltRounds);
+
 
     const newUser = new UserEntity({
       id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -546,29 +595,34 @@ export class UsersService implements OnModuleInit {
     });
 
     this.users.set(newUser.id, newUser);
-    this.saveUsersToDisk();
+    if (!options?.skipDiskSync) {
+      this.saveUsersToDisk();
+    }
 
     // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
-    if (this.mailService) {
-      try {
-        await this.mailService.sendAccountActivationEmail({
-          to: newUser.email,
-          fullName: newUser.fullName,
-          username: newUser.username,
-          temporaryPassword: rawPassword,
-          role: roles.join(', '),
-          assignedWarehouse: newUser.assignedWarehouse,
-        });
-      } catch (err) {
-        console.warn(
-          `[USERS_SERVICE] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
-          err,
+    // Khi batch import hàng loạt (options?.skipEmail = true), bỏ qua gửi email để đạt hiệu năng siêu tốc, mật khẩu tạm được tổng hợp trong báo cáo cho Admin
+    if (!options?.skipEmail) {
+      if (this.mailService) {
+        try {
+          await this.mailService.sendAccountActivationEmail({
+            to: newUser.email,
+            fullName: newUser.fullName,
+            username: newUser.username,
+            temporaryPassword: rawPassword,
+            role: roles.join(', '),
+            assignedWarehouse: newUser.assignedWarehouse,
+          });
+        } catch (err) {
+          console.warn(
+            `[USERS_SERVICE] Lỗi gửi email kích hoạt tới ${newUser.email}:`,
+            err,
+          );
+        }
+      } else {
+        console.log(
+          `✉️ [ACCOUNT ACTIVATION SIMULATION] Đã kích hoạt tài khoản: ${newUser.fullName} (${newUser.email}) | Username: ${newUser.username} | Mật khẩu tạm: ${rawPassword}`,
         );
       }
-    } else {
-      console.log(
-        `✉️ [ACCOUNT ACTIVATION SIMULATION] Đã kích hoạt tài khoản: ${newUser.fullName} (${newUser.email}) | Username: ${newUser.username} | Mật khẩu tạm: ${rawPassword}`,
-      );
     }
 
     return {
@@ -576,6 +630,14 @@ export class UsersService implements OnModuleInit {
       temporaryPassword: rawPassword,
     };
   }
+
+  /**
+   * Lưu toàn bộ dữ liệu người dùng ra đĩa (Dùng sau khi hoàn thành batch import)
+   */
+  public flushUsersToDisk(): void {
+    this.saveUsersToDisk();
+  }
+
 
   /**
    * Cập nhật thông tin người dùng (PATCH /api/users/:id - SN-13 & SN-14):
@@ -804,6 +866,7 @@ export class UsersService implements OnModuleInit {
     }
 
     this.users.set(user.id, user);
+    this.saveUsersToDisk();
 
     // 3. Kiểm tra đại lý do nhân sự phụ trách khi khóa (SN-15)
     const assignedCustomers = this.getAssignedCustomers(user.id);
@@ -819,6 +882,7 @@ export class UsersService implements OnModuleInit {
       assignedCustomers,
       assignedCustomersCount: assignedCustomers.length,
       handoverWarning,
+      summary: this.getSummary(),
     };
   }
 
@@ -840,6 +904,7 @@ export class UsersService implements OnModuleInit {
     user.resetCodeCreatedAt = new Date();
     user.updatedAt = new Date();
     this.users.set(user.id, user);
+    this.saveUsersToDisk();
 
     return {
       resetCode,
@@ -894,6 +959,7 @@ export class UsersService implements OnModuleInit {
     user.lockedUntil = null;
     user.updatedAt = new Date();
     this.users.set(user.id, user);
+    this.saveUsersToDisk();
 
     // Thu hồi toàn bộ phiên đăng nhập cũ
     this.revokeSessions(user.id);

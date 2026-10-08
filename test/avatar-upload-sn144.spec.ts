@@ -9,11 +9,13 @@ import {
 import { AvatarValidationPipe } from '../src/modules/users/pipes/avatar-validation.pipe';
 import { UsersService } from '../src/modules/users/users.service';
 import { UsersController } from '../src/modules/users/users.controller';
+import { ExcelImportService } from '../src/modules/users/excel-import.service';
 import { AuthController } from '../src/modules/auth/auth.controller';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { JwtService } from '@nestjs/jwt';
 import { jwtConfig } from '../src/config/jwt.config';
 import { ICurrentUser } from '../src/modules/auth/interfaces/current-user.interface';
+import { describe, it } from '@jest/globals';
 
 // Helper mock file creator
 function createMockFile(options: {
@@ -63,7 +65,8 @@ async function runTests(): Promise<void> {
     signOptions: { expiresIn: jwtConfig.expiresIn },
   });
   const authService = new AuthService(usersService, jwtService);
-  const usersController = new UsersController(usersService);
+  const excelImportService = new ExcelImportService(usersService);
+  const usersController = new UsersController(usersService, excelImportService);
   const authController = new AuthController(authService, usersService);
 
   // --------------------------------------------------------------------------
@@ -78,7 +81,7 @@ async function runTests(): Promise<void> {
   } catch (error) {
     assert(
       error instanceof BadRequestException &&
-        error.message === AVATAR_MESSAGES.FILE_REQUIRED,
+      error.message === AVATAR_MESSAGES.FILE_REQUIRED,
       'Ném BadRequestException khi thiếu file: "Vui lòng chọn file ảnh để tải lên."',
     );
   }
@@ -99,7 +102,7 @@ async function runTests(): Promise<void> {
     } catch (error) {
       assert(
         error instanceof BadRequestException &&
-          error.message === AVATAR_MESSAGES.INVALID_FILE_TYPE,
+        error.message === AVATAR_MESSAGES.INVALID_FILE_TYPE,
         `Chặn file không hợp lệ (${invFile.originalname} / ${invFile.mimetype}): "Chỉ chấp nhận file ảnh định dạng JPG hoặc PNG"`,
       );
     }
@@ -118,7 +121,7 @@ async function runTests(): Promise<void> {
   } catch (error) {
     assert(
       error instanceof BadRequestException &&
-        error.message === AVATAR_MESSAGES.FILE_TOO_LARGE,
+      error.message === AVATAR_MESSAGES.FILE_TOO_LARGE,
       'Chặn file vượt quá 2MB: "Dung lượng ảnh không được vượt quá 2MB"',
     );
   }
@@ -160,8 +163,8 @@ async function runTests(): Promise<void> {
 
   assert(
     uploadResult1.statusCode === 200 &&
-      uploadResult1.message === 'Cập nhật ảnh đại diện thành công' &&
-      uploadResult1.data.avatarUrl.startsWith('/uploads/avatars/avatar-usr-admin-001-'),
+    uploadResult1.message === 'Cập nhật ảnh đại diện thành công' &&
+    uploadResult1.data.avatarUrl.startsWith('/uploads/avatars/avatar-usr-admin-001-'),
     'Upload avatar lần 1 thành công, trả về avatarUrl đúng format /uploads/avatars/...',
   );
 
@@ -244,8 +247,8 @@ async function runTests(): Promise<void> {
 
   assert(
     controllerRes1.statusCode === 200 &&
-      controllerRes1.message === 'Cập nhật ảnh đại diện thành công' &&
-      controllerRes1.data.avatarUrl.includes('usr-sales-002'),
+    controllerRes1.message === 'Cập nhật ảnh đại diện thành công' &&
+    controllerRes1.data.avatarUrl.includes('usr-sales-002'),
     'UsersController.uploadAvatar xử lý thành công cho người dùng SALES_REP (RBAC hợp lệ)',
   );
 
@@ -260,8 +263,8 @@ async function runTests(): Promise<void> {
 
   assert(
     controllerRes2.statusCode === 200 &&
-      controllerRes2.message === 'Cập nhật ảnh đại diện thành công' &&
-      controllerRes2.data.avatarUrl.includes('usr-sales-002'),
+    controllerRes2.message === 'Cập nhật ảnh đại diện thành công' &&
+    controllerRes2.data.avatarUrl.includes('usr-sales-002'),
     'AuthController.uploadAvatar xử lý thành công qua endpoint /auth/avatar',
   );
 
@@ -277,7 +280,8 @@ async function runTests(): Promise<void> {
   }
 }
 
-runTests().catch((err) => {
-  console.error('Lỗi thực thi kiểm thử:', err);
-  process.exit(1);
+describe('Kiểm thử SN-144: API Upload Ảnh Đại Diện', () => {
+  it('Chạy toàn bộ kịch bản kiểm thử tích hợp SN-144', async () => {
+    await runTests();
+  }, 30000);
 });

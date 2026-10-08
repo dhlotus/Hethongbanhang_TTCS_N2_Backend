@@ -519,22 +519,321 @@ Trên Git / GitHub Pull Request #5 có 4 file xung đột cần xử lý khi mer
 | `log.md` | Nhánh `develop` có log của các task khác; nhánh feature có log của SN-147 | **Giữ cả hai**, ghép nối theo thứ tự thời gian. Tuyệt đối không ghi đè mất log của đồng đội. |
 | `package-lock.json` | Nhánh feature cài đặt thêm `xlsx` | **Giữ phiên bản của nhánh feature** (có dependency `xlsx`) hoặc chạy lại `npm install` sau khi merge. |
 | `src/modules/users/users.controller.ts` | Nhánh `develop` có thêm routes từ task khác; nhánh feature thêm route `POST /api/users/import-excel` | **Gộp cả hai**: Giữ toàn bộ routes từ `develop`, bổ sung endpoint import Excel và inject `ExcelImportService`. |
-| `src/modules/users/users.service.ts` | `develop` có hotfix phục hồi avatar; nhánh feature không sửa logic core của service | **Ưu tiên giữ toàn bộ code của `develop`**, vì SN-147 tuân thủ Single Responsibility và gọi qua interface public `create()`. |
 
 ---
 
-#### 📌 7. Ghi chú Kỹ thuật & Bàn giao cho Task Kế tiếp:
+### Task [Sprint 2] - [SN-23]: Đơn Vị Tính Quy Đổi & Ghi Sổ Kho Chuẩn Đơn Vị Cơ Sở (Lon / Lốc / Thùng)
 
-1. **Tuân thủ triệt để `CODE_CONVENTION.docx`:**
-   - 100% tên file `kebab-case` (`excel-import.service.ts`, `excel-import.constant.ts`, `excel-user-row.dto.ts`).
-   - 100% Class/DTO `PascalCase`, biến/hàm `camelCase` (bắt đầu bằng động từ: `importUsersFromExcel`, `resolveRole`, `validateRowData`).
-   - Hằng số `UPPER_SNAKE_CASE` (`EXCEL_IMPORT_MAX_FILE_SIZE`, `EXCEL_IMPORT_MAX_ROWS`, `EXCEL_ALLOWED_MIME_TYPES`).
-   - Strict TypeScript: **Không dùng `any`** (Zero `any`), sử dụng type casting an toàn và `unknown`.
-   - Thụt lề 2 spaces, trailing comma đầy đủ.
-2. **Sẵn sàng tích hợp Frontend:**
-   - Modal Upload Excel (kéo thả file `.xlsx`/`.xls`).
-   - Bảng kết quả import chi tiết từng dòng kèm tag màu xanh (`SUCCESS`) / đỏ (`FAILED`) và danh sách lỗi.
-3. **Lưu ý tương lai khi chuyển sang PostgreSQL/TypeORM:**
-   - Khi chuyển từ In-Memory Map sang PostgreSQL, có thể cân nhắc tùy chọn Transaction (All-or-Nothing) hoặc Partial Import tùy theo yêu cầu cụ thể của từng nghiệp vụ doanh nghiệp.
+> **Mã công việc:** `SN-23` (Thuộc Epic `SN-21: Quản lý Kho & Tồn Kho Hàng Hóa`)  
+> **Người thực hiện:** AI Assistant (Pair Programming)  
+> **Thời gian hoàn thành:** 05/10/2026  
+> **Trạng thái:** ✅ **HOÀN THÀNH 100% (Backend + Frontend + Test Suite)**  
+> **Tuân thủ quy chuẩn:** `CODE_CONVENTION.docx` & `CODE_CONVENTION.md` (Strict TypeScript, Zero `any`, 100% `kebab-case`, Trailing Comma, 2 spaces indentation)
+
+---
+
+#### 🎯 1. Yêu cầu Nghiệp vụ & Tiêu chí Chấp nhận (Acceptance Criteria):
+
+* **User Story:**
+  > *"Là Nhân viên kho, tôi muốn có đơn vị tính quy đổi đúng theo cách kho đang gọi hàng, để nhập xuất theo thùng mà sổ sách vẫn ghi đúng số lon."*
+
+* **3 Tiêu chí nghiệm thu cốt lõi:**
+  1. **AC-1 - Khai báo đa đơn vị:** Mỗi SKU khai báo được nhiều đơn vị (vd: Lon, Lốc, Thùng) kèm hệ số quy đổi về đơn vị cơ sở (`conversionRate > 0`). Đơn vị cơ sở (`baseUnit`) luôn được bảo đảm tồn tại với hệ số quy đổi mặc định bằng 1 (`isBaseUnit = true`).
+  2. **AC-2 - Tự động quy đổi khi ghi sổ:** Phiếu kho (nhập, xuất, điều chỉnh) nhập theo bất kỳ đơn vị nào (Thùng, Lốc, Lon...) đều được tự động quy về đơn vị cơ sở (`baseQuantityChange = quantity * conversionRate`) khi cập nhật thẻ kho và sổ cái tồn kho.
+  3. **AC-3 - Bất biến lịch sử giao dịch (Snapshot Immutability):** Việc sửa đổi hệ số quy đổi của SKU trong tương lai (ví dụ: đổi quy cách từ 24 lon/thùng lên 30 lon/thùng) tuyệt đối **KHÔNG** làm sai lệch các bút toán giao dịch đã ghi nhận trong quá khứ. Toàn bộ các dòng sổ kho lưu trữ snapshot bất biến của `conversionRate` và `baseQuantityChange` tại thời điểm phát sinh.
+
+---
+
+#### 📁 2. Danh mục File Thay đổi & Tạo mới:
+
+##### A. Backend (NestJS):
+* **Tạo mới:**
+  * `src/modules/products/entities/product-unit.entity.ts`: Entity đại diện cho đơn vị quy đổi của SKU (`unitName`, `conversionRate`, `isBaseUnit`, `barcode`, `price`, `costPrice`).
+  * `src/modules/products/dto/product-unit.dto.ts`: DTO kiểm thực dữ liệu đầu vào cho đơn vị tính (`unitName` non-empty, `conversionRate >= 1`, boolean `isBaseUnit`).
+  * `src/modules/inventory/entities/inventory-transaction.entity.ts`: Entity sổ cái kho (Transaction Ledger) lưu trữ bất biến các giao dịch (`inputQuantity`, `inputUnit`, snapshot `conversionRate`, `baseQuantityChange`, `baseUnit`, `previousStock`, `newStock`, `referenceCode`).
+  * `test/product-units-conversion-sn23.spec.ts`: Bộ kiểm thử tự động 11 Test Cases bao phủ trọn vẹn 3 tiêu chí AC-1, AC-2, AC-3.
+* **Cập nhật:**
+  * `src/modules/products/entities/product.entity.ts`: Bổ sung trường `units: ProductUnitEntity[]`, tự động đồng bộ `baseUnit` vào danh sách đơn vị, serialize đầy đủ trong `toJSON()`.
+  * `src/modules/products/dto/create-product.dto.ts` & `src/modules/products/dto/index.ts`: Bổ sung `@ValidateNested()` cho mảng `ProductUnitDto`.
+  * `src/modules/products/products.service.ts`:
+    * Cập nhật Seed Data 11 sản phẩm FMCG với đa đơn vị tính chuẩn (Lon/Lốc/Thùng, Hộp/Lốc/Thùng, Chai/Thùng, Gói/Thùng).
+    * Bổ sung logic kiểm tra trùng lặp tên đơn vị, kiểm tra `conversionRate > 0`, hàm tiện ích `findUnitConversion(product, unitName)`.
+  * `src/modules/inventory/dto/adjust-stock.dto.ts`: Bổ sung trường tùy chọn `unit?: string` và `referenceCode?: string`.
+  * `src/modules/inventory/inventory.service.ts`:
+    * Tích hợp cơ chế tính toán quy đổi theo đơn vị nhập/xuất trước khi ghi sổ tồn kho.
+    * Cơ chế **chống tồn kho âm tuyệt đối** (chặn giao dịch nếu tồn sau quy đổi < 0).
+    * Ghi nhận dòng giao dịch bất biến vào sổ cái kho (`inventoryTransactions`).
+    * Bổ sung hàm `getTransactions(sku?: string, limit?: number)`.
+  * `src/modules/inventory/inventory.controller.ts`: Bổ sung endpoint `GET /inventory/transactions` để truy vấn sổ kho.
+
+##### B. Frontend (React + TypeScript):
+* **Cập nhật:**
+  * `src/types/products.ts`: Bổ sung interface `ProductUnit`, `InventoryTransaction`, mở rộng `Product`, `CreateProductPayload`, `AdjustStockPayload`, `StockAdjustmentResponse`.
+  * `src/services/products.service.ts`: Cấu hình danh sách 11 mock products FMCG có đầy đủ `units`, export danh sách dùng chung.
+  * `src/services/inventory.service.ts`: Triển khai hàm `adjustStock()` hỗ trợ quy đổi đơn vị, lưu trữ sổ kho vào `localStorage` (fallback demo), và hàm `getTransactions(sku)`.
+  * `src/components/product-form-modal.tsx`:
+    * Tích hợp UI khối **"Khai báo đơn vị tính quy đổi kho (Lon / Lốc / Thùng)"** ngay dưới mục quy cách đóng gói.
+    * Gợi ý chọn nhanh các quy cách phổ biến: `+ Lốc (x6)`, `+ Lốc (x4)`, `+ Thùng (x24)`, `+ Thùng (x30)`.
+    * Form thêm / xóa đơn vị quy đổi trực quan, kiểm tra hợp lệ: không trùng đơn vị cơ sở, hệ số > 1.
+    * Gắn toàn bộ `units` vào payload gửi lên server khi tạo mới hoặc cập nhật SKU.
+  * `src/pages/products-page.tsx`:
+    * **Bảng danh mục (Desktop & Mobile):** Hiển thị tag ĐVT cơ sở kèm huy hiệu các đơn vị quy đổi (`Thùng x24`, `Lốc x6`...).
+    * **Thao tác hàng:** Bổ sung nút mở **Sổ kho & Lịch sử quy đổi** (`BookOpen`).
+    * **Header actions:** Bổ sung nút truy cập nhanh **Sổ kho quy đổi**.
+    * **Modal Điều chỉnh / Nhập Xuất Tồn Kho:** Cho phép chọn đơn vị tính (Dropdown gồm ĐVT cơ sở và các đơn vị quy đổi), nhập số lượng, nhập mã chứng từ/phiếu kho (`referenceCode`). Hiển thị hộp tính toán quy đổi thời gian thực: `Số lượng x Hệ số = SL cơ sở ghi sổ` và cảnh báo ngăn chặn xuất âm kho.
+    * **Modal Sổ Kho & Lịch Sử Bút Toán (Ledger Modal):** Hiển thị bảng chi tiết các bút toán lịch sử, giải thích rõ ràng tính chất **Snapshot Immutability (AC-3)** bảo đảm không bao giờ sai lệch quá khứ khi đổi hệ số quy đổi.
+
+---
+
+#### 🧪 3. Kết Quả Kiểm Thử (Test Suite Execution):
+
+##### A. Backend Test Suite (`test/product-units-conversion-sn23.spec.ts`):
+```text
+PASS test/product-units-conversion-sn23.spec.ts
+  [SN-23] Đơn Vị Tính Quy Đổi & Ghi Sổ Kho Chuẩn Đơn Vị Cơ Sở
+    1. Khai báo Đơn vị tính quy đổi đa cấp cho SKU (Lon, Lốc, Thùng)
+      √ TC-01: Sản phẩm ban đầu (Seed Data) có sẵn danh sách đơn vị quy đổi chuẩn FMCG (3 ms)
+      √ TC-02: Tạo mới SKU khai báo nhiều đơn vị quy đổi thành công (baseUnit + conversion units) (1 ms)
+      √ TC-03: Tự động đảm bảo đơn vị cơ sở (baseUnit) luôn có mặt trong units với conversionRate = 1 (1 ms)
+      √ TC-04: Từ chối tạo SKU nếu có đơn vị quy đổi bị trùng lặp tên (11 ms)
+      √ TC-05: Từ chối tạo SKU nếu hệ số quy đổi <= 0 (1 ms)
+    2. Nhập/Xuất kho theo thùng/lốc đều quy về đơn vị cơ sở khi ghi sổ
+      √ TC-06: Nhập kho 5 Thùng (hệ số 24) -> Tồn kho tăng chính xác +120 Lon cơ sở (1 ms)
+      √ TC-07: Xuất kho 2 Lốc (hệ số 6) -> Tồn kho giảm chính xác -12 Lon cơ sở
+      √ TC-08: Nếu không truyền unit -> Mặc định là đơn vị cơ sở (conversionRate = 1) (1 ms)
+      √ TC-09: Báo lỗi nếu chọn đơn vị không tồn tại trong danh mục của SKU (2 ms)
+      √ TC-10: Ràng buộc chống tồn kho âm tuyệt đối khi xuất vượt quá tồn cơ sở (1 ms)
+    3. Đổi hệ số quy đổi KHÔNG làm sai lệch các giao dịch đã ghi trước đó (Snapshot bất biến)
+      √ TC-11: Bản ghi sổ kho lưu cứng Snapshot conversionRate và baseQuantityChange tại thời điểm phát sinh (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       11 passed, 11 total
+Snapshots:   0 total
+Time:        1.783 s
+```
+
+##### B. Frontend & Backend Build Verification:
+* **Frontend:** `npm run build` (`tsc -b && vite build`) -> **Exit code 0** (0 lỗi TypeScript, 0 cảnh báo type).
+* **Backend:** `npm run build` (`nest build`) -> **Exit code 0** (Biên dịch sạch sẽ).
+* **Regression Test:** `npm run test` (`excel-import-sn147.spec.ts`) -> **22/22 PASS**.
+
+---
+
+#### 📌 4. Ghi Chú Kỹ Thuật & Bàn Giao:
+1. **Bảo mật và toàn vẹn dữ liệu:** Không lưu tham chiếu động hệ số quy đổi trong bảng giao dịch kho; luôn lưu giá trị tĩnh tại thời điểm phát sinh giao dịch.
+2. **Quy tắc đặt tên:** 100% tuân thủ `CODE_CONVENTION.docx` và `CODE_CONVENTION.md` (kebab-case file, PascalCase entity/class, camelCase hàm, zero any).
+3. **Mở rộng tương lai:** Khi tích hợp Module Đơn Hàng (Order & Pricing), line-item trong đơn hàng cũng sẽ áp dụng `findUnitConversion` để tự động tính giá và trừ giữ chỗ theo đơn vị cơ sở.
 
 
+---
+
+### [Sprint 2] - [SN-150]: Quản Lý Nhóm Hàng Đa Cấp (Tree Structure) & Ràng Buộc Toàn Vẹn Dữ Liệu
+- **Thời gian hoàn thành:** 2026-10-03
+- **Mã Jira / US:** SN-150 (User Story SN-22 / S2-06 - Sprint 2)
+- **Mục tiêu nghiệp vụ:** Cho phép Quản lý kinh doanh (`SALES_MANAGER`) và Quản trị viên (`ADMIN`) quản lý nhóm hàng theo cấu trúc cây (tối thiểu 3 cấp), hỗ trợ chuyển sản phẩm giữa các nhóm và thực thi nghiêm ngặt ràng buộc toàn vẹn chống xóa nhóm còn sản phẩm hoặc nhóm con.
+- **Danh sách file tạo mới / thay đổi:**
+  - *Tạo mới:*
+    - `src/common/enums/category-status.enum.ts`: Enum `CategoryStatus` (`ACTIVE` | `INACTIVE`).
+    - `src/modules/categories/interfaces/category-tree.interface.ts`: Interface `CategoryTreeNode` (hỗ trợ phân cấp đệ quy và `productCount`).
+    - `src/modules/categories/entities/category.entity.ts`: Thực thể `CategoryEntity` (`id`, `code`, `name`, `parentId`, `level`, `status`, `productCount`, `children`, aliases snake_case `parent_id`, `product_count`, v.v.).
+    - `src/modules/categories/dto/create-category.dto.ts`: DTO tạo nhóm hàng mới (validate `name`, `code`, `parentId`, `description`, `status`).
+    - `src/modules/categories/dto/update-category.dto.ts`: DTO cập nhật nhóm hàng (`PartialType(CreateCategoryDto)`).
+    - `src/modules/categories/dto/move-products.dto.ts`: DTO di chuyển sản phẩm giữa các nhóm hàng (`sourceCategoryId`, `targetCategoryId`, `productIds`).
+    - `src/modules/categories/categories.service.ts`: Xử lý toàn bộ logic nghiệp vụ (build cây đệ quy, tính toán level tự động, chống vòng lặp vô tận, di chuyển sản phẩm, ràng buộc xóa cứng).
+    - `src/modules/categories/categories.controller.ts`: Các endpoints RESTful bảo vệ bởi `JwtAuthGuard` & `RolesGuard` (`ADMIN`, `SALES_MANAGER`).
+    - `src/modules/categories/categories.module.ts`: Đăng ký module và liên kết hai chiều với `ProductsModule`.
+    - `test/categories-tree-sn150.spec.ts`: Bộ kiểm thử tự động toàn diện 41/41 test case.
+  - *Chỉnh sửa:*
+    - `src/common/enums/index.ts`: Export `category-status.enum`.
+    - `src/modules/products/entities/product.entity.ts`: Bổ sung thuộc tính `categoryId` và alias getter `category_id`.
+    - `src/modules/products/products.service.ts`: Bổ sung các phương thức tra cứu và di chuyển sản phẩm theo nhóm hàng (`findProductsByCategoryId`, `countProductsByCategoryId`, `moveProductsBetweenCategories`).
+    - `src/app.module.ts`: Đăng ký `CategoriesModule`.
+- **Chi tiết kỹ thuật & nghiệp vụ đã triển khai:**
+  1. **Schema & Cây Danh Mục (Tree Structure):**
+     - Mô hình Adjacency List với `parent_id` tự liên kết, tính toán tự động `level` (`level = parent.level + 1`; nếu không có cha mặc định `level = 1`).
+     - Đã khởi tạo bộ dữ liệu mẫu chuẩn hóa 3 cấp cho ngành FMCG & Thực phẩm Đồ uống (Ngành hàng cha -> Nhóm phụ -> Phân loại con).
+     - Tự động đếm và hiển thị `productCount` tương ứng trên từng node nhóm hàng.
+  2. **Chống Vòng Lặp Vô Tận (Circular Dependency Protection):**
+     - Khi cập nhật `parentId`, hệ thống chủ động kiểm tra bằng thuật toán duyệt ngược tổ tiên (`isDescendant`):
+       - Chặn chọn chính mình làm nhóm cha (`BadRequestException: "Không thể chọn chính nhóm hàng làm nhóm cha (vòng lặp vô tận)"`).
+       - Chặn chọn con hoặc cháu làm nhóm cha (`BadRequestException: "Không thể chọn nhóm con/cháu làm nhóm cha (vòng lặp vô tận)"`).
+     - Khi đổi nhóm cha, hệ thống cập nhật đệ quy `level` của toàn bộ cây con bên dưới.
+  3. **Di Chuyển Sản Phẩm Giữa Các Nhóm (`POST /api/categories/move-products`):**
+     - Kiểm tra nhóm nguồn và nhóm đích hợp lệ, bắt buộc khác nhau.
+     - Cho phép di chuyển theo danh sách `productIds` chỉ định hoặc chuyển toàn bộ sản phẩm của nhóm nguồn sang nhóm đích.
+  4. **Ràng Buộc Toàn Vẹn Cứng Khi Xóa (`DELETE /api/categories/:id`):**
+     - Ràng buộc 1: Nếu nhóm đang chứa nhóm con (`children`), từ chối xóa: `"Nhóm hàng đang chứa nhóm hàng con. Vui lòng chuyển hoặc xóa nhóm con trước."`
+     - Ràng buộc 2: Nếu nhóm đang chứa sản phẩm (`products`), từ chối xóa: `"Nhóm còn sản phẩm thì không xoá được. Vui lòng chuyển sản phẩm sang nhóm khác trước khi xoá."`
+     - Chỉ cho phép xóa khi nhóm hoàn toàn rỗng.
+  5. **Phân Quyền RBAC (Deny by default):**
+     - `GET /api/categories/tree`, `GET /api/categories`, `GET /api/categories/:id`: Mọi người dùng đã đăng nhập (`JwtAuthGuard`).
+     - `POST`, `PATCH`, `DELETE`, `POST /move-products`: Giới hạn nghiêm ngặt chỉ `@Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)` kèm `RolesGuard`.
+- **Trạng thái:**
+  - ✅ Build Backend (`nest build`) thành công 100%, 0 lỗi TypeScript, tuyệt đối không dùng `any`.
+  - ✅ Test Suite `test/categories-tree-sn150.spec.ts`: **41/41 PASSED, 0 FAILED**.
+  - ✅ Hồi quy toàn diện: Test Suite SN-138 (62/62) và SN-10 (25/25) tiếp tục pass 100%.
+  - 🚀 Sẵn sàng tích hợp sang các tính năng Bảng giá đa cấp (EP-02 / Sprint 2).
+
+---
+
+### [TASK TIẾP THEO] ĐỒNG BỘ TOÀN DIỆN HAI CHIỀU: CÂY NHÓM HÀNG & DANH MỤC SẢN PHẨM (CATEGORY TREE & PRODUCT CATALOG SYNC)
+- **Mục tiêu:**
+  1. Phân cấp ở Danh mục sản phẩm và Cây nhóm hàng phải đồng nhất 100% theo cùng một cấu trúc chuẩn (3 cấp: Cấp 1 > Cấp 2 > Cấp 3).
+  2. Khi thêm/sửa sản phẩm, sản phẩm thuộc nhánh nào phải về chính xác nhánh đó trên cây; cây nhóm hàng tự động cập nhật số lượng sản phẩm (`productCount`) của nhánh con và rollup lên các nhánh cha.
+  3. Hai mục Cây sản phẩm và Danh mục sản phẩm phải đồng nhất, thay đổi ở mục này sẽ lập tức phản ánh sang mục kia.
+- **Danh sách file thay đổi:**
+  - **Backend (`HTBH_Backend`):**
+    - `src/modules/products/dto/create-product.dto.ts`: Bổ sung trường `categoryId?: string;` hỗ trợ gán trực tiếp ID nhóm hàng khi tạo SKU.
+    - `src/modules/products/dto/get-products-filter.dto.ts`: Bổ sung bộ lọc `categoryId?: string;`.
+    - `src/modules/products/entities/product.entity.ts`: Bổ sung `categoryId`, alias `category_id`, constructor normalization, và serializer `toJSON()`.
+    - `src/modules/products/products.service.ts`:
+      + Gán `categoryId` cho các sản phẩm khởi tạo mẫu và sản phẩm tạo mới/cập nhật.
+      + Triển khai `countDirectProductsByCategoryId()` để đếm chính xác sản phẩm trực tiếp thuộc node mà không trùng lặp khi rollup cây.
+      + Triển khai `findProductsByBranch()` để lấy sản phẩm thuộc toàn bộ nhánh (bao gồm các nhóm con/cháu).
+      + Bổ sung lọc `categoryId` trong `findAllPaginated()`.
+    - `src/modules/categories/categories.service.ts`:
+      + Nâng cấp thuật toán `getCategoryTree()` tính `productCount = directCount + sum(child.productCount)` bảo đảm rollup chính xác từ lá lên gốc.
+      + Bổ sung `getProductsByCategoryId(idOrCode)` tra cứu sản phẩm theo nhánh.
+      + Bổ sung `getDescendantIds(categoryId)`.
+    - `src/modules/categories/categories.controller.ts`:
+      + Bổ sung endpoint `GET /api/categories/:id/products` (quyền: mọi vai trò đăng nhập).
+  - **Frontend (`HTBH_Frontend`):**
+    - `src/types/products.ts`: Bổ sung `level`, `children`, `subCategories`, `productCount` cho `ProductCategory`; bổ sung `categoryId` cho `ProductQueryParams`.
+    - `src/services/categories.service.ts`: Bổ sung hàm `getProductsByCategory(id)`.
+    - `src/services/products.service.ts`:
+      + Cập nhật `PRODUCT_CATEGORIES` tĩnh chuẩn 3 cấp.
+      + Tải danh mục động từ `/api/categories/tree` qua `getCategories()`.
+      + Hỗ trợ truyền `categoryId` trong `getProducts()`.
+    - `src/components/product-form-modal.tsx`:
+      + Tải cây danh mục động từ backend.
+      + Bộ chọn phân cấp 3 tầng liên hoàn: Cấp 1 (Nhóm chính) -> Cấp 2 (Nhóm phụ) -> Cấp 3 (Phân loại chi tiết).
+      + Hiển thị Breadcrumb trực quan (`FolderTree`) nhánh đang chọn và tự động gán `categoryId` node lá gửi lên server.
+    - `src/pages/categories-page.tsx`:
+      + Huy hiệu số lượng sản phẩm trên từng node cây cho phép bấm để mở modal danh sách sản phẩm thuộc nhánh.
+      + Nút điều hướng "Mở trong Danh mục sản phẩm →" tự động chuyển hướng và lọc theo `categoryId`.
+    - `src/pages/products-page.tsx`:
+      + Tự động nhận tham số `categoryId` từ URL query parameters và hiển thị chip "Đang lọc theo nhánh cây".
+      + Bổ sung dropdown lọc Cấp 3 khi nhóm Cấp 2 có phân loại con.
+      + Bảng danh sách hiển thị cột "Nhóm hàng" dạng breadcrumb đa cấp trực quan.
+- **Trạng thái kiểm thử:**
+  - ✅ Backend Build: 100% Passed (`nest build`).
+  - ✅ Frontend Build: 100% Passed (`tsc -b && vite build`).
+  - ✅ Test Suite Tự Động: 41/41 Passed (`categories-tree-sn150.spec.ts`).
+  - ✅ Test Live E2E Integration: Hoàn thành kiểm thử vòng tròn (Thêm SP -> Cây tăng số lượng đúng nhánh và cha -> Xem SP theo nhánh -> Lọc SP theo nhánh).
+
+---
+
+### [FIX] LƯU TRỮ VÀ ĐỒNG BỘ TOÀN VẸN CÂY NHÓM HÀNG VÀO CƠ SỞ DỮ LIỆU POSTGRESQL
+- **Vấn đề phát hiện:**
+  - Schema PostgreSQL `categories` sử dụng kiểu dữ liệu `id INT SERIAL PRIMARY KEY`, `parent_id INT REFERENCES categories(id)`, và `path VARCHAR(255) NOT NULL`.
+  - Trong tầng Service trước đó, `newCategory.parentId` được truyền dạng chuỗi (`'cat-...'`) khiến PostgreSQL từ chối câu lệnh INSERT do lỗi ép kiểu `parent_id INT`.
+  - Hàm `loadCategoriesFromDatabase()` bị thiếu logic đồng bộ hai chiều, khiến dữ liệu khởi tạo không được nạp vào DB và dữ liệu tạo mới từ UI không lưu được vào PostgreSQL.
+- **Giải pháp xử lý:**
+  - Cập nhật [`categories.service.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/categories/categories.service.ts):
+    + `syncAndLoadCategoriesFromDatabase()`: Tự động đồng bộ toàn bộ bộ seed cây mẫu (3 cấp) vào PostgreSQL khi khởi động với ID số nguyên và cập nhật `path` phân cấp (ví dụ: `/11/17/28/`).
+    + `create()`: Truy vấn chuyển đổi `parentId` sang `parent_id` kiểu số nguyên trong Postgres; thực hiện `INSERT INTO categories ... RETURNING id`, tự động sinh `path` tương ứng và lưu ID số nguyên thực tế vào hệ thống.
+    + `update()`: Kiểm tra tính duy nhất mã code trong DB; cập nhật `parent_id`, `level`, và tự động cập nhật đệ quy `path` bằng Recursive CTE trong PostgreSQL.
+    + `delete()`: Kiểm tra ràng buộc cứng tồn tại nhóm con (`parent_id`) và sản phẩm (`category_id`) trực tiếp trên bảng PostgreSQL trước khi thực thi xóa.
+  - Cập nhật [`products.service.ts`](file:///d:/D%E1%BB%B1%20%C3%A1n%20TTCS/HTBH_Backend/src/modules/products/products.service.ts):
+    + Khi tạo mới hoặc cập nhật sản phẩm, tự động ánh xạ `dto.categoryId` sang ID số nguyên của bảng `categories` trong PostgreSQL (thay vì cố định giá trị 1).
+- **Trạng thái kiểm thử:**
+  - ✅ Build `nest build`: Thành công 100%, 0 lỗi.
+  - ✅ Unit Test `categories-tree-sn150.spec.ts`: 41/41 Passed.
+  - ✅ Live Test PostgreSQL: Kiểm thử trực tiếp trên PostgreSQL thực tế (`htbh_db`) thành công 100%: 29 nhóm ngành hàng được đồng bộ, nhóm mới tạo lập tức ghi nhận vào bảng `categories`, cập nhật `path` và liên kết `parent_id` chính xác.
+
+---
+
+### [TASK] SN-25: CẬP NHẬT UI & FORM VALIDATION CHO MODAL THÊM MỚI NHÀ CUNG CẤP
+- **User Story:** SN-25 - Quản lý Nhà cung cấp (Supplier Management).
+- **Nhánh thực hiện (Git Branches):**
+  - Backend: `feature/SN-25-supplier-validation-be` (checkout từ `Develop`).
+  - Frontend: `feature/SN-25-supplier-validation-fe` (checkout từ `main`).
+  - *Strict Rule:* Tuân thủ giữ nguyên uncommitted changes, tuyệt đối không tự ý `git commit` hay `git push`.
+- **Chi tiết kỹ thuật cập nhật:**
+  - **Frontend (`HTBH_Frontend`):**
+    - File: `src/pages/suppliers-page.tsx`
+      + Thẻ thống kê (Stats Card): Đổi chữ "Ngừng hoạt động" thành "Ngừng giao dịch" để đồng bộ chuẩn xác với tên trạng thái hệ thống, giữ nguyên toàn bộ layout và logic đếm.
+    - File: `src/components/supplier-form-modal.tsx`
+      + Trường `Mã nhà cung cấp`: Thiết lập thuộc tính `readOnly`, `disabled`, placeholder `"Mã nhà cung cấp tự sinh"`, ngăn chặn tương tác nhập tay khi tạo mới, hiển thị gợi ý hệ thống tự động sinh mã định danh khi lưu.
+      + Trường `Mã số thuế`: Cập nhật nhãn chuẩn hóa thành "Mã số thuế" (loại bỏ "(MST)"), ràng buộc chỉ cho phép nhập ký tự số và bắt buộc đúng 12 chữ số (`^[0-9]{12}$`), hiển thị lỗi realtime và submit: *"Mã số thuế phải bao gồm đúng 12 chữ số"*.
+      + Trường `Người liên hệ`: Kiểm tra regex `^[a-zA-ZÀ-ỹ\s]+$`, chặn ký tự số, hiển thị lỗi realtime và submit: *"Tên người liên hệ không được chứa chữ số"*.
+      + Trường `Số điện thoại`: Bắt buộc bắt đầu bằng `0`, độ dài từ 10 đến 12 chữ số (`^0[0-9]{9,11}$`). Hiển thị thông báo tương ứng:
+        * Không bắt đầu bằng 0: *"Số điện thoại phải bắt đầu bằng số 0"*.
+        * Độ dài < 10 hoặc > 12 số: *"Số điện thoại phải từ 10 đến 12 chữ số"*.
+      + Giao diện: Hiển thị thông báo lỗi chi tiết màu đỏ ngay dưới từng trường dữ liệu, highlight viền đỏ input khi vi phạm.
+  - **Backend (`HTBH_Backend`):**
+    - File: `src/modules/suppliers/dto/create-supplier.dto.ts`
+      + `taxCode`: Bổ sung `@Matches(/^[0-9]{12}$/, { message: 'Mã số thuế phải bao gồm đúng 12 chữ số' })`.
+      + `contactName`: Bổ sung `@Matches(/^[a-zA-ZÀ-ỹ\s]+$/u, { message: 'Tên người liên hệ không được chứa chữ số' })`.
+      + `phone` & `contactPhone`: Bổ sung `@Matches(/^0/, { message: 'Số điện thoại phải bắt đầu bằng số 0' })` và `@Matches(/^0[0-9]{9,11}$/, { message: 'Số điện thoại phải từ 10 đến 12 chữ số' })`.
+      + `@Transform`: Chuẩn hóa chuỗi rỗng thành `undefined` để bảo đảm `@IsOptional()` hoạt động chính xác khi không nhập dữ liệu optional.
+    - File: `src/modules/suppliers/suppliers.service.ts`
+      + Đảm bảo tương thích fallback đa trường giữa `dto.phone` và `dto.contactPhone` trong cả `create()` và `update()`.
+    - File test: `test/create-supplier-dto-validation.spec.ts`
+      + 6 kịch bản kiểm thử validation DTO cho các trường `taxCode` (bắt buộc đúng 12 chữ số), `contactName`, `phone`.
+- **Trạng thái kiểm thử:**
+  - ✅ Backend Type Check: `npx tsc --noEmit` -> Passed 100% (0 lỗi).
+  - ✅ Backend Unit Test: `test/suppliers-sn25.spec.ts` -> 11/11 tests passed.
+  - ✅ Backend DTO Validation Test: `test/create-supplier-dto-validation.spec.ts` -> 6/6 tests passed.
+  - ✅ Frontend Build: `npm run build` (`tsc -b && vite build`) -> 0 lỗi, build production thành công.
+
+
+
+
+### [Sprint 2] - [SN-28]: BE: X�y d?ng Module Chi?t kh?u theo S?n l�?ng (DiscountPolicy) & C?nh b�o T?n kho
+- **Th?i gian ho�n th�nh:** 2026-10-08
+- **M? Jira / Task:** SN-28
+- **Danh s�ch file t?o m?i / thay �?i:**
+  - src/modules/discount-policies/* (T?o m?i: DiscountPolicyEntity, DiscountTier, DTOs, Service, Controller)
+  - src/app.module.ts (��ng k? DiscountPoliciesModule)
+  - src/common/enums/order-status.enum.ts (Th�m PENDING_INVENTORY_APPROVAL)
+  - src/modules/orders/orders.controller.ts (Th�m API POST /api/v1/orders)
+  - src/modules/orders/orders.service.ts (Th�m logic ki?m tra t?n kho v� chuy?n tr?ng th�i PENDING_INVENTORY_APPROVAL)
+- **Chi ti?t k? thu?t:**
+  - Qu?n l? ch�nh s�ch chi?t kh?u theo s?n l�?ng (Tier).
+  - API t�nh to�n m?c chi?t kh?u t?t nh?t (Best-Offer).
+  - N?u t?ng s? l�?ng �?t > kh? d?ng, ��n h�ng ��?c t?o v?i tr?ng th�i PENDING_INVENTORY_APPROVAL thay v? b�o l?i.
+- **L�u ?:**
+  - Kh�ng d�ng Git commit theo y�u c?u.
+
+- **Frontend Integration (SN-28):**
+  - T?o th� m?c v� component DiscountPoliciesTab �? qu?n l? c�c ch�nh s�ch chi?t kh?u s?n l�?ng.
+  - T�ch h?p t�nh n�ng t? �?ng t�nh chi?t kh?u trong trang t?o ��n h�ng (orders-page.tsx).
+  - C?p nh?t c?nh b�o khi ��n �?t h�ng v�?t t?n kho kh? d?ng v� chuy?n sang tr?ng th�i PENDING_INVENTORY_APPROVAL ��ng chu?n giao di?n UI_GUIDELINES.md.
+
+### [Sprint 3] - [SN-37]: BE & FE: Tìm kiếm và Lọc Danh sách Đại lý theo Tuyến Bán hàng
+- **Thời gian hoàn thành:** 2026-10-08
+- **Mã Jira / Task:** SN-37 (Epic EP-03 / S3-08)
+- **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn tìm kiếm và lọc danh sách đại lý, để tìm nhanh khách trong tuyến khi đang đứng ngoài đường."
+- **Danh sách file tạo mới / thay đổi:**
+  - **Backend (HTBH_Backend):**
+    - src/modules/customers/dto/filter-customers.dto.ts (Tạo mới: FilterCustomersDto hỗ trợ search, region, customerGroup, salesRepId, status, page, limit)
+    - src/modules/customers/interfaces/paginated-customers.interface.ts (Tạo mới: PaginatedCustomersResult interface)
+    - src/modules/customers/entities/customer.entity.ts (Cập nhật: Bổ sung trường salesRep quan hệ { id, name })
+    - src/modules/customers/customers.service.ts (Cập nhật: filterCustomers xử lý RBAC tuyến bán hàng SALES_REP vs ADMIN/SALES_MANAGER, tìm kiếm ILIKE không phân biệt hoa thường theo code/name/phone, bộ lọc đa tiêu chí & phân trang)
+    - src/modules/customers/customers.controller.ts (Cập nhật: GET /api/customers áp dụng JwtAuthGuard, @Query() query: FilterCustomersDto, @CurrentUser() currentUser)
+    - 	est/customers-filter-sn37.spec.ts (Tạo mới: 30 test cases bao phủ toàn bộ AC của SN-37)
+  - **Frontend (HTBH_Frontend):**
+    - src/types/customer.types.ts (Tạo mới: Customer, CustomerStatus enum, CustomerFilterParams, PaginatedCustomersResponse)
+    - src/types/customer.ts (Cập nhật: Re-export đồng bộ với customer.types.ts)
+    - src/services/customer.service.ts (Tạo mới: getCustomers hỗ trợ tham số lọc, phân trang, demo/offline fallback an toàn)
+    - src/services/customers.service.ts (Cập nhật: Re-export customerService)
+    - src/hooks/use-customers.ts (Tạo mới: Custom hook quản lý state, 300ms debounce tìm kiếm, reset filter, pagination)
+    - src/pages/customers-page.tsx (Tạo mới: Màn hình tra cứu đại lý tối ưu di động với Card View, nút gọi điện thoại nhanh tel:, bộ lọc filter chips, Skeleton loading, Table View cho Desktop, tích hợp DeliveryPointModal)
+    - src/routes/index.tsx (Cập nhật: Tích hợp CustomersPage vào route /sales/customers và alias /customers)
+    - src/services/orders.service.ts (Cập nhật: Hỗ trợ response đại lý dạng phân trang PaginatedCustomersResponse)
+- **Chi tiết kỹ thuật:**
+  - **Phân quyền tuyến bán hàng (RBAC Scope):** Nhân viên vai trò SALES_REP tự động bị giới hạn chỉ xem đại lý do chính mình phụ trách (salesRepId === currentUser.userId). Quản trị viên ADMIN và Quản lý kinh doanh SALES_MANAGER được xem toàn bộ đại lý công ty và có thể lọc theo nhân viên kinh doanh cụ thể.
+  - **Tìm kiếm nhanh Full-text / Partial:** Tìm kiếm không phân biệt hoa thường theo Mã đại lý (code), Tên đại lý (
+ame), hoặc Số điện thoại (phone).
+  - **Bộ lọc đa tiêu chí:** Kết hợp linh hoạt Khu vực (egion: Miền Bắc, Miền Trung, Miền Nam), Nhóm khách hàng (customerGroup: AGENT_LEVEL_1, AGENT_LEVEL_2, RETAIL), Trạng thái (status: ACTIVE, LOCKED, INACTIVE).
+  - **Trải nghiệm di động thực địa (Field-ready UX):** Giao diện thiết kế theo UI_GUIDELINES.md với thẻ Card trực quan, nhãn trạng thái nổi bật, thanh tiến trình tỷ lệ nợ / hạn mức, nút bấm gọi nhanh qua giao thức 	el:, thao tác chạm tối thiểu 40-44px.
+- **Trạng thái kiểm thử:**
+  - Backend Spec Test: 
+px ts-node test/customers-filter-sn37.spec.ts -> 30/30 tests passed (100%).
+  - Backend Build: 
+est build -> 0 lỗi.
+  - Frontend ESLint: 
+px eslint -> 0 lỗi, 0 warnings.
+  - Frontend Build: 
+pm run build (	sc -b && vite build) -> 0 lỗi, build production thành công.

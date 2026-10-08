@@ -76,8 +76,18 @@ export class UserEntity {
     this.resetCodeCreatedAt = partial.resetCodeCreatedAt ?? null;
     this.failedAttempts = partial.failedAttempts ?? 0;
     this.lockedUntil = partial.lockedUntil ?? null;
-    this.createdAt = partial.createdAt ?? new Date();
-    this.updatedAt = partial.updatedAt ?? new Date();
+    this.createdAt =
+      partial.createdAt instanceof Date
+        ? partial.createdAt
+        : partial.createdAt
+        ? new Date(partial.createdAt)
+        : new Date();
+    this.updatedAt =
+      partial.updatedAt instanceof Date
+        ? partial.updatedAt
+        : partial.updatedAt
+        ? new Date(partial.updatedAt)
+        : new Date();
   }
 
   /**
