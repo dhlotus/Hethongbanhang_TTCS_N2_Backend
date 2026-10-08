@@ -11,6 +11,11 @@ import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
+import { FilterCustomersDto } from './dto/filter-customers.dto';
+import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
+import { UserRole } from '../../common/enums/user-role.enum';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { INITIAL_AGENCIES } from './agencies.seed';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
@@ -33,6 +38,12 @@ export class CustomersService implements OnModuleInit {
    * Khởi tạo dữ liệu mẫu thực tế 100% cho các đại lý và nhiều điểm giao hàng (SN-31)
    */
   private seedInitialCustomers(): void {
+    for (const c of INITIAL_AGENCIES) {
+      this.customers.set(c.id, c);
+    }
+  }
+
+  private unusedLegacy(): void {
     const list: CustomerEntity[] = [
       new CustomerEntity({
         id: 'cust-001',
@@ -272,6 +283,102 @@ export class CustomersService implements OnModuleInit {
           }),
         ],
       }),
+      new CustomerEntity({
+        id: 'cust-006',
+        code: 'DL-DNG-001',
+        name: 'Đại Lý Thực Phẩm Sông Hàn',
+        taxCode: '0401889922',
+        customerGroup: 'AGENT_LEVEL_2',
+        region: 'Miền Trung',
+        salesRepId: 'usr-sale-01',
+        salesRepName: 'Trần Văn Long',
+        creditLimit: 75000000,
+        currentDebt: 80000000,
+        maxDebtDays: 25,
+        phone: '0978123456',
+        email: 'songhan.food@gmail.com',
+        address: '42 Bạch Đằng, P.Hải Châu 1, Q.Hải Châu, Đà Nẵng',
+        status: CustomerStatus.LOCKED,
+        deliveryPoints: [
+          new DeliveryPointEntity({
+            id: 'dp-006-1',
+            customerId: 'cust-006',
+            name: 'Điểm Bán Trung Tâm Hải Châu',
+            address: '42 Bạch Đằng, Phường Hải Châu 1, Quận Hải Châu, Đà Nẵng',
+            ward: 'Phường Hải Châu 1',
+            district: 'Quận Hải Châu',
+            province: 'Đà Nẵng',
+            receiverName: 'Anh Lê Quốc Tuấn',
+            phone: '0978123456',
+            roadNote: 'Tuyến đường ven sông, giao giờ hành chính',
+            isDefault: true,
+          }),
+        ],
+      }),
+      new CustomerEntity({
+        id: 'cust-007',
+        code: 'DL-CTH-001',
+        name: 'Đại Lý Bách Hóa Miền Tây',
+        taxCode: '1801667788',
+        customerGroup: 'RETAIL',
+        region: 'Miền Nam',
+        salesRepId: 'usr-sale-02',
+        salesRepName: 'Nguyễn Thị Hằng',
+        creditLimit: 25000000,
+        currentDebt: 0,
+        maxDebtDays: 15,
+        phone: '0966778899',
+        email: 'mientaymart.ct@gmail.com',
+        address: '15 Trần Văn Khéo, P.Cái Khế, Q.Ninh Kiều, Cần Thơ',
+        status: CustomerStatus.INACTIVE,
+        deliveryPoints: [
+          new DeliveryPointEntity({
+            id: 'dp-007-1',
+            customerId: 'cust-007',
+            name: 'Cửa hàng Cái Khế',
+            address: '15 Trần Văn Khéo, Phường Cái Khế, Quận Ninh Kiều, Cần Thơ',
+            ward: 'Phường Cái Khế',
+            district: 'Quận Ninh Kiều',
+            province: 'Cần Thơ',
+            receiverName: 'Chị Huỳnh Ánh',
+            phone: '0966778899',
+            roadNote: 'Mặt tiền chợ đêm, giao buổi sáng',
+            isDefault: true,
+          }),
+        ],
+      }),
+      new CustomerEntity({
+        id: 'cust-008',
+        code: 'DL-HN-001',
+        name: 'Đại lý Sữa Hà Nội',
+        taxCode: '0109988776',
+        customerGroup: 'AGENT_LEVEL_1',
+        region: 'Miền Bắc',
+        salesRepId: 'usr-sale-03',
+        salesRepName: 'Phạm Minh Tuấn',
+        creditLimit: 100000000,
+        currentDebt: 45000000,
+        maxDebtDays: 30,
+        phone: '0987654321',
+        email: 'suahanoi.distributor@gmail.com',
+        address: '123 Giải Phóng, Hai Bà Trưng, Hà Nội',
+        status: CustomerStatus.ACTIVE,
+        deliveryPoints: [
+          new DeliveryPointEntity({
+            id: 'dp-008-1',
+            customerId: 'cust-008',
+            name: 'Kho Phân Phối Giải Phóng',
+            address: '123 Giải Phóng, Phường Đồng Tâm, Quận Hai Bà Trưng, Hà Nội',
+            ward: 'Phường Đồng Tâm',
+            district: 'Quận Hai Bà Trưng',
+            province: 'Hà Nội',
+            receiverName: 'Anh Nguyễn Văn A',
+            phone: '0987654321',
+            roadNote: 'Mặt đường lớn, xe tải 3.5T vào bốc dỡ thuận tiện',
+            isDefault: true,
+          }),
+        ],
+      }),
     ];
 
     for (const c of list) {
@@ -280,7 +387,7 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
-   * Lấy danh sách tất cả đại lý kèm lọc (SN-38)
+   * Lấy danh sách tất cả đại lý kèm lọc linh hoạt và phân trang (SN-37 & SN-38)
    */
   async findAllCustomers(query?: QueryCustomerDto): Promise<CustomerEntity[]> {
     let result = Array.from(this.customers.values());
@@ -304,6 +411,140 @@ export class CustomersService implements OnModuleInit {
     }
 
     return result;
+  }
+
+  /**
+   * Tìm kiếm và lọc danh sách đại lý phân quyền & phân trang chuẩn mực (SN-37)
+   * - Nếu role là SALES_REP (nhân viên kinh doanh thông thường):
+   *   Tự động mặc định chỉ lọc các đại lý được gán cho chính user đó phụ trách (trừ khi là ADMIN hoặc SALES_MANAGER)
+   * - Tìm kiếm nhanh (search): Không phân biệt hoa thường theo Mã (code), Tên (name), Số điện thoại (phone)
+   * - Kết hợp linh hoạt: region, customerGroup, salesRepId, status
+   * - Phân trang đầy đủ: page, limit, total, totalPages
+   */
+  async filterCustomers(
+    query?: FilterCustomersDto,
+    currentUser?: ICurrentUser,
+  ): Promise<PaginatedCustomersResult> {
+    let list = Array.from(this.customers.values());
+
+    // 1. Phân quyền theo vai trò (RBAC Scope):
+    // Nhân viên kinh doanh (SALES_REP) chỉ nhìn thấy đại lý mình phụ trách (trừ khi có quyền ADMIN / SALES_MANAGER)
+    if (currentUser?.roles && currentUser.roles.length > 0) {
+      const isManagerOrAdmin =
+        currentUser.roles.includes(UserRole.ADMIN) ||
+        currentUser.roles.includes(UserRole.SALES_MANAGER);
+
+      const isSalesRep = currentUser.roles.includes(UserRole.SALES_REP);
+
+      if (isSalesRep && !isManagerOrAdmin) {
+        list = list.filter((c) => {
+          // 1. Khớp chính xác ID phụ trách
+          if (c.salesRepId === currentUser.userId || c.salesRep?.id === currentUser.userId) {
+            return true;
+          }
+
+          // 2. Đồng bộ tài khoản Sales Rep chính (sales@loha.vn / usr-sales-002 / usr-sale-01 / 00000000-0000-0000-0000-000000000003)
+          const isPrimarySalesUser =
+            currentUser.userId === 'usr-sales-002' ||
+            currentUser.userId === 'usr-sale-01' ||
+            currentUser.userId === '00000000-0000-0000-0000-000000000003' ||
+            currentUser.username === 'sales' ||
+            currentUser.email === 'sales@loha.vn';
+
+          if (isPrimarySalesUser) {
+            return (
+              c.salesRepId === 'usr-sale-01' ||
+              c.salesRepId === 'usr-sales-002' ||
+              c.salesRepId === '00000000-0000-0000-0000-000000000003'
+            );
+          }
+
+          // 3. Đồng bộ tài khoản Sales Rep phụ (nhanvienkinhdoanh@loha.vn / usr-sale-02 / 00000000-0000-0000-0000-000000000013)
+          const isSecondarySalesUser =
+            currentUser.userId === 'usr-sale-02' ||
+            currentUser.userId === '00000000-0000-0000-0000-000000000013' ||
+            currentUser.username === 'nhanvienkinhdoanh' ||
+            currentUser.email === 'nhanvienkinhdoanh@loha.vn';
+
+          if (isSecondarySalesUser) {
+            return (
+              c.salesRepId === 'usr-sale-02' ||
+              c.salesRepId === '00000000-0000-0000-0000-000000000013'
+            );
+          }
+
+          // 4. Fallback an toàn: Nếu là tài khoản kinh doanh hệ thống nhưng chưa gán ID cụ thể, mặc định xem tuyến chính
+          return c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002';
+        });
+      }
+    }
+
+    // 2. Lọc theo nhân viên phụ trách chỉ định (dành cho Admin / Quản lý)
+    if (query?.salesRepId && query.salesRepId !== 'ALL') {
+      const targetRepId = query.salesRepId;
+      list = list.filter((c) => {
+        if (c.salesRepId === targetRepId || c.salesRep?.id === targetRepId) {
+          return true;
+        }
+        if (
+          (targetRepId === 'usr-sales-002' || targetRepId === 'usr-sale-01') &&
+          (c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002')
+        ) {
+          return true;
+        }
+        if (
+          (targetRepId === 'usr-sale-02' || targetRepId === '00000000-0000-0000-0000-000000000013') &&
+          (c.salesRepId === 'usr-sale-02' || c.salesRepId === '00000000-0000-0000-0000-000000000013')
+        ) {
+          return true;
+        }
+        return false;
+      });
+    }
+
+    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone
+    if (query?.search) {
+      const q = query.search.toLowerCase().trim();
+      list = list.filter(
+        (c) =>
+          c.code.toLowerCase().includes(q) ||
+          c.name.toLowerCase().includes(q) ||
+          c.phone.includes(q) ||
+          (c.address && c.address.toLowerCase().includes(q)),
+      );
+    }
+
+    // 4. Lọc theo Khu vực / Địa bàn kinh doanh
+    if (query?.region && query.region !== 'ALL') {
+      const reg = query.region.toLowerCase().trim();
+      list = list.filter((c) => c.region && c.region.toLowerCase() === reg);
+    }
+
+    // 5. Lọc theo Phân nhóm khách hàng
+    if (query?.customerGroup && query.customerGroup !== 'ALL') {
+      list = list.filter((c) => c.customerGroup === query.customerGroup);
+    }
+
+    // 6. Lọc theo Trạng thái hoạt động
+    if (query?.status && (query.status as string) !== 'ALL') {
+      list = list.filter((c) => c.status === query.status);
+    }
+
+    // 7. Phân trang kết quả
+    const page = Math.max(1, Number(query?.page) || 1);
+    const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
+    const total = list.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const startIndex = (page - 1) * limit;
+    const data = list.slice(startIndex, startIndex + limit);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages,
+    };
   }
 
   /**

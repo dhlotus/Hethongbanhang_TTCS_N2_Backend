@@ -26,12 +26,20 @@ import {
 } from './dto';
 import { SafeUser, UserEntity } from './entities/user.entity';
 
+export interface UserSummaryStats {
+  total: number;
+  active: number;
+  locked: number;
+  pendingReset: number;
+}
+
 export interface PaginatedUsersResult {
   data: SafeUser[];
   total: number;
   page: number;
   limit: number;
   totalPages: number;
+  summary: UserSummaryStats;
 }
 
 export interface CreateUserResult {
@@ -63,6 +71,7 @@ export interface UpdateUserStatusResult extends SafeUser {
   assignedCustomers: AssignedCustomerItem[];
   assignedCustomersCount: number;
   handoverWarning?: string;
+  summary?: UserSummaryStats;
 }
 
 @Injectable()
@@ -460,6 +469,25 @@ export class UsersService implements OnModuleInit {
       page,
       limit,
       totalPages,
+      summary: this.getSummary(),
+    };
+  }
+
+  /**
+   * Thống kê tổng số lượng nhân sự toàn hệ thống (không phụ thuộc phân trang limit/page)
+   */
+  getSummary(): UserSummaryStats {
+    const allUsers = Array.from(this.users.values());
+    const total = allUsers.length;
+    const active = allUsers.filter((u) => u.status === UserStatus.ACTIVE).length;
+    const locked = allUsers.filter((u) => u.status === UserStatus.LOCKED).length;
+    const pendingReset = allUsers.filter((u) => Boolean(u.resetCode)).length;
+
+    return {
+      total,
+      active,
+      locked,
+      pendingReset,
     };
   }
 
@@ -838,6 +866,7 @@ export class UsersService implements OnModuleInit {
     }
 
     this.users.set(user.id, user);
+    this.saveUsersToDisk();
 
     // 3. Kiểm tra đại lý do nhân sự phụ trách khi khóa (SN-15)
     const assignedCustomers = this.getAssignedCustomers(user.id);
@@ -853,6 +882,7 @@ export class UsersService implements OnModuleInit {
       assignedCustomers,
       assignedCustomersCount: assignedCustomers.length,
       handoverWarning,
+      summary: this.getSummary(),
     };
   }
 
@@ -874,6 +904,7 @@ export class UsersService implements OnModuleInit {
     user.resetCodeCreatedAt = new Date();
     user.updatedAt = new Date();
     this.users.set(user.id, user);
+    this.saveUsersToDisk();
 
     return {
       resetCode,
@@ -928,6 +959,7 @@ export class UsersService implements OnModuleInit {
     user.lockedUntil = null;
     user.updatedAt = new Date();
     this.users.set(user.id, user);
+    this.saveUsersToDisk();
 
     // Thu hồi toàn bộ phiên đăng nhập cũ
     this.revokeSessions(user.id);
