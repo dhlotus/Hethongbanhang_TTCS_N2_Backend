@@ -16,6 +16,7 @@ import { PaginatedCustomersResult } from './interfaces/paginated-customers.inter
 import { UserRole } from '../../common/enums/user-role.enum';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { INITIAL_AGENCIES } from './agencies.seed';
+import { CustomerDebtStatusDto } from './dto/customer-debt-status.dto';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
@@ -114,8 +115,10 @@ export class CustomersService implements OnModuleInit {
         salesRepId: 'usr-sale-02',
         salesRepName: 'Nguyễn Thị Hằng',
         creditLimit: 60000000,
-        currentDebt: 15200000,
+        currentDebt: 52000000,
         maxDebtDays: 20,
+        overdueAmount: 0,
+        overdueDays: 0,
         phone: '0912345678',
         email: 'baochaustore.q9@gmail.com',
         address: '456 Lê Văn Việt, P.Tăng Nhơn Phú A, TP.Thủ Đức, TP.HCM',
@@ -204,8 +207,10 @@ export class CustomersService implements OnModuleInit {
         salesRepId: 'usr-sale-03',
         salesRepName: 'Phạm Minh Tuấn',
         creditLimit: 120000000,
-        currentDebt: 32000000,
-        maxDebtDays: 45,
+        currentDebt: 45000000,
+        maxDebtDays: 30,
+        overdueAmount: 18000000,
+        overdueDays: 45,
         phone: '0934567890',
         email: 'anphumart.hanoi@gmail.com',
         address: '18 Duy Tân, P.Dịch Vọng Hậu, Q.Cầu Giấy, Hà Nội',
@@ -759,6 +764,54 @@ export class CustomersService implements OnModuleInit {
     }
 
     return customer;
+  }
+
+  /**
+   * Kiểm tra thông tin & trạng thái công nợ của đại lý (Task SN-41)
+   */
+  async getCustomerDebtStatus(customerId: string): Promise<CustomerDebtStatusDto> {
+    const customer = await this.getCustomerById(customerId);
+    const creditLimit = customer.creditLimit || 0;
+    const currentDebt = customer.currentDebt || 0;
+    const maxDebtDays = customer.maxDebtDays || 30;
+    const overdueAmount = customer.overdueAmount || 0;
+    const overdueDays = customer.overdueDays || 0;
+    const availableLimit = Math.max(0, creditLimit - currentDebt);
+
+    // Kiểm tra chặn cứng (Hard Block - Trường hợp 1):
+    // Quá hạn vượt quá số ngày cho phép (overdueDays > maxDebtDays) và có số tiền nợ quá hạn > 0
+    let canCreateOrder = true;
+    let blockReason: string | undefined;
+    let warningMessage: string | undefined;
+
+    if (customer.status === CustomerStatus.LOCKED) {
+      canCreateOrder = false;
+      blockReason = `Tài khoản đại lý [${customer.name}] đang trong trạng thái bị khóa. Không thể tạo đơn hàng mới.`;
+    } else if (overdueDays > maxDebtDays && overdueAmount > 0) {
+      canCreateOrder = false;
+      blockReason = `Đại lý đang có khoản nợ quá hạn ${overdueDays} ngày (vượt quá ${maxDebtDays} ngày cho phép) với số tiền ${overdueAmount.toLocaleString('vi-VN')} đ. Hệ thống tạm khóa quyền tạo đơn hàng mới cho đại lý này.`;
+    } else if (overdueAmount > 0) {
+      warningMessage = `Đại lý đang có khoản nợ quá hạn ${overdueDays}/${maxDebtDays} ngày (${overdueAmount.toLocaleString('vi-VN')} đ). Vui lòng lưu ý đôn đốc thanh toán.`;
+    } else if (currentDebt >= creditLimit) {
+      warningMessage = `Đại lý đã sử dụng hết hạn mức công nợ được cấp (${creditLimit.toLocaleString('vi-VN')} đ). Đơn hàng mới sẽ được chuyển sang trạng thái chờ phê duyệt.`;
+    } else if (availableLimit < creditLimit * 0.2) {
+      warningMessage = `Hạn mức công nợ khả dụng của đại lý chỉ còn ${availableLimit.toLocaleString('vi-VN')} đ (dưới 20%). Lưu ý kiểm tra giá trị đơn hàng.`;
+    }
+
+    return {
+      customerId: customer.id,
+      customerCode: customer.code,
+      customerName: customer.name,
+      creditLimit,
+      currentDebt,
+      availableLimit,
+      maxDebtDays,
+      overdueAmount,
+      overdueDays,
+      canCreateOrder,
+      blockReason,
+      warningMessage,
+    };
   }
 }
 

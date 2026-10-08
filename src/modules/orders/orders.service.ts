@@ -415,6 +415,17 @@ export class OrdersService implements OnModuleInit {
   ): Promise<OrderEntity> {
     const customer = await this.customersService.getCustomerById(dto.customerId);
 
+    // 1. Kiểm tra điều kiện công nợ của đại lý (Task SN-41)
+    const debtStatus = await this.customersService.getCustomerDebtStatus(dto.customerId);
+
+    // Trường hợp 1: Chặn hoàn toàn (Hard Block) nếu nợ quá hạn vượt quá số ngày cho phép
+    if (!debtStatus.canCreateOrder) {
+      throw new BadRequestException(
+        debtStatus.blockReason ||
+          'Đại lý có khoản nợ quá hạn vượt quá thời hạn cho phép. Không thể tạo đơn hàng mới.',
+      );
+    }
+
     // Xác thực điểm giao hàng (SN-31: Đơn hàng chọn điểm giao trong danh sách của đúng đại lý đó)
     let assignedDeliveryPoint: IOrderDeliveryPoint | undefined;
     if (dto.deliveryPoint?.id) {
@@ -470,14 +481,32 @@ export class OrdersService implements OnModuleInit {
       approvalReasons,
     } = this.calculateOrderTotals(pricing.lines);
 
-    const orderId = `ord-${Date.now()}`;
-    const orderCode = this.generateOrderCode();
+    // 2. Kiểm tra hạn mức công nợ (Task SN-41 - Approval Flow)
+    // Trường hợp 2: Nếu (Tổng tiền đơn hàng mới + Công nợ hiện tại) > Hạn mức công nợ
+    const currentDebt = customer.currentDebt || 0;
+    const creditLimit = customer.creditLimit || 0;
+    const projectedDebt = currentDebt + grandTotal;
+    const isCreditLimitExceeded = creditLimit > 0 && projectedDebt > creditLimit;
+    const creditLimitExceededAmount = isCreditLimitExceeded
+      ? projectedDebt - creditLimit
+      : 0;
+
     const requestedStatus = dto.status || OrderStatus.PENDING;
-    // Approval is only allowed through the guarded status endpoint.
-    const orderStatus =
+    let orderStatus =
       requestedStatus === OrderStatus.APPROVED
         ? OrderStatus.PENDING
         : requestedStatus;
+    let orderNote = dto.note;
+
+    if (isCreditLimitExceeded) {
+      // Tự động đánh dấu đơn hàng ở trạng thái "Cần phê duyệt" (PENDING_APPROVAL)
+      orderStatus = OrderStatus.PENDING_APPROVAL;
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    }
+
+    const orderId = `ord-${Date.now()}`;
+    const orderCode = this.generateOrderCode();
 
     const newOrder = new OrderEntity({
       id: orderId,
@@ -494,12 +523,14 @@ export class OrdersService implements OnModuleInit {
       subtotal,
       totalDiscount,
       grandTotal,
-      note: dto.note,
+      note: orderNote,
       status: orderStatus,
       paymentStatus: PaymentStatus.UNPAID,
       priceListId: pricing.priceListId || dto.priceListId,
       requiresApproval,
       approvalReasons,
+      isCreditLimitExceeded,
+      creditLimitExceededAmount,
       createdAt: new Date(),
       updatedAt: new Date(),
     });

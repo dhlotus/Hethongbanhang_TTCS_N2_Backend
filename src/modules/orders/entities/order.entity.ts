@@ -38,6 +38,8 @@ export class OrderEntity {
   priceListId?: string;
   requiresApproval: boolean;
   approvalReasons: string[];
+  isCreditLimitExceeded?: boolean;
+  creditLimitExceededAmount?: number;
   createdAt: Date;
   updatedAt: Date;
 
@@ -53,6 +55,8 @@ export class OrderEntity {
     this.approvalReasons = partial.approvalReasons ?? [];
     this.status = partial.status ?? OrderStatus.DRAFT;
     this.paymentStatus = partial.paymentStatus ?? PaymentStatus.UNPAID;
+    this.isCreditLimitExceeded = partial.isCreditLimitExceeded ?? false;
+    this.creditLimitExceededAmount = partial.creditLimitExceededAmount ?? 0;
     this.createdAt = partial.createdAt ?? new Date();
     this.updatedAt = partial.updatedAt ?? new Date();
   }
