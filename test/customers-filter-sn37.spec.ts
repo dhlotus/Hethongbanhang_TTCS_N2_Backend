@@ -50,6 +50,13 @@ async function runTestSuite(): Promise<void> {
     roles: [UserRole.SALES_REP],
   };
 
+  const realSalesUser: ICurrentUser = {
+    userId: 'usr-sales-002',
+    email: 'sales@loha.vn',
+    username: 'sales',
+    roles: [UserRole.SALES_REP],
+  };
+
   // =====================================================================
   // PHẦN 1: TÌM KIẾM NHANH (FULL-TEXT / PARTIAL SEARCH) - TIÊU CHÍ AC2
   // =====================================================================
@@ -159,6 +166,12 @@ async function runTestSuite(): Promise<void> {
   assert(
     resFilterByRep.total >= 1 && resFilterByRep.data.every((c) => c.salesRepId === 'usr-sale-01'),
     'Quản lý kinh doanh lọc đại lý theo nhân viên cấp dưới cụ thể thành công',
+  );
+
+  const resRealRep = await service.filterCustomers({}, realSalesUser);
+  assert(
+    resRealRep.total >= 1 && resRealRep.data.length > 0,
+    `Tài khoản đăng nhập thực tế của Sales Rep (usr-sales-002 / sales) xem được danh sách đại lý trong tuyến (thực tế: ${resRealRep.total})`,
   );
 
   // =====================================================================

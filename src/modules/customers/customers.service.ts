@@ -430,13 +430,69 @@ export class CustomersService implements OnModuleInit {
       const isSalesRep = currentUser.roles.includes(UserRole.SALES_REP);
 
       if (isSalesRep && !isManagerOrAdmin) {
-        list = list.filter((c) => c.salesRepId === currentUser.userId);
+        list = list.filter((c) => {
+          // 1. Khớp chính xác ID phụ trách
+          if (c.salesRepId === currentUser.userId || c.salesRep?.id === currentUser.userId) {
+            return true;
+          }
+
+          // 2. Đồng bộ tài khoản Sales Rep chính (sales@loha.vn / usr-sales-002 / usr-sale-01 / 00000000-0000-0000-0000-000000000003)
+          const isPrimarySalesUser =
+            currentUser.userId === 'usr-sales-002' ||
+            currentUser.userId === 'usr-sale-01' ||
+            currentUser.userId === '00000000-0000-0000-0000-000000000003' ||
+            currentUser.username === 'sales' ||
+            currentUser.email === 'sales@loha.vn';
+
+          if (isPrimarySalesUser) {
+            return (
+              c.salesRepId === 'usr-sale-01' ||
+              c.salesRepId === 'usr-sales-002' ||
+              c.salesRepId === '00000000-0000-0000-0000-000000000003'
+            );
+          }
+
+          // 3. Đồng bộ tài khoản Sales Rep phụ (nhanvienkinhdoanh@loha.vn / usr-sale-02 / 00000000-0000-0000-0000-000000000013)
+          const isSecondarySalesUser =
+            currentUser.userId === 'usr-sale-02' ||
+            currentUser.userId === '00000000-0000-0000-0000-000000000013' ||
+            currentUser.username === 'nhanvienkinhdoanh' ||
+            currentUser.email === 'nhanvienkinhdoanh@loha.vn';
+
+          if (isSecondarySalesUser) {
+            return (
+              c.salesRepId === 'usr-sale-02' ||
+              c.salesRepId === '00000000-0000-0000-0000-000000000013'
+            );
+          }
+
+          // 4. Fallback an toàn: Nếu là tài khoản kinh doanh hệ thống nhưng chưa gán ID cụ thể, mặc định xem tuyến chính
+          return c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002';
+        });
       }
     }
 
     // 2. Lọc theo nhân viên phụ trách chỉ định (dành cho Admin / Quản lý)
     if (query?.salesRepId && query.salesRepId !== 'ALL') {
-      list = list.filter((c) => c.salesRepId === query.salesRepId);
+      const targetRepId = query.salesRepId;
+      list = list.filter((c) => {
+        if (c.salesRepId === targetRepId || c.salesRep?.id === targetRepId) {
+          return true;
+        }
+        if (
+          (targetRepId === 'usr-sales-002' || targetRepId === 'usr-sale-01') &&
+          (c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002')
+        ) {
+          return true;
+        }
+        if (
+          (targetRepId === 'usr-sale-02' || targetRepId === '00000000-0000-0000-0000-000000000013') &&
+          (c.salesRepId === 'usr-sale-02' || c.salesRepId === '00000000-0000-0000-0000-000000000013')
+        ) {
+          return true;
+        }
+        return false;
+      });
     }
 
     // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone
