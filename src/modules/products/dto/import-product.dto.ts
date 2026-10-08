@@ -21,6 +21,10 @@ export class ImportProductItemDto {
   @IsNotEmpty()
   baseUnit: string;
 
+  @IsString()
+  @IsOptional()
+  packagingSpec?: string;
+
   @IsNumber()
   price: number;
 
@@ -31,9 +35,6 @@ export class ImportProductItemDto {
   @IsOptional()
   stockQuantity?: number;
 
-  @IsString()
-  @IsOptional()
-  barcode?: string;
 
   @IsString()
   @IsOptional()

@@ -1176,15 +1176,15 @@ export class ProductsService implements OnModuleInit {
     const sheet = workbook.addWorksheet('Danh mục sản phẩm');
 
     sheet.columns = [
-      { header: 'Mã SKU (*)', key: 'sku', width: 20 },
-      { header: 'Tên sản phẩm (*)', key: 'name', width: 30 },
-      { header: 'Ngành hàng (*)', key: 'category', width: 20 },
-      { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15 },
-      { header: 'Giá bán (*)', key: 'price', width: 15 },
-      { header: 'Giá vốn (*)', key: 'costPrice', width: 15 },
-      { header: 'Tồn kho ban đầu', key: 'stockQuantity', width: 15 },
-      { header: 'Mã vạch', key: 'barcode', width: 20 },
-      { header: 'Mô tả', key: 'description', width: 30 },
+      { header: 'Mã SKU (*)', key: 'sku', width: 20, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Tên sản phẩm (*)', key: 'name', width: 30, style: { alignment: { horizontal: 'left' } } },
+      { header: 'Nhóm hàng (*)', key: 'category', width: 20, style: { alignment: { horizontal: 'left' } } },
+      { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Quy cách', key: 'packagingSpec', width: 20, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Giá niêm yết (*)', key: 'price', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Tồn kho', key: 'stockQuantity', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Giá vốn (*)', key: 'costPrice', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Mô tả', key: 'description', width: 30, style: { alignment: { horizontal: 'left' } } },
     ];
 
     sheet.addRow({
@@ -1192,16 +1192,22 @@ export class ProductsService implements OnModuleInit {
       name: 'Sản phẩm mẫu',
       category: 'Hàng hóa',
       baseUnit: 'Cái',
+      packagingSpec: '24 lon/thùng',
       price: 100000,
-      costPrice: 80000,
       stockQuantity: 10,
-      barcode: '8931234567890',
+      costPrice: 80000,
       description: 'Đây là dòng dữ liệu mẫu, hãy xóa dòng này trước khi nhập',
     });
 
     const headerRow = sheet.getRow(1);
     headerRow.font = { bold: true };
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    const sampleRow = sheet.getRow(2);
+    sampleRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    const descCell = sampleRow.getCell(9);
+    descCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
     res.setHeader(
       'Content-Type',
@@ -1241,6 +1247,7 @@ export class ProductsService implements OnModuleInit {
     }
 
     const previewData: ImportProductItemDto[] = [];
+    const seenSkus = new Map<string, number>();
     let validCount = 0;
     let invalidCount = 0;
 
@@ -1251,20 +1258,29 @@ export class ProductsService implements OnModuleInit {
       const name = row.getCell(2).text?.trim();
       const category = row.getCell(3).text?.trim();
       const baseUnit = row.getCell(4).text?.trim();
-      const price = Number(row.getCell(5).value) || 0;
-      const costPrice = Number(row.getCell(6).value) || 0;
+      const packagingSpec = row.getCell(5).text?.trim();
+      const price = Number(row.getCell(6).value) || 0;
       const stockQuantity = Number(row.getCell(7).value) || 0;
-      const barcode = row.getCell(8).text?.trim();
+      const costPrice = Number(row.getCell(8).value) || 0;
       const description = row.getCell(9).text?.trim();
 
       if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
 
       const errors: string[] = [];
-      if (!sku) errors.push('Mã SKU không được để trống');
+      if (!sku) {
+        errors.push('Mã SKU không được để trống');
+      } else {
+        const lowerSku = sku.toLowerCase();
+        if (seenSkus.has(lowerSku)) {
+          errors.push(`Mã SKU '${sku}' bị trùng lặp với dòng ${seenSkus.get(lowerSku)} trong tệp`);
+        } else {
+          seenSkus.set(lowerSku, rowNumber - 1);
+        }
+      }
       if (!name) errors.push('Tên sản phẩm không được để trống');
-      if (!category) errors.push('Ngành hàng không được để trống');
+      if (!category) errors.push('Nhóm hàng không được để trống');
       if (!baseUnit) errors.push('Đơn vị tính không được để trống');
-      if (price <= 0) errors.push('Giá bán phải lớn hơn 0');
+      if (price <= 0) errors.push('Giá niêm yết phải lớn hơn 0');
       if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
 
       const existingProduct = Array.from(this.products.values()).find(
@@ -1284,10 +1300,10 @@ export class ProductsService implements OnModuleInit {
         name: name || '',
         category: category || '',
         baseUnit: baseUnit || '',
+        packagingSpec,
         price,
         costPrice,
         stockQuantity,
-        barcode,
         description,
         status,
         errors,
@@ -1325,6 +1341,7 @@ export class ProductsService implements OnModuleInit {
             category: item.category,
             parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
             baseUnit: item.baseUnit,
+            packagingSpec: item.packagingSpec,
             price: item.price,
             costPrice: item.costPrice,
             description: item.description,
@@ -1336,6 +1353,7 @@ export class ProductsService implements OnModuleInit {
             category: item.category,
             parentCategory: item.category?.includes('/') ? item.category.split('/')[0].trim() : item.category,
             baseUnit: item.baseUnit,
+            packagingSpec: item.packagingSpec,
             price: item.price,
             costPrice: item.costPrice,
             stockQuantity: item.stockQuantity,
