@@ -778,3 +778,25 @@ Time:        1.783 s
   - âœ… Frontend Build: `npm run build` (`tsc -b && vite build`) -> 0 lá»—i, build production thÃ nh cÃ´ng.
 
 
+
+
+### [Sprint 2] - [SN-28]: BE: Xây d?ng Module Chi?t kh?u theo S?n lý?ng (DiscountPolicy) & C?nh báo T?n kho
+- **Th?i gian hoàn thành:** 2026-10-08
+- **M? Jira / Task:** SN-28
+- **Danh sách file t?o m?i / thay ð?i:**
+  - src/modules/discount-policies/* (T?o m?i: DiscountPolicyEntity, DiscountTier, DTOs, Service, Controller)
+  - src/app.module.ts (Ðãng k? DiscountPoliciesModule)
+  - src/common/enums/order-status.enum.ts (Thêm PENDING_INVENTORY_APPROVAL)
+  - src/modules/orders/orders.controller.ts (Thêm API POST /api/v1/orders)
+  - src/modules/orders/orders.service.ts (Thêm logic ki?m tra t?n kho và chuy?n tr?ng thái PENDING_INVENTORY_APPROVAL)
+- **Chi ti?t k? thu?t:**
+  - Qu?n l? chính sách chi?t kh?u theo s?n lý?ng (Tier).
+  - API tính toán m?c chi?t kh?u t?t nh?t (Best-Offer).
+  - N?u t?ng s? lý?ng ð?t > kh? d?ng, ðõn hàng ðý?c t?o v?i tr?ng thái PENDING_INVENTORY_APPROVAL thay v? báo l?i.
+- **Lýu ?:**
+  - Không dùng Git commit theo yêu c?u.
+
+- **Frontend Integration (SN-28):**
+  - T?o thý m?c và component DiscountPoliciesTab ð? qu?n l? các chính sách chi?t kh?u s?n lý?ng.
+  - Tích h?p tính nãng t? ð?ng tính chi?t kh?u trong trang t?o ðõn hàng (orders-page.tsx).
+  - C?p nh?t c?nh báo khi ðõn ð?t hàng vý?t t?n kho kh? d?ng và chuy?n sang tr?ng thái PENDING_INVENTORY_APPROVAL ðúng chu?n giao di?n UI_GUIDELINES.md.
