@@ -800,3 +800,40 @@ Time:        1.783 s
   - T?o th� m?c v� component DiscountPoliciesTab �? qu?n l? c�c ch�nh s�ch chi?t kh?u s?n l�?ng.
   - T�ch h?p t�nh n�ng t? �?ng t�nh chi?t kh?u trong trang t?o ��n h�ng (orders-page.tsx).
   - C?p nh?t c?nh b�o khi ��n �?t h�ng v�?t t?n kho kh? d?ng v� chuy?n sang tr?ng th�i PENDING_INVENTORY_APPROVAL ��ng chu?n giao di?n UI_GUIDELINES.md.
+
+### [Sprint 3] - [SN-37]: BE & FE: Tìm kiếm và Lọc Danh sách Đại lý theo Tuyến Bán hàng
+- **Thời gian hoàn thành:** 2026-10-08
+- **Mã Jira / Task:** SN-37 (Epic EP-03 / S3-08)
+- **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn tìm kiếm và lọc danh sách đại lý, để tìm nhanh khách trong tuyến khi đang đứng ngoài đường."
+- **Danh sách file tạo mới / thay đổi:**
+  - **Backend (HTBH_Backend):**
+    - src/modules/customers/dto/filter-customers.dto.ts (Tạo mới: FilterCustomersDto hỗ trợ search, region, customerGroup, salesRepId, status, page, limit)
+    - src/modules/customers/interfaces/paginated-customers.interface.ts (Tạo mới: PaginatedCustomersResult interface)
+    - src/modules/customers/entities/customer.entity.ts (Cập nhật: Bổ sung trường salesRep quan hệ { id, name })
+    - src/modules/customers/customers.service.ts (Cập nhật: filterCustomers xử lý RBAC tuyến bán hàng SALES_REP vs ADMIN/SALES_MANAGER, tìm kiếm ILIKE không phân biệt hoa thường theo code/name/phone, bộ lọc đa tiêu chí & phân trang)
+    - src/modules/customers/customers.controller.ts (Cập nhật: GET /api/customers áp dụng JwtAuthGuard, @Query() query: FilterCustomersDto, @CurrentUser() currentUser)
+    - 	est/customers-filter-sn37.spec.ts (Tạo mới: 30 test cases bao phủ toàn bộ AC của SN-37)
+  - **Frontend (HTBH_Frontend):**
+    - src/types/customer.types.ts (Tạo mới: Customer, CustomerStatus enum, CustomerFilterParams, PaginatedCustomersResponse)
+    - src/types/customer.ts (Cập nhật: Re-export đồng bộ với customer.types.ts)
+    - src/services/customer.service.ts (Tạo mới: getCustomers hỗ trợ tham số lọc, phân trang, demo/offline fallback an toàn)
+    - src/services/customers.service.ts (Cập nhật: Re-export customerService)
+    - src/hooks/use-customers.ts (Tạo mới: Custom hook quản lý state, 300ms debounce tìm kiếm, reset filter, pagination)
+    - src/pages/customers-page.tsx (Tạo mới: Màn hình tra cứu đại lý tối ưu di động với Card View, nút gọi điện thoại nhanh tel:, bộ lọc filter chips, Skeleton loading, Table View cho Desktop, tích hợp DeliveryPointModal)
+    - src/routes/index.tsx (Cập nhật: Tích hợp CustomersPage vào route /sales/customers và alias /customers)
+    - src/services/orders.service.ts (Cập nhật: Hỗ trợ response đại lý dạng phân trang PaginatedCustomersResponse)
+- **Chi tiết kỹ thuật:**
+  - **Phân quyền tuyến bán hàng (RBAC Scope):** Nhân viên vai trò SALES_REP tự động bị giới hạn chỉ xem đại lý do chính mình phụ trách (salesRepId === currentUser.userId). Quản trị viên ADMIN và Quản lý kinh doanh SALES_MANAGER được xem toàn bộ đại lý công ty và có thể lọc theo nhân viên kinh doanh cụ thể.
+  - **Tìm kiếm nhanh Full-text / Partial:** Tìm kiếm không phân biệt hoa thường theo Mã đại lý (code), Tên đại lý (
+ame), hoặc Số điện thoại (phone).
+  - **Bộ lọc đa tiêu chí:** Kết hợp linh hoạt Khu vực (egion: Miền Bắc, Miền Trung, Miền Nam), Nhóm khách hàng (customerGroup: AGENT_LEVEL_1, AGENT_LEVEL_2, RETAIL), Trạng thái (status: ACTIVE, LOCKED, INACTIVE).
+  - **Trải nghiệm di động thực địa (Field-ready UX):** Giao diện thiết kế theo UI_GUIDELINES.md với thẻ Card trực quan, nhãn trạng thái nổi bật, thanh tiến trình tỷ lệ nợ / hạn mức, nút bấm gọi nhanh qua giao thức 	el:, thao tác chạm tối thiểu 40-44px.
+- **Trạng thái kiểm thử:**
+  - Backend Spec Test: 
+px ts-node test/customers-filter-sn37.spec.ts -> 30/30 tests passed (100%).
+  - Backend Build: 
+est build -> 0 lỗi.
+  - Frontend ESLint: 
+px eslint -> 0 lỗi, 0 warnings.
+  - Frontend Build: 
+pm run build (	sc -b && vite build) -> 0 lỗi, build production thành công.

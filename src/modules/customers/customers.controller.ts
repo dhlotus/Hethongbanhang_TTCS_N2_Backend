@@ -10,28 +10,38 @@ import {
   Post,
   Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
+import { FilterCustomersDto } from './dto/filter-customers.dto';
 import { CustomerEntity } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
+import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 
 /**
- * Controller Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
+ * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-37)
  */
 @Controller('customers')
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   /**
-   * Lấy danh sách đại lý
+   * Lấy danh sách đại lý có hỗ trợ tìm kiếm & lọc linh hoạt (SN-37 & EP-03 / S3-08)
    * GET /api/customers
    */
   @Get()
-  async getCustomers(@Query() query: QueryCustomerDto): Promise<CustomerEntity[]> {
-    return this.customersService.findAllCustomers(query);
+  @UseGuards(JwtAuthGuard)
+  async getCustomers(
+    @Query() query: FilterCustomersDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<PaginatedCustomersResult> {
+    return this.customersService.filterCustomers(query, currentUser);
   }
 
   /**
