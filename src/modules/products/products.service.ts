@@ -1,10 +1,13 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import { CategoriesService } from '../categories/categories.service';
 import { DatabaseService } from '../../database/database.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -53,7 +56,12 @@ export class ProductsService implements OnModuleInit {
     'LH-OLD-COFFEE-CAN',
   ]);
 
-  constructor(@Optional() private readonly dbService?: DatabaseService) {
+  constructor(
+    @Optional() private readonly dbService?: DatabaseService,
+    @Optional()
+    @Inject(forwardRef(() => CategoriesService))
+    private readonly categoriesService?: CategoriesService,
+  ) {
     this.seedInitialProducts();
   }
 
@@ -157,12 +165,12 @@ export class ProductsService implements OnModuleInit {
     const initialList: Partial<ProductEntity>[] = [
       {
         id: 'prod-001',
-        sku: 'LH-MILK-POWDER-900G',
+        sku: 'LH-MILK-900G',
         name: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
-        categoryId: '38',
-        parentCategory: 'Sữa bột công thức',
-        subCategory: 'Sữa bột người lớn & cao tuổi',
-        category: 'Sữa & Chế phẩm sữa / Sữa bột công thức / Sữa bột người lớn & cao tuổi',
+        categoryId: 'cat-milk-powder',
+        parentCategory: 'Sữa & Chế phẩm sữa',
+        subCategory: 'Sữa bột công thức',
+        category: 'Sữa & Chế phẩm sữa / Sữa bột công thức',
         baseUnit: 'Lon',
         packagingSpec: '24 lon/thùng',
         units: [
@@ -479,14 +487,43 @@ export class ProductsService implements OnModuleInit {
       );
     }
 
-    // 2. Lọc theo categoryId
+    // 2. Lọc theo categoryId (hỗ trợ phân cấp cây: nhóm cha hiển thị tất cả sản phẩm của nhánh con/cháu)
     if (categoryId && categoryId !== 'ALL') {
       const cid = categoryId.trim().toLowerCase();
-      items = items.filter(
-        (p) =>
-          (p.categoryId && p.categoryId.toLowerCase() === cid) ||
-          p.id === categoryId,
-      );
+      const targetSet = new Set<string>([cid]);
+
+      if (this.categoriesService) {
+        const cat = this.categoriesService.findCategoryInternal(categoryId);
+        if (cat) {
+          targetSet.add(cat.id.toLowerCase().trim());
+          if (cat.code) targetSet.add(cat.code.toLowerCase().trim());
+          const descendantIds = this.categoriesService.getDescendantIds(cat.id);
+          for (const dId of descendantIds) {
+            targetSet.add(dId.toLowerCase().trim());
+            const dCat = this.categoriesService.findCategoryInternal(dId);
+            if (dCat?.code) targetSet.add(dCat.code.toLowerCase().trim());
+          }
+        }
+      }
+
+      items = items.filter((p) => {
+        if (p.categoryId) {
+          const pCid = p.categoryId.toLowerCase().trim();
+          if (targetSet.has(pCid)) return true;
+          if (this.categoriesService) {
+            const resolved = this.categoriesService.findCategoryInternal(pCid);
+            if (
+              resolved &&
+              (targetSet.has(resolved.id.toLowerCase().trim()) ||
+                (resolved.code && targetSet.has(resolved.code.toLowerCase().trim())))
+            ) {
+              return true;
+            }
+          }
+          return false;
+        }
+        return p.id && targetSet.has(p.id.toLowerCase().trim());
+      });
     }
 
     // 2. Lọc theo nhóm hàng cấp 1 (parentCategory)
@@ -759,11 +796,9 @@ export class ProductsService implements OnModuleInit {
         throw new BadRequestException('Mã SKU không được chứa khoảng trắng');
       }
 
-      const duplicate = Array.from(this.products.values()).find(
-        (p) => p.sku.toUpperCase() === cleanSku && p.id !== product.id,
-      );
+      const duplicate = this.findProductInternal(cleanSku);
 
-      if (duplicate) {
+      if (duplicate && duplicate.id !== product.id) {
         throw new BadRequestException('Mã SKU đã tồn tại trên hệ thống');
       }
 
@@ -776,6 +811,26 @@ export class ProductsService implements OnModuleInit {
 
     if (dto.categoryId !== undefined) {
       product.categoryId = dto.categoryId?.trim();
+      if (this.categoriesService && product.categoryId) {
+        const cat = this.categoriesService.findCategoryInternal(product.categoryId);
+        if (cat) {
+          if (dto.subCategory === undefined) {
+            product.subCategory = cat.name;
+          }
+          if (dto.parentCategory === undefined) {
+            const parent = cat.parentId
+              ? this.categoriesService.findCategoryInternal(cat.parentId)
+              : undefined;
+            product.parentCategory = parent ? parent.name : cat.name;
+          }
+          if (dto.category === undefined) {
+            product.category =
+              product.parentCategory !== product.subCategory
+                ? `${product.parentCategory} / ${product.subCategory}`
+                : product.subCategory;
+          }
+        }
+      }
     }
 
     if (dto.parentCategory !== undefined) {
@@ -1394,10 +1449,29 @@ export class ProductsService implements OnModuleInit {
     const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
 
     return Array.from(this.products.values()).filter((p) => {
-      if (p.categoryId && p.categoryId.toLowerCase().trim() === cidLower) return true;
-      if (codeLower && p.categoryId && p.categoryId.toLowerCase().trim() === codeLower) return true;
-      if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) return true;
+      // 1. Nếu sản phẩm đã có categoryId: ĐÂY LÀ ĐỊNH DANH DUY NHẤT VÀ CHÍNH XÁC NHẤT
+      if (p.categoryId) {
+        const pCid = p.categoryId.toLowerCase().trim();
+        if (pCid === cidLower) return true;
+        if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
+          return true;
+        }
+        if (this.categoriesService) {
+          const resolved = this.categoriesService.findCategoryInternal(pCid);
+          if (
+            resolved &&
+            (resolved.id.toLowerCase() === cidLower ||
+              (codeLower && resolved.code.toLowerCase() === codeLower))
+          ) {
+            return true;
+          }
+        }
+        return false; // Tuyệt đối không fallback sang so khớp tên cũ khi đã có categoryId
+      }
+
+      // 2. Fallback cho dữ liệu cũ (legacy seed) chưa có categoryId
       if (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) return true;
+      if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) return true;
       if (p.category && nameLower && p.category.toLowerCase().includes(nameLower)) return true;
       return false;
     });
@@ -1434,11 +1508,15 @@ export class ProductsService implements OnModuleInit {
         if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
           return true;
         }
-        if (nameLower && (
-          (p.subCategory && p.subCategory.toLowerCase().trim() === nameLower) ||
-          (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower)
-        )) {
-          return true;
+        if (this.categoriesService) {
+          const resolved = this.categoriesService.findCategoryInternal(pCid);
+          if (
+            resolved &&
+            (resolved.id.toLowerCase() === cidLower ||
+              (codeLower && resolved.code.toLowerCase() === codeLower))
+          ) {
+            return true;
+          }
         }
         return false;
       }
@@ -1465,15 +1543,29 @@ export class ProductsService implements OnModuleInit {
     const nameLower = categoryName ? categoryName.toLowerCase().trim() : '';
 
     return Array.from(this.products.values()).filter((p) => {
-      if (p.categoryId && targetSet.has(p.categoryId.toLowerCase().trim())) {
-        return true;
-      }
-      if (codeLower && p.categoryId) {
+      // 1. Nếu có categoryId: Phải thuộc targetSet hoặc code của nhánh này
+      if (p.categoryId) {
         const pCid = p.categoryId.toLowerCase().trim();
-        if (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower) {
+        if (targetSet.has(pCid)) {
           return true;
         }
+        if (codeLower && (pCid === codeLower || pCid.replace(/^cat-/, '').replace(/-/g, '_') === codeLower)) {
+          return true;
+        }
+        if (this.categoriesService) {
+          const resolved = this.categoriesService.findCategoryInternal(pCid);
+          if (
+            resolved &&
+            (targetSet.has(resolved.id.toLowerCase().trim()) ||
+              (resolved.code && targetSet.has(resolved.code.toLowerCase().trim())))
+          ) {
+            return true;
+          }
+        }
+        return false; // Tuyệt đối KHÔNG fallback sang chuỗi tên text nếu p.categoryId không khớp!
       }
+
+      // 2. Fallback cho dữ liệu cũ chưa có categoryId
       if (p.parentCategory && p.parentCategory.toLowerCase().trim() === nameLower) {
         return true;
       }
@@ -1491,44 +1583,107 @@ export class ProductsService implements OnModuleInit {
    * Chuyển sản phẩm giữa các nhóm hàng (SN-150)
    */
   public async moveProductsBetweenCategories(
-    sourceCategoryId: string,
+    sourceCategoryIdOrIds: string | string[],
     targetCategoryId: string,
     targetCategoryName: string,
     productIds?: string[],
     sourceCategoryCode?: string,
     sourceCategoryName?: string,
+    targetParentCategoryName?: string,
   ): Promise<number> {
-    const candidates = this.findProductsByCategoryId(
-      sourceCategoryId,
+    const rawIds = Array.isArray(sourceCategoryIdOrIds)
+      ? sourceCategoryIdOrIds
+      : [sourceCategoryIdOrIds];
+
+    // Thu thập tất cả ID nhóm nguồn và các nhóm con/cháu đệ quy
+    const allSourceIds = new Set<string>(rawIds.map((id) => id.toLowerCase().trim()));
+    if (this.categoriesService) {
+      for (const sId of rawIds) {
+        const desc = this.categoriesService.getDescendantIds(sId);
+        for (const d of desc) {
+          allSourceIds.add(d.toLowerCase().trim());
+        }
+      }
+    }
+
+    const sourceIdsArray = Array.from(allSourceIds);
+
+    const candidates = this.findProductsByBranch(
+      sourceIdsArray,
       sourceCategoryCode,
       sourceCategoryName,
     );
 
     const toMove =
       productIds && productIds.length > 0
-        ? candidates.filter(
-            (p) => productIds.includes(p.id) || productIds.includes(p.sku),
+        ? Array.from(this.products.values()).filter(
+            (p) =>
+              (productIds.includes(p.id) || productIds.includes(p.sku)) &&
+              (candidates.length === 0 ||
+                candidates.some((c) => c.id === p.id || c.sku === p.sku) ||
+                (p.categoryId && allSourceIds.has(p.categoryId.toLowerCase().trim()))),
           )
         : candidates;
+
+    if (toMove.length === 0) {
+      return 0;
+    }
+
+    // Xác định numeric ID của nhóm đích trong database PostgreSQL
+    let dbCatId: number | null = null;
+    const num = parseInt(targetCategoryId, 10);
+    if (!isNaN(num) && num > 0) {
+      dbCatId = num;
+    } else if (this.categoriesService) {
+      const catObj = this.categoriesService.findCategoryInternal(targetCategoryId);
+      if (catObj) {
+        const cNum = parseInt(catObj.id, 10);
+        if (!isNaN(cNum) && cNum > 0) dbCatId = cNum;
+      }
+    }
+
+    if (this.dbService?.isConnected() && dbCatId === null) {
+      try {
+        const rows = await this.dbService.query<{ id: number }>(
+          `SELECT id FROM categories WHERE id::text = $1 OR UPPER(code) = UPPER($1) LIMIT 1;`,
+          [targetCategoryId],
+        );
+        if (rows.length > 0) {
+          dbCatId = rows[0].id;
+        }
+      } catch (err) {
+        console.error('[ProductsService] Lỗi tìm ID danh mục trong DB:', err);
+      }
+    }
+
+    const parentName = targetParentCategoryName || targetCategoryName;
 
     for (const p of toMove) {
       p.categoryId = targetCategoryId;
       p.subCategory = targetCategoryName;
-      if (p.parentCategory) {
-        p.category = `${p.parentCategory} / ${targetCategoryName}`;
-      } else {
-        p.category = targetCategoryName;
-      }
+      p.parentCategory = parentName;
+      p.category =
+        parentName !== targetCategoryName
+          ? `${parentName} / ${targetCategoryName}`
+          : targetCategoryName;
       p.updatedAt = new Date();
 
-      if (this.dbService?.isConnected()) {
+      if (this.dbService?.isConnected() && dbCatId !== null) {
         try {
-          await this.dbService.query(
-            `UPDATE products SET category_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 OR sku = $3`,
-            [targetCategoryId, p.id, p.sku],
-          );
-        } catch {
-          // Graceful fallback
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p.id);
+          if (isUuid) {
+            await this.dbService.query(
+              `UPDATE products SET category_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid OR sku = $3;`,
+              [dbCatId, p.id, p.sku],
+            );
+          } else {
+            await this.dbService.query(
+              `UPDATE products SET category_id = $1, updated_at = CURRENT_TIMESTAMP WHERE sku = $2;`,
+              [dbCatId, p.sku],
+            );
+          }
+        } catch (dbErr) {
+          console.error(`[ProductsService] Lỗi cập nhật category_id vào DB cho sản phẩm ${p.sku}:`, dbErr);
         }
       }
     }

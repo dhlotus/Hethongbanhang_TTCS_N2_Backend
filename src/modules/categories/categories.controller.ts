@@ -73,6 +73,17 @@ export class CategoriesController {
   }
 
   /**
+   * Lấy tổng doanh số bán được của nhóm hàng (và toàn bộ các phân loại con của nhóm đó)
+   * GET /api/categories/:id/revenue
+   * Quyền: Mọi vai trò đã xác thực
+   */
+  @Get(':id/revenue')
+  async getCategoryRevenue(@Param('id') id: string) {
+    const totalRevenue = await this.categoriesService.getCategoryRevenue(id);
+    return { categoryId: id, totalRevenue };
+  }
+
+  /**
    * Tạo nhóm hàng mới
    * POST /api/categories
    * Quyền: ADMIN, SALES_MANAGER

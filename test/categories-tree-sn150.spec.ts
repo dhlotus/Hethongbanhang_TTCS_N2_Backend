@@ -341,6 +341,7 @@ async function runTestSuite(): Promise<void> {
 }
 
 runTestSuite().catch((err) => {
-  console.error('Lỗi thực thi test suite:', err);
+  console.error('Lỗi thực thi kiểm thử SN-150:', err);
   process.exit(1);
 });
+

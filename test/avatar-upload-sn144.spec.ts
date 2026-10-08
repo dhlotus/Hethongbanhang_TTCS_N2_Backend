@@ -9,6 +9,7 @@ import {
 import { AvatarValidationPipe } from '../src/modules/users/pipes/avatar-validation.pipe';
 import { UsersService } from '../src/modules/users/users.service';
 import { UsersController } from '../src/modules/users/users.controller';
+import { ExcelImportService } from '../src/modules/users/excel-import.service';
 import { AuthController } from '../src/modules/auth/auth.controller';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { JwtService } from '@nestjs/jwt';
@@ -63,7 +64,8 @@ async function runTests(): Promise<void> {
     signOptions: { expiresIn: jwtConfig.expiresIn },
   });
   const authService = new AuthService(usersService, jwtService);
-  const usersController = new UsersController(usersService);
+  const excelImportService = new ExcelImportService(usersService);
+  const usersController = new UsersController(usersService, excelImportService);
   const authController = new AuthController(authService, usersService);
 
   // --------------------------------------------------------------------------
