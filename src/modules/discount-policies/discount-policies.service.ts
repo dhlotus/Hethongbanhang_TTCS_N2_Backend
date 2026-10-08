@@ -32,6 +32,26 @@ export class DiscountPoliciesService {
       ],
     });
     this.discountPolicies.set(defaultPolicy.id, defaultPolicy);
+
+    // Keep the SN-40 sample policy for the nut milk SKU available after backend restarts.
+    const nutMilkPolicy = new DiscountPolicyEntity({
+      id: 'dp-205133',
+      code: 'DP-205133',
+      name: 'Chiết khấu sản lượng tháng 10 #1',
+      targetType: 'SKU' as any,
+      targetId: 'LH-NUT-180ML',
+      targetIds: ['LH-NUT-180ML'],
+      appliedProductSkus: ['LH-NUT-180ML'],
+      discountType: 'PERCENTAGE' as any,
+      startDate: '2026-10-08',
+      endDate: '2027-10-08',
+      status: DiscountPolicyStatus.ACTIVE,
+      tiers: [
+        { id: 'tier-nut-1', minQuantity: 1, maxQuantity: 10, discountValue: 0 },
+        { id: 'tier-nut-2', minQuantity: 11, maxQuantity: 100, discountValue: 2 },
+      ],
+    });
+    this.discountPolicies.set(nutMilkPolicy.id, nutMilkPolicy);
   }
 
   findAll(): DiscountPolicyEntity[] {
@@ -90,15 +110,27 @@ export class DiscountPoliciesService {
     this.discountPolicies.delete(policy.id);
   }
 
-  calculateBestDiscount(productId: string, categoryId: string, quantity: number): number {
+  calculateBestDiscount(
+    productId: string,
+    categoryId: string,
+    quantity: number,
+    productSku?: string,
+  ): number {
     const now = new Date().toISOString();
     const activePolicies = Array.from(this.discountPolicies.values()).filter(
       p => {
         if (p.status !== DiscountPolicyStatus.ACTIVE || p.startDate > now || p.endDate < now) {
           return false;
         }
-        const matchesProduct = (p.appliedProductSkus && p.appliedProductSkus.includes(productId)) ||
-                               (p.targetType === 'SKU' && (p.targetIds?.includes(productId) || p.targetId === productId));
+        const matchesProduct = [productId, productSku].some(
+          (identifier) => Boolean(identifier) && (
+            p.appliedProductSkus?.includes(identifier!) ||
+            (p.targetType === 'SKU' && (
+              p.targetIds?.includes(identifier!) ||
+              p.targetId.split(',').map((target) => target.trim()).includes(identifier!)
+            ))
+          ),
+        );
         const matchesCategory = (p.appliedCategoryIds && p.appliedCategoryIds.includes(categoryId)) ||
                                 (p.targetType === 'CATEGORY' && (p.targetIds?.includes(categoryId) || p.targetId === categoryId));
         const matchesHybrid = (p.targetType as any) === 'HYBRID' && (matchesProduct || matchesCategory);
