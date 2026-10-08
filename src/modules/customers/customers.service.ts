@@ -11,6 +11,7 @@ import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
+import { INITIAL_AGENCIES } from './agencies.seed';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
@@ -33,6 +34,12 @@ export class CustomersService implements OnModuleInit {
    * Khởi tạo dữ liệu mẫu thực tế 100% cho các đại lý và nhiều điểm giao hàng (SN-31)
    */
   private seedInitialCustomers(): void {
+    for (const c of INITIAL_AGENCIES) {
+      this.customers.set(c.id, c);
+    }
+  }
+
+  private unusedLegacy(): void {
     const list: CustomerEntity[] = [
       new CustomerEntity({
         id: 'cust-001',
