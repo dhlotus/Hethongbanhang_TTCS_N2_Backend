@@ -68,6 +68,17 @@ export class OrdersController {
   }
 
   /**
+   * Sao chép một đơn cũ thành đơn mới ở trạng thái Nháp (SN-48)
+   * POST /api/orders/:id/clone
+   */
+  @Post(':id/clone')
+  @Public()
+  @HttpCode(HttpStatus.CREATED)
+  async cloneOrder(@Param('id') id: string): Promise<OrderEntity> {
+    return this.ordersService.cloneOrder(id);
+  }
+
+  /**
    * Cập nhật đơn hàng (Lưu nháp & tiếp tục gõ SN-39)
    * PUT /api/orders/:id
    */

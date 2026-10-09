@@ -738,9 +738,16 @@ export class OrdersService implements OnModuleInit {
       const order = await this.findOrderById(id);
 
       if (dto.status !== undefined) {
-        throw new BadRequestException(
-          'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
-        );
+        if (
+          order.status === OrderStatus.DRAFT &&
+          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING)
+        ) {
+          order.status = dto.status;
+        } else {
+          throw new BadRequestException(
+            'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
+          );
+        }
       }
 
       if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
@@ -822,5 +829,55 @@ export class OrdersService implements OnModuleInit {
     }
     this.orders.delete(id);
     return { success: true, message: 'Đã xóa đơn hàng thành công' };
+  }
+
+  /**
+   * Sao chép một đơn cũ thành đơn mới (SN-48)
+   * - Sao chép toàn bộ dòng hàng của đơn đã chọn
+   * - Giá và chiết khấu được áp lại theo bảng giá hiện hành, không kế thừa giá cũ
+   * - Bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT)
+   */
+  async cloneOrder(
+    id: string,
+    salesRep?: { id?: string; name?: string },
+  ): Promise<OrderEntity> {
+    const sourceOrder = await this.findOrderById(id);
+
+    // Sao chép toàn bộ dòng hàng, nhưng KHÔNG truyền unitPrice / listPrice / discountPercent
+    // để createOrder tự động tính lại theo bảng giá và chính sách chiết khấu hiện hành
+    const linesDto: CreateOrderLineDto[] = sourceOrder.lines.map((line) => ({
+      productId: line.productId,
+      productSku: line.productSku,
+      productName: line.productName,
+      unit: line.unit,
+      baseUnit: line.baseUnit,
+      conversionRate: line.conversionRate,
+      quantity: line.quantity,
+    }));
+
+    const createDto: CreateOrderDto = {
+      customerId: sourceOrder.customerId,
+      deliveryPoint: sourceOrder.deliveryPoint
+        ? {
+            id: sourceOrder.deliveryPoint.id,
+            address: sourceOrder.deliveryPoint.address,
+            name: sourceOrder.deliveryPoint.name,
+            receiverName: sourceOrder.deliveryPoint.receiverName,
+            phone: sourceOrder.deliveryPoint.phone,
+            roadNote: sourceOrder.deliveryPoint.roadNote,
+          }
+        : undefined,
+      deliveryDate: sourceOrder.deliveryDate,
+      lines: linesDto,
+      note: sourceOrder.note
+        ? `[Bản sao từ ${sourceOrder.orderCode}] ${sourceOrder.note}`
+        : `Bản sao từ ${sourceOrder.orderCode}`,
+      status: OrderStatus.DRAFT,
+    };
+
+    return this.createOrder(
+      createDto,
+      salesRep || { id: sourceOrder.salesRepId, name: sourceOrder.salesRepName },
+    );
   }
 }
