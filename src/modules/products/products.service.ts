@@ -1436,7 +1436,7 @@ export class ProductsService implements OnModuleInit {
       }
 
       previewData.push({
-        row: rowNumber,
+        row: rowNumber - 1,
         sku: sku || '',
         name: name || '',
         category: category || '',
