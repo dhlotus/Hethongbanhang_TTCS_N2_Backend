@@ -257,14 +257,11 @@ export class OrdersService implements OnModuleInit {
   /**
    * Tính toán lượng tồn giữ chỗ (reservedStock) của tất cả SKU (SN-39):
    * reservedStock = Tổng số lượng của SKU đó trong các đơn hàng đang ở trạng thái
-   * "Chờ duyệt" (PENDING, PENDING_APPROVAL, PENDING_INVENTORY_APPROVAL) hoặc "Đã duyệt - Chưa xuất kho" (APPROVED, PROCESSING).
+   * Chỉ các đơn đã được duyệt và đang chờ xuất kho mới giữ chỗ tồn (APPROVED, PROCESSING).
    */
   getReservedStockMap(excludeOrderId?: string): Map<string, number> {
     const map = new Map<string, number>();
     const reservedStatuses = new Set<OrderStatus>([
-      OrderStatus.PENDING,
-      OrderStatus.PENDING_APPROVAL,
-      OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
     ]);
@@ -1317,11 +1314,17 @@ export class OrdersService implements OnModuleInit {
       const order = await this.findOrderById(id);
 
       if (dto.status !== undefined) {
-        if (
+        const canUpdateDraft =
           order.status === OrderStatus.DRAFT &&
-          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING)
-        ) {
+          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING);
+        const canResubmitReturnedOrder =
+          order.status === OrderStatus.RETURNED_FOR_UPDATE &&
+          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING);
+        if (canUpdateDraft) {
           order.status = dto.status;
+        } else if (canResubmitReturnedOrder) {
+          // Keep returned orders pending until recalculated approval requirements are known.
+          if (dto.status === OrderStatus.DRAFT) order.status = OrderStatus.DRAFT;
         } else {
           throw new BadRequestException(
             'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
