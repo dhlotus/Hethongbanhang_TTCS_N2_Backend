@@ -19,6 +19,7 @@ import { DiscountPoliciesModule } from './modules/discount-policies/discount-pol
 import { CreditLimitModule } from './modules/credit-limit/credit-limit.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
+import { AgencyModule } from './modules/agencies/agency.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { MailModule } from './modules/mail/mail.module';
     ReturnsModule,
     ReportsModule,
     AuditLogsModule,
+    AgencyModule,
   ],
 })
 export class AppModule { }
