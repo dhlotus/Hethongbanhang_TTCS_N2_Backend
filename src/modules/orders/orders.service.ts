@@ -540,6 +540,13 @@ export class OrdersService implements OnModuleInit {
 
       const customer = await this.customersService.getCustomerById(dto.customerId);
 
+    // Kiểm tra trạng thái đại lý (SN-36: Đại lý bị khóa không tạo được đơn mới, kể cả trên cổng đặt hàng)
+    if (customer.status === CustomerStatus.LOCKED) {
+      throw new BadRequestException(
+        `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do khóa: ${customer.lockReason || 'Không xác định'}). Không thể tạo đơn hàng mới, kể cả trên cổng đặt hàng!`,
+      );
+    }
+
     // 1. Kiểm tra điều kiện công nợ của đại lý (Task SN-41)
     const debtStatus = await this.customersService.getCustomerDebtStatus(dto.customerId);
 
@@ -548,13 +555,6 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         debtStatus.blockReason ||
           'Đại lý có khoản nợ quá hạn vượt quá thời hạn cho phép. Không thể tạo đơn hàng mới.',
-      );
-    }
-
-    // Kiểm tra trạng thái đại lý (SN-36: Đại lý bị khóa không tạo được đơn mới, kể cả trên cổng đặt hàng)
-    if (customer.status === CustomerStatus.LOCKED) {
-      throw new BadRequestException(
-        `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do khóa: ${customer.lockReason || 'Không xác định'}). Không thể tạo đơn hàng mới, kể cả trên cổng đặt hàng!`,
       );
     }
 
