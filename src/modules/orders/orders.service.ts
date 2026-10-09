@@ -1077,8 +1077,28 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Đơn chờ duyệt chỉ được xử lý qua chức năng xét duyệt.');
     }
+    if (this.databaseService && dto.status === OrderStatus.SHIPPED) {
+      const reservations = await this.databaseService.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM app_order_inventory_reservations
+         WHERE order_id = $1 AND status = 'RESERVED'`,
+        [order.id],
+      );
+      if (Number(reservations[0]?.count ?? 0) > 0) {
+        throw new BadRequestException(
+          `Đơn ${order.orderCode} vẫn còn hàng đang giữ. Hãy xuất kho theo mã đơn này trước khi chuyển sang Đã xuất kho.`,
+        );
+      }
+    }
     order.status = dto.status;
     order.updatedAt = new Date();
+    if (this.databaseService && dto.status === OrderStatus.CANCELLED) {
+      await this.databaseService.query(
+        `UPDATE app_order_inventory_reservations
+         SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
+         WHERE order_id = $1 AND status = 'RESERVED'`,
+        [order.id],
+      );
+    }
     await this.saveOrder(order);
     return order;
   }

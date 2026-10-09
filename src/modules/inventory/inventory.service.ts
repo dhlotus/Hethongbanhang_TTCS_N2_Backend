@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
+import { DatabaseService } from '../../database/database.service';
 
 export interface StockAdjustmentResult {
   success: boolean;
@@ -43,7 +44,10 @@ export class InventoryService implements OnModuleInit {
    */
   private locks = new Map<string, Promise<void>>();
 
-  constructor(private readonly productsService: ProductsService) {}
+  constructor(
+    private readonly productsService: ProductsService,
+    private readonly databaseService: DatabaseService,
+  ) {}
 
   onModuleInit(): void {
     if (this.ledger.size === 0) {
@@ -135,24 +139,38 @@ export class InventoryService implements OnModuleInit {
       sku: string;
       name: string;
       stockQuantity: number;
+      physicalStockQuantity: number;
+      reservedQuantity: number;
       baseUnit: string;
       units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
       warehouse: string;
     }>
   > {
     const products = await this.productsService.findAll();
-    return products.map((p) => ({
-      sku: p.sku,
-      name: p.name,
-      stockQuantity: p.stockQuantity,
-      baseUnit: p.baseUnit,
-      units: (p.units || []).map((u) => ({
-        unitName: u.unitName,
-        conversionRate: u.conversionRate,
-        isBaseUnit: u.isBaseUnit,
-      })),
-      warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-    }));
+    const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
+      `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
+       FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
+    );
+    const reservations = new Map(
+      reservationResult.map((row) => [row.product_sku.toUpperCase(), Number(row.reserved)]),
+    );
+    return products.map((p) => {
+      const reservedQuantity = reservations.get(p.sku.toUpperCase()) ?? 0;
+      return {
+        sku: p.sku,
+        name: p.name,
+        stockQuantity: Math.max(0, p.stockQuantity - reservedQuantity),
+        physicalStockQuantity: p.stockQuantity,
+        reservedQuantity,
+        baseUnit: p.baseUnit,
+        units: (p.units || []).map((u) => ({
+          unitName: u.unitName,
+          conversionRate: u.conversionRate,
+          isBaseUnit: u.isBaseUnit,
+        })),
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+      };
+    });
   }
 
   /**
@@ -191,6 +209,46 @@ export class InventoryService implements OnModuleInit {
       // 2. Tính toán lượng biến động quy về đơn vị cơ sở (Base Quantity Change)
       const baseQuantityChange = Math.round(dto.quantityChange * conversionRate);
 
+      const referenceCode = dto.referenceCode?.trim() || '';
+      const client = await this.databaseService.getClient();
+      let newStockQuantity = previousQuantity;
+      let transaction: InventoryTransactionEntity;
+      let transactionOpen = false;
+      try {
+        await client.query('BEGIN');
+        transactionOpen = true;
+        const sku = product.sku.trim().toUpperCase();
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
+        const reservedResult = await client.query<{ reserved: string }>(
+          `SELECT COALESCE(SUM(base_quantity), 0)::text AS reserved
+           FROM app_order_inventory_reservations WHERE product_sku = $1 AND status = 'RESERVED'`,
+          [sku],
+        );
+        const totalReserved = Number(reservedResult.rows[0]?.reserved ?? 0);
+        let orderReservation = 0;
+        if (baseQuantityChange < 0 && referenceCode) {
+          const orderReservationResult = await client.query<{ reserved: string }>(
+            `SELECT COALESCE(SUM(r.base_quantity), 0)::text AS reserved
+             FROM app_order_inventory_reservations r
+             JOIN app_order_records o ON o.id = r.order_id
+             WHERE UPPER(o.order_code) = UPPER($1) AND r.product_sku = $2 AND r.status = 'RESERVED'`,
+            [referenceCode, sku],
+          );
+          orderReservation = Number(orderReservationResult.rows[0]?.reserved ?? 0);
+        }
+        if (baseQuantityChange < 0 && orderReservation > 0 && Math.abs(baseQuantityChange) > orderReservation) {
+          throw new BadRequestException(
+            `Số lượng xuất vượt quá phần đang giữ của đơn ${referenceCode} (${orderReservation} ${product.baseUnit}).`,
+          );
+        }
+        const isReservedOrderExport = baseQuantityChange < 0 && orderReservation > 0;
+        const availableForManualExport = product.stockQuantity - totalReserved;
+        if (baseQuantityChange < 0 && !isReservedOrderExport && Math.abs(baseQuantityChange) > availableForManualExport) {
+          throw new BadRequestException(
+            `Tồn khả dụng chỉ còn ${availableForManualExport} ${product.baseUnit}; ${totalReserved} đang được giữ cho đơn hàng.`,
+          );
+        }
+
       // 3. Ràng buộc chống tồn kho âm tuyệt đối (bên trong lock — an toàn)
       if (product.stockQuantity + baseQuantityChange < 0) {
         throw new BadRequestException(
@@ -203,15 +261,16 @@ export class InventoryService implements OnModuleInit {
         product.id,
         baseQuantityChange,
       );
+      newStockQuantity = updated.stockQuantity;
 
       // 5. Ghi sổ kho — SNAPSHOT BẤT BIẾN (Fix #4: dùng ledger Map thay array)
-      const referenceCode =
-        dto.referenceCode?.trim() ||
+      const normalizedReferenceCode =
+        referenceCode ||
         (dto.quantityChange >= 0
           ? `PNK-${Date.now().toString().slice(-6)}`
           : `PXK-${Date.now().toString().slice(-6)}`);
 
-      const transaction = new InventoryTransactionEntity({
+      transaction = new InventoryTransactionEntity({
         productId: product.id,
         sku: product.sku,
         productName: product.name,
@@ -222,9 +281,9 @@ export class InventoryService implements OnModuleInit {
         baseQuantityChange,
         baseUnit: product.baseUnit,
         previousStock: previousQuantity,
-        newStock: updated.stockQuantity,
+        newStock: newStockQuantity,
         reason: dto.reason.trim(),
-        referenceCode,
+        referenceCode: normalizedReferenceCode,
         warehouse: dto.warehouseLocation || 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: userId,
         createdAt: new Date(),
@@ -232,12 +291,48 @@ export class InventoryService implements OnModuleInit {
 
       this.writeLedger(transaction);
 
+        if (baseQuantityChange < 0 && orderReservation > 0) {
+          let remaining = Math.abs(baseQuantityChange);
+          const rows = await client.query<{ id: string; base_quantity: string }>(
+            `SELECT r.id, r.base_quantity::text FROM app_order_inventory_reservations r
+             JOIN app_order_records o ON o.id = r.order_id
+             WHERE UPPER(o.order_code) = UPPER($1) AND r.product_sku = $2 AND r.status = 'RESERVED'
+             ORDER BY r.id FOR UPDATE OF r`,
+            [referenceCode, sku],
+          );
+          for (const row of rows.rows) {
+            if (remaining <= 0) break;
+            const reserved = Number(row.base_quantity);
+            const consumed = Math.min(remaining, reserved);
+            if (consumed === reserved) {
+              await client.query(
+                `UPDATE app_order_inventory_reservations SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP WHERE id = $1`,
+                [row.id],
+              );
+            } else {
+              await client.query(
+                `UPDATE app_order_inventory_reservations SET base_quantity = base_quantity - $2 WHERE id = $1`,
+                [row.id, consumed],
+              );
+            }
+            remaining -= consumed;
+          }
+        }
+        await client.query('COMMIT');
+        transactionOpen = false;
+      } catch (error) {
+        if (transactionOpen) await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+
       const actionText = dto.quantityChange >= 0 ? 'Nhập kho' : 'Xuất kho';
       const signText = dto.quantityChange >= 0 ? '+' : '';
 
       return {
         success: true,
-        message: `${actionText} thành công: ${signText}${dto.quantityChange} ${unitName} (Quy đổi: ${signText}${baseQuantityChange} ${product.baseUnit}). Tồn mới: ${updated.stockQuantity} ${product.baseUnit}.`,
+        message: `${actionText} thành công: ${signText}${dto.quantityChange} ${unitName} (Quy đổi: ${signText}${baseQuantityChange} ${product.baseUnit}). Tồn mới: ${newStockQuantity} ${product.baseUnit}.`,
         sku: product.sku,
         productName: product.name,
         inputQuantity: dto.quantityChange,
@@ -248,10 +343,10 @@ export class InventoryService implements OnModuleInit {
         baseQuantityChange,
         baseUnit: product.baseUnit,
         previousQuantity,
-        newQuantity: updated.stockQuantity,
+        newQuantity: newStockQuantity,
         quantityChange: baseQuantityChange,
         reason: dto.reason,
-        referenceCode,
+        referenceCode: transaction.referenceCode,
         adjustedBy: userId,
         timestamp: transaction.createdAt.toISOString(),
       };
