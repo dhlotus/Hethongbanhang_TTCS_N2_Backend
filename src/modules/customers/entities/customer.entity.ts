@@ -26,6 +26,8 @@ export class CustomerEntity {
   creditLimit: number;
   currentDebt: number;
   maxDebtDays: number;
+  overdueAmount: number;
+  overdueDays: number;
   phone: string;
   email?: string;
   address?: string;
@@ -42,6 +44,8 @@ export class CustomerEntity {
     this.creditLimit = partial.creditLimit ?? 0;
     this.currentDebt = partial.currentDebt ?? 0;
     this.maxDebtDays = partial.maxDebtDays ?? 30;
+    this.overdueAmount = partial.overdueAmount ?? 0;
+    this.overdueDays = partial.overdueDays ?? 0;
     this.status = partial.status ?? CustomerStatus.ACTIVE;
     this.lockReason = partial.lockReason;
     this.lockedAt = partial.lockedAt ? new Date(partial.lockedAt) : undefined;

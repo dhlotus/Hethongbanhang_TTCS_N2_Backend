@@ -24,6 +24,7 @@ import {
   ConfirmImportResult,
 } from './dto/import-product.dto';
 import { ProductUnitDto } from './dto/product-unit.dto';
+import { OrdersService } from '../orders/orders.service';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -61,8 +62,34 @@ export class ProductsService implements OnModuleInit {
     @Optional()
     @Inject(forwardRef(() => CategoriesService))
     private readonly categoriesService?: CategoriesService,
+    @Optional()
+    @Inject(forwardRef(() => OrdersService))
+    private readonly ordersService?: OrdersService,
   ) {
     this.seedInitialProducts();
+  }
+
+  /**
+   * Tính toán và cập nhật tồn khả dụng cho thực thể sản phẩm (SN-39):
+   * availableStock = physicalStock (Tồn thực tế) - reservedStock (Tồn đang giữ chỗ)
+   */
+  public populateProductStock(
+    product: ProductEntity,
+    reservedMap?: Map<string, number>,
+  ): ProductEntity {
+    const reserved = reservedMap
+      ? (reservedMap.get(product.id) ||
+          (product.sku ? reservedMap.get(product.sku.toUpperCase()) : 0) ||
+          0)
+      : this.ordersService
+      ? this.ordersService.getReservedStock(product.id || product.sku)
+      : 0;
+
+    product.physicalStock = product.stockQuantity ?? 0;
+    product.reservedStock = reserved;
+    product.availableStock = Math.max(0, product.physicalStock - reserved);
+    product.availableQuantity = product.availableStock;
+    return product;
   }
 
   async onModuleInit(): Promise<void> {
@@ -451,7 +478,10 @@ export class ProductsService implements OnModuleInit {
    */
   async findAll(filterDto?: GetProductsFilterDto): Promise<ProductEntity[]> {
     if (!filterDto || Object.keys(filterDto).length === 0) {
-      return Array.from(this.products.values());
+      const reservedMap = this.ordersService?.getReservedStockMap();
+      return Array.from(this.products.values()).map((p) =>
+        this.populateProductStock(p, reservedMap),
+      );
     }
     const paginated = await this.findAllPaginated(filterDto);
     return paginated.data;
@@ -564,7 +594,10 @@ export class ProductsService implements OnModuleInit {
     const totalPages = Math.ceil(total / limit) || 1;
     const safePage = Math.max(1, page);
     const startIndex = (safePage - 1) * limit;
-    const data = items.slice(startIndex, startIndex + limit);
+    const reservedMap = this.ordersService?.getReservedStockMap();
+    const data = items
+      .slice(startIndex, startIndex + limit)
+      .map((p) => this.populateProductStock(p, reservedMap));
 
     return {
       data,
@@ -622,7 +655,7 @@ export class ProductsService implements OnModuleInit {
       );
     }
 
-    return product;
+    return this.populateProductStock(product);
   }
 
   /**
@@ -1763,9 +1796,9 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
-   * Hàm nội bộ tìm kiếm sản phẩm theo ID hoặc SKU
+   * Hàm tìm kiếm sản phẩm theo ID hoặc SKU (SN-39)
    */
-  private findProductInternal(idOrSku: string): ProductEntity | undefined {
+  public findProductInternal(idOrSku: string): ProductEntity | undefined {
     if (!idOrSku) return undefined;
     const direct = this.products.get(idOrSku);
     if (direct) return direct;

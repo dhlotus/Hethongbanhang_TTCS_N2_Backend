@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -10,6 +12,7 @@ import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
 import { CustomerStatus } from '../customers/entities/customer.entity';
+import { ProductsService } from '../products/products.service';
 import { CreateOrderDto, CreateOrderLineDto } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -35,16 +38,42 @@ interface OrderLineCalculation {
 }
 
 /**
+ * Async Lock ngắn phòng ngừa race condition khi 2 Sales cùng chốt đơn (SN-39)
+ */
+class AsyncLock {
+  private queue: Promise<void> = Promise.resolve();
+
+  async acquire<T>(fn: () => Promise<T> | T): Promise<T> {
+    let release: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prev = this.queue;
+    this.queue = this.queue.then(() => wait);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+}
+
+/**
  * Service Quản lý Đặt hàng B2B (SN-38 & SN-39)
  */
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, OrderEntity>();
+  private readonly orderLock = new AsyncLock();
 
   constructor(
     private readonly customersService: CustomersService,
     @Optional() private readonly priceListsService?: PriceListsService,
     @Optional() private readonly discountPoliciesService?: DiscountPoliciesService,
+    @Optional()
+    @Inject(forwardRef(() => ProductsService))
+    private readonly productsService?: ProductsService,
   ) {
     this.seedInitialOrders();
   }
@@ -52,6 +81,97 @@ export class OrdersService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     if (this.orders.size === 0) {
       this.seedInitialOrders();
+    }
+  }
+
+  /**
+   * Tính toán lượng tồn giữ chỗ (reservedStock) của tất cả SKU (SN-39):
+   * reservedStock = Tổng số lượng của SKU đó trong các đơn hàng đang ở trạng thái
+   * "Chờ duyệt" (PENDING, PENDING_APPROVAL, PENDING_INVENTORY_APPROVAL) hoặc "Đã duyệt - Chưa xuất kho" (APPROVED, PROCESSING).
+   */
+  getReservedStockMap(excludeOrderId?: string): Map<string, number> {
+    const map = new Map<string, number>();
+    const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+    ]);
+
+    for (const order of this.orders.values()) {
+      if (excludeOrderId && order.id === excludeOrderId) continue;
+      if (!reservedStatuses.has(order.status)) continue;
+      if (!order.lines) continue;
+
+      for (const line of order.lines) {
+        const baseQty =
+          line.baseQuantity ||
+          Math.round((line.quantity || 0) * (line.conversionRate || 1));
+        if (line.productId) {
+          map.set(line.productId, (map.get(line.productId) || 0) + baseQty);
+        }
+        if (line.productSku) {
+          const upperSku = line.productSku.toUpperCase();
+          map.set(upperSku, (map.get(upperSku) || 0) + baseQty);
+        }
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Lấy lượng tồn giữ chỗ của một SKU hoặc Product ID cụ thể (SN-39)
+   */
+  getReservedStock(productIdOrSku: string, excludeOrderId?: string): number {
+    if (!productIdOrSku) return 0;
+    const map = this.getReservedStockMap(excludeOrderId);
+    return (
+      map.get(productIdOrSku) ||
+      map.get(productIdOrSku.toUpperCase()) ||
+      0
+    );
+  }
+
+  /**
+   * Validation Guard kiểm tra số lượng đặt với tồn khả dụng (SN-39):
+   * availableStock = physicalStock - reservedStock
+   * Nếu orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
+   * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Còn tối đa [availableStock] [Đơn vị])"
+   */
+  validateOrderLinesAvailableStock(
+    lines: CreateOrderLineDto[],
+    excludeOrderId?: string,
+  ): void {
+    if (!this.productsService || !lines || lines.length === 0) return;
+
+    for (const line of lines) {
+      const product = this.productsService.findProductInternal(
+        line.productId || line.productSku,
+      );
+      if (!product) continue;
+
+      const physicalStock = product.stockQuantity ?? 0;
+      const reservedStock = this.getReservedStock(
+        product.id || product.sku,
+        excludeOrderId,
+      );
+      const availableStock = Math.max(0, physicalStock - reservedStock);
+
+      const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
+      const orderBaseQuantity = Math.round(line.quantity * conversionRate);
+
+      if (orderBaseQuantity > availableStock) {
+        const maxAllowedInUnit =
+          conversionRate > 1
+            ? Math.floor(availableStock / conversionRate)
+            : availableStock;
+        const unitName = line.unit || product.baseUnit;
+        const skuName = product.name || line.productName || line.productSku;
+        throw new BadRequestException(
+          `Sản phẩm ${skuName} vượt quá tồn khả dụng (Còn tối đa ${maxAllowedInUnit} ${unitName})`,
+        );
+      }
     }
   }
 
@@ -414,7 +534,22 @@ export class OrdersService implements OnModuleInit {
     dto: CreateOrderDto,
     salesRep?: { id?: string; name?: string },
   ): Promise<OrderEntity> {
-    const customer = await this.customersService.getCustomerById(dto.customerId);
+    return this.orderLock.acquire(async () => {
+      // 0. API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng
+      this.validateOrderLinesAvailableStock(dto.lines || []);
+
+      const customer = await this.customersService.getCustomerById(dto.customerId);
+
+    // 1. Kiểm tra điều kiện công nợ của đại lý (Task SN-41)
+    const debtStatus = await this.customersService.getCustomerDebtStatus(dto.customerId);
+
+    // Trường hợp 1: Chặn hoàn toàn (Hard Block) nếu nợ quá hạn vượt quá số ngày cho phép
+    if (!debtStatus.canCreateOrder) {
+      throw new BadRequestException(
+        debtStatus.blockReason ||
+          'Đại lý có khoản nợ quá hạn vượt quá thời hạn cho phép. Không thể tạo đơn hàng mới.',
+      );
+    }
 
     // Kiểm tra trạng thái đại lý (SN-36: Đại lý bị khóa không tạo được đơn mới, kể cả trên cổng đặt hàng)
     if (customer.status === CustomerStatus.LOCKED) {
@@ -478,14 +613,32 @@ export class OrdersService implements OnModuleInit {
       approvalReasons,
     } = this.calculateOrderTotals(pricing.lines);
 
-    const orderId = `ord-${Date.now()}`;
-    const orderCode = this.generateOrderCode();
+    // 2. Kiểm tra hạn mức công nợ (Task SN-41 - Approval Flow)
+    // Trường hợp 2: Nếu (Tổng tiền đơn hàng mới + Công nợ hiện tại) > Hạn mức công nợ
+    const currentDebt = customer.currentDebt || 0;
+    const creditLimit = customer.creditLimit || 0;
+    const projectedDebt = currentDebt + grandTotal;
+    const isCreditLimitExceeded = creditLimit > 0 && projectedDebt > creditLimit;
+    const creditLimitExceededAmount = isCreditLimitExceeded
+      ? projectedDebt - creditLimit
+      : 0;
+
     const requestedStatus = dto.status || OrderStatus.PENDING;
-    // Approval is only allowed through the guarded status endpoint.
-    const orderStatus =
+    let orderStatus =
       requestedStatus === OrderStatus.APPROVED
         ? OrderStatus.PENDING
         : requestedStatus;
+    let orderNote = dto.note;
+
+    if (isCreditLimitExceeded) {
+      // Tự động đánh dấu đơn hàng ở trạng thái "Cần phê duyệt" (PENDING_APPROVAL)
+      orderStatus = OrderStatus.PENDING_APPROVAL;
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    }
+
+    const orderId = `ord-${Date.now()}`;
+    const orderCode = this.generateOrderCode();
 
     const newOrder = new OrderEntity({
       id: orderId,
@@ -502,18 +655,21 @@ export class OrdersService implements OnModuleInit {
       subtotal,
       totalDiscount,
       grandTotal,
-      note: dto.note,
+      note: orderNote,
       status: orderStatus,
       paymentStatus: PaymentStatus.UNPAID,
       priceListId: pricing.priceListId || dto.priceListId,
       requiresApproval,
       approvalReasons,
+      isCreditLimitExceeded,
+      creditLimitExceededAmount,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    this.orders.set(orderId, newOrder);
-    return newOrder;
+      this.orders.set(orderId, newOrder);
+      return newOrder;
+    });
   }
 
   /**
@@ -605,71 +761,76 @@ export class OrdersService implements OnModuleInit {
    * Cập nhật thông tin đơn hàng (đặc biệt là đơn nháp DRAFT để tiếp tục gõ)
    */
   async updateOrder(id: string, dto: UpdateOrderDto): Promise<OrderEntity> {
-    const order = await this.findOrderById(id);
+    return this.orderLock.acquire(async () => {
+      const order = await this.findOrderById(id);
 
-    if (dto.status !== undefined) {
-      throw new BadRequestException(
-        'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
-      );
-    }
-
-    if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
-    }
-
-    if (dto.customerId && dto.customerId !== order.customerId) {
-      const customer = await this.customersService.getCustomerById(dto.customerId);
-
-      if (customer.status === CustomerStatus.LOCKED) {
+      if (dto.status !== undefined) {
         throw new BadRequestException(
-          `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không có'}). Không thể đổi đơn hàng sang đại lý bị khóa!`,
+          'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
         );
       }
 
-      order.customerId = customer.id;
-      order.customerCode = customer.code;
-      order.customerName = customer.name;
-      order.customerGroup = customer.customerGroup;
-    }
+      if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
+        throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
+      }
 
-    if (dto.deliveryPoint) {
-      order.deliveryPoint = {
-        id: dto.deliveryPoint.id,
-        name: dto.deliveryPoint.name || order.deliveryPoint?.name || 'Điểm giao hàng',
-        address: dto.deliveryPoint.address,
-        receiverName: dto.deliveryPoint.receiverName || order.deliveryPoint?.receiverName || '',
-        phone: dto.deliveryPoint.phone || order.deliveryPoint?.phone || '',
-        roadNote: dto.deliveryPoint.roadNote,
-      };
-    }
+      if (dto.customerId && dto.customerId !== order.customerId) {
+        const customer = await this.customersService.getCustomerById(dto.customerId);
 
-    if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
-    if (dto.note !== undefined) order.note = dto.note;
-    if (dto.lines && dto.lines.length > 0) {
-      const pricing = this.resolveOrderPricing(
-        dto.lines,
-        order.customerGroup || '',
-        dto.priceListId,
-      );
-      const {
-        lines,
-        subtotal,
-        totalDiscount,
-        grandTotal,
-        requiresApproval,
-        approvalReasons,
-      } = this.calculateOrderTotals(pricing.lines);
-      order.lines = lines;
-      order.subtotal = subtotal;
-      order.totalDiscount = totalDiscount;
-      order.grandTotal = grandTotal;
-      order.requiresApproval = requiresApproval;
-      order.approvalReasons = approvalReasons;
-      order.priceListId = pricing.priceListId || order.priceListId;
-    }
+        if (customer.status === CustomerStatus.LOCKED) {
+          throw new BadRequestException(
+            `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không có'}). Không thể đổi đơn hàng sang đại lý bị khóa!`,
+          );
+        }
 
-    order.updatedAt = new Date();
-    return this.checkAndAttachLockWarning(order);
+        order.customerId = customer.id;
+        order.customerCode = customer.code;
+        order.customerName = customer.name;
+        order.customerGroup = customer.customerGroup;
+      }
+
+      if (dto.deliveryPoint) {
+        order.deliveryPoint = {
+          id: dto.deliveryPoint.id,
+          name: dto.deliveryPoint.name || order.deliveryPoint?.name || 'Điểm giao hàng',
+          address: dto.deliveryPoint.address,
+          receiverName: dto.deliveryPoint.receiverName || order.deliveryPoint?.receiverName || '',
+          phone: dto.deliveryPoint.phone || order.deliveryPoint?.phone || '',
+          roadNote: dto.deliveryPoint.roadNote,
+        };
+      }
+
+      if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
+      if (dto.note !== undefined) order.note = dto.note;
+      if (dto.lines && dto.lines.length > 0) {
+        // API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng (trừ đi đơn hiện tại)
+        this.validateOrderLinesAvailableStock(dto.lines, id);
+
+        const pricing = this.resolveOrderPricing(
+          dto.lines,
+          order.customerGroup || '',
+          dto.priceListId,
+        );
+        const {
+          lines,
+          subtotal,
+          totalDiscount,
+          grandTotal,
+          requiresApproval,
+          approvalReasons,
+        } = this.calculateOrderTotals(pricing.lines);
+        order.lines = lines;
+        order.subtotal = subtotal;
+        order.totalDiscount = totalDiscount;
+        order.grandTotal = grandTotal;
+        order.requiresApproval = requiresApproval;
+        order.approvalReasons = approvalReasons;
+        order.priceListId = pricing.priceListId || order.priceListId;
+      }
+
+      order.updatedAt = new Date();
+      return this.checkAndAttachLockWarning(order);
+    });
   }
 
   /**

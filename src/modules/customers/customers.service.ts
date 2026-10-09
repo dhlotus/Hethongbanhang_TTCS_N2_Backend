@@ -17,13 +17,21 @@ import { PaginatedCustomersResult } from './interfaces/paginated-customers.inter
 import { UserRole } from '../../common/enums/user-role.enum';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { INITIAL_AGENCIES } from './agencies.seed';
+import { CustomerDebtStatusDto } from './dto/customer-debt-status.dto';
+import { CustomerAssignmentHistoryEntity } from './entities/customer-assignment-history.entity';
+import { AssignSalesRepDto } from './dto/assign-sales-rep.dto';
+import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
+import { CreateCustomerDto } from './dto/create-customer.dto';
+import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
+import { QueryCustomersDto } from './dto/query-customers.dto';
 
 /**
- * Service Quản lý Đại lý & Điểm giao hàng (SN-31 & SN-32)
+ * Service Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-35)
  */
 @Injectable()
 export class CustomersService implements OnModuleInit {
   private readonly customers = new Map<string, CustomerEntity>();
+  private assignmentHistories: CustomerAssignmentHistoryEntity[] = [];
 
   constructor(@Optional() private readonly dbService?: DatabaseService) {
     this.seedInitialCustomers();
@@ -36,10 +44,128 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
-   * Khởi tạo dữ liệu mẫu thực tế 100% cho các đại lý và nhiều điểm giao hàng (SN-31)
+   * Đặt lại dữ liệu phục vụ test (SN-35)
+   */
+  resetData(): void {
+    this.customers.clear();
+    this.assignmentHistories = [];
+    this.seedInitialCustomers();
+  }
+
+  /**
+   * Khởi tạo dữ liệu mẫu thực tế 100% cho các đại lý và nhiều điểm giao hàng (SN-31 & SN-35)
    */
   private seedInitialCustomers(): void {
     for (const c of INITIAL_AGENCIES) {
+      this.customers.set(c.id, new CustomerEntity(c));
+    }
+
+    const sn35Seeds: CustomerEntity[] = [
+      new CustomerEntity({
+        id: 'cust-hn-001',
+        code: 'DL-HN-001',
+        name: 'Đại Lý Thực Phẩm Sạch Thăng Long',
+        taxCode: '0109876541',
+        customerGroup: 'AGENT_LEVEL_1',
+        region: 'Miền Bắc',
+        salesRepId: 'usr-sales-002',
+        salesRepName: 'Trần Văn Nam',
+        creditLimit: 300000000,
+        currentDebt: 45000000,
+        maxDebtDays: 30,
+        phone: '0981234561',
+        email: 'thanglong.hn@lohasales.vn',
+        address: '102 Cầu Giấy, Q. Cầu Giấy, Hà Nội',
+        status: CustomerStatus.ACTIVE,
+      }),
+      new CustomerEntity({
+        id: 'cust-hn-002',
+        code: 'DL-HN-002',
+        name: 'Bách Hóa Tổng Hợp Hà Đông',
+        taxCode: '0109876542',
+        customerGroup: 'AGENT_LEVEL_2',
+        region: 'Miền Bắc',
+        salesRepId: 'usr-sales-002',
+        salesRepName: 'Trần Văn Nam',
+        creditLimit: 150000000,
+        currentDebt: 12000000,
+        maxDebtDays: 30,
+        phone: '0981234562',
+        email: 'hadong.mart@lohasales.vn',
+        address: '45 Quang Trung, Q. Hà Đông, Hà Nội',
+        status: CustomerStatus.ACTIVE,
+      }),
+      new CustomerEntity({
+        id: 'cust-hp-001',
+        code: 'DL-HP-001',
+        name: 'Đại Lý Cảng Hải Phòng Mart',
+        taxCode: '0208765431',
+        customerGroup: 'AGENT_LEVEL_2',
+        region: 'Miền Bắc',
+        salesRepId: undefined,
+        salesRepName: undefined,
+        creditLimit: 100000000,
+        currentDebt: 0,
+        maxDebtDays: 30,
+        phone: '0931234561',
+        email: 'haiphong.cang@lohasales.vn',
+        address: '88 Lê Hồng Phong, TP. Hải Phòng',
+        status: CustomerStatus.ACTIVE,
+      }),
+      new CustomerEntity({
+        id: 'cust-qn-001',
+        code: 'DL-QN-001',
+        name: 'Siêu Thị Tiêu Dùng Hạ Long',
+        taxCode: '1401234561',
+        customerGroup: 'AGENT_LEVEL_2',
+        region: 'Miền Bắc',
+        salesRepId: undefined,
+        salesRepName: undefined,
+        creditLimit: 80000000,
+        currentDebt: 0,
+        maxDebtDays: 30,
+        phone: '0931234562',
+        email: 'halong.store@lohasales.vn',
+        address: '12 Lê Thánh Tông, TP. Hạ Long, Quảng Ninh',
+        status: CustomerStatus.ACTIVE,
+      }),
+      new CustomerEntity({
+        id: 'cust-dn-001',
+        code: 'DL-DN-001',
+        name: 'Đại Lý Phân Phối Đà Nẵng Xanh',
+        taxCode: '0401234561',
+        customerGroup: 'AGENT_LEVEL_1',
+        region: 'Miền Trung',
+        salesRepId: undefined,
+        salesRepName: undefined,
+        creditLimit: 200000000,
+        currentDebt: 0,
+        maxDebtDays: 30,
+        phone: '0941234561',
+        email: 'danang.green@lohasales.vn',
+        address: '56 Nguyễn Văn Linh, Q. Hải Châu, TP. Đà Nẵng',
+        status: CustomerStatus.ACTIVE,
+      }),
+      new CustomerEntity({
+        id: 'cust-hue-001',
+        code: 'DL-HUE-001',
+        name: 'Cửa Hàng Thực Dưỡng Cố Đô Huế',
+        taxCode: '3301234561',
+        customerGroup: 'AGENT_LEVEL_2',
+        region: 'Miền Trung',
+        salesRepId: undefined,
+        salesRepName: undefined,
+        creditLimit: 60000000,
+        currentDebt: 0,
+        maxDebtDays: 30,
+        phone: '0941234562',
+        email: 'codo.hue@lohasales.vn',
+        address: '20 Hùng Vương, TP. Huế',
+        status: CustomerStatus.ACTIVE,
+      }),
+    ];
+
+    for (const c of sn35Seeds) {
       this.customers.set(c.id, c);
     }
     this.unusedLegacy();
@@ -115,8 +241,10 @@ export class CustomersService implements OnModuleInit {
         salesRepId: 'usr-sale-02',
         salesRepName: 'Nguyễn Thị Hằng',
         creditLimit: 60000000,
-        currentDebt: 15200000,
+        currentDebt: 52000000,
         maxDebtDays: 20,
+        overdueAmount: 0,
+        overdueDays: 0,
         phone: '0912345678',
         email: 'baochaustore.q9@gmail.com',
         address: '456 Lê Văn Việt, P.Tăng Nhơn Phú A, TP.Thủ Đức, TP.HCM',
@@ -205,8 +333,10 @@ export class CustomersService implements OnModuleInit {
         salesRepId: 'usr-sale-03',
         salesRepName: 'Phạm Minh Tuấn',
         creditLimit: 120000000,
-        currentDebt: 32000000,
-        maxDebtDays: 45,
+        currentDebt: 45000000,
+        maxDebtDays: 30,
+        overdueAmount: 18000000,
+        overdueDays: 45,
         phone: '0934567890',
         email: 'anphumart.hanoi@gmail.com',
         address: '18 Duy Tân, P.Dịch Vọng Hậu, Q.Cầu Giấy, Hà Nội',
@@ -440,43 +570,7 @@ export class CustomersService implements OnModuleInit {
 
       if (isSalesRep && !isManagerOrAdmin) {
         list = list.filter((c) => {
-          // 1. Khớp chính xác ID phụ trách
-          if (c.salesRepId === currentUser.userId || c.salesRep?.id === currentUser.userId) {
-            return true;
-          }
-
-          // 2. Đồng bộ tài khoản Sales Rep chính (sales@loha.vn / usr-sales-002 / usr-sale-01 / 00000000-0000-0000-0000-000000000003)
-          const isPrimarySalesUser =
-            currentUser.userId === 'usr-sales-002' ||
-            currentUser.userId === 'usr-sale-01' ||
-            currentUser.userId === '00000000-0000-0000-0000-000000000003' ||
-            currentUser.username === 'sales' ||
-            currentUser.email === 'sales@loha.vn';
-
-          if (isPrimarySalesUser) {
-            return (
-              c.salesRepId === 'usr-sale-01' ||
-              c.salesRepId === 'usr-sales-002' ||
-              c.salesRepId === '00000000-0000-0000-0000-000000000003'
-            );
-          }
-
-          // 3. Đồng bộ tài khoản Sales Rep phụ (nhanvienkinhdoanh@loha.vn / usr-sale-02 / 00000000-0000-0000-0000-000000000013)
-          const isSecondarySalesUser =
-            currentUser.userId === 'usr-sale-02' ||
-            currentUser.userId === '00000000-0000-0000-0000-000000000013' ||
-            currentUser.username === 'nhanvienkinhdoanh' ||
-            currentUser.email === 'nhanvienkinhdoanh@loha.vn';
-
-          if (isSecondarySalesUser) {
-            return (
-              c.salesRepId === 'usr-sale-02' ||
-              c.salesRepId === '00000000-0000-0000-0000-000000000013'
-            );
-          }
-
-          // 4. Fallback an toàn: Nếu là tài khoản kinh doanh hệ thống nhưng chưa gán ID cụ thể, mặc định xem tuyến chính
-          return c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002';
+          return c.salesRepId === currentUser.userId || c.salesRep?.id === currentUser.userId;
         });
       }
     }
@@ -821,5 +915,271 @@ export class CustomersService implements OnModuleInit {
 
     return customer;
   }
+
+  /**
+   * Kiểm tra thông tin & trạng thái công nợ của đại lý (Task SN-41)
+   */
+  async getCustomerDebtStatus(customerId: string): Promise<CustomerDebtStatusDto> {
+    const customer = await this.getCustomerById(customerId);
+    const creditLimit = customer.creditLimit || 0;
+    const currentDebt = customer.currentDebt || 0;
+    const maxDebtDays = customer.maxDebtDays || 30;
+    const overdueAmount = customer.overdueAmount || 0;
+    const overdueDays = customer.overdueDays || 0;
+    const availableLimit = Math.max(0, creditLimit - currentDebt);
+
+    // Kiểm tra chặn cứng (Hard Block - Trường hợp 1):
+    // Quá hạn vượt quá số ngày cho phép (overdueDays > maxDebtDays) và có số tiền nợ quá hạn > 0
+    let canCreateOrder = true;
+    let blockReason: string | undefined;
+    let warningMessage: string | undefined;
+
+    if (customer.status === CustomerStatus.LOCKED) {
+      canCreateOrder = false;
+      blockReason = `Tài khoản đại lý [${customer.name}] đang trong trạng thái bị khóa. Không thể tạo đơn hàng mới.`;
+    } else if (overdueDays > maxDebtDays && overdueAmount > 0) {
+      canCreateOrder = false;
+      blockReason = `Đại lý đang có khoản nợ quá hạn ${overdueDays} ngày (vượt quá ${maxDebtDays} ngày cho phép) với số tiền ${overdueAmount.toLocaleString('vi-VN')} đ. Hệ thống tạm khóa quyền tạo đơn hàng mới cho đại lý này.`;
+    } else if (overdueAmount > 0) {
+      warningMessage = `Đại lý đang có khoản nợ quá hạn ${overdueDays}/${maxDebtDays} ngày (${overdueAmount.toLocaleString('vi-VN')} đ). Vui lòng lưu ý đôn đốc thanh toán.`;
+    } else if (currentDebt >= creditLimit) {
+      warningMessage = `Đại lý đã sử dụng hết hạn mức công nợ được cấp (${creditLimit.toLocaleString('vi-VN')} đ). Đơn hàng mới sẽ được chuyển sang trạng thái chờ phê duyệt.`;
+    } else if (availableLimit < creditLimit * 0.2) {
+      warningMessage = `Hạn mức công nợ khả dụng của đại lý chỉ còn ${availableLimit.toLocaleString('vi-VN')} đ (dưới 20%). Lưu ý kiểm tra giá trị đơn hàng.`;
+    }
+
+    return {
+      customerId: customer.id,
+      customerCode: customer.code,
+      customerName: customer.name,
+      creditLimit,
+      currentDebt,
+      availableLimit,
+      maxDebtDays,
+      overdueAmount,
+      overdueDays,
+      canCreateOrder,
+      blockReason,
+      warningMessage,
+    };
+  }
+
+  /**
+   * Alias tìm đại lý theo ID (SN-35)
+   */
+  async findById(id: string): Promise<CustomerEntity> {
+    return this.getCustomerById(id);
+  }
+
+  /**
+   * Alias tìm kiếm & lọc danh sách đại lý (SN-35)
+   */
+  async findAll(query?: any, currentUser?: ICurrentUser): Promise<any> {
+    const res = await this.filterCustomers(query, currentUser);
+    const unassignedCount = Array.from(this.customers.values()).filter(
+      (c) => !c.salesRepId || c.salesRepId === '',
+    ).length;
+    return {
+      ...res,
+      unassignedCount,
+    };
+  }
+
+  /**
+   * Gán nhân viên kinh doanh phụ trách chính cho đại lý (SN-35)
+   */
+  async assignSalesRep(
+    customerId: string,
+    dto: AssignSalesRepDto,
+    currentUser?: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(customerId);
+    if (!customer) {
+      throw new NotFoundException(`Không tìm thấy đại lý có mã hoặc ID [${customerId}]`);
+    }
+
+    const fromSalesRepId = customer.salesRepId || null;
+    const fromSalesRepName = customer.salesRepName || null;
+
+    let toSalesRepName = 'Trần Văn Nam';
+    if (dto.salesRepId === 'usr-salesmgr-003') toSalesRepName = 'Lê Quản Lý (Sales Manager)';
+    else if (dto.salesRepId === 'usr-sales-002') toSalesRepName = 'Trần Văn Nam';
+    else if (dto.salesRepId === 'usr-sale-01') toSalesRepName = 'Trần Văn Long';
+    else if (dto.salesRepId === 'usr-sale-02') toSalesRepName = 'Lê Thị Thu Thảo';
+
+    customer.salesRepId = dto.salesRepId;
+    customer.salesRepName = toSalesRepName;
+    customer.salesRep = { id: dto.salesRepId, name: toSalesRepName };
+    customer.updatedAt = new Date();
+
+    const history = new CustomerAssignmentHistoryEntity({
+      id: `hist-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      transferBatchId: `BATCH-${Date.now()}`,
+      customerId: customer.id,
+      customerCode: customer.code,
+      customerName: customer.name,
+      region: customer.region || 'Miền Bắc',
+      fromSalesRepId,
+      fromSalesRepName,
+      toSalesRepId: dto.salesRepId,
+      toSalesRepName,
+      performedById: currentUser?.userId || 'usr-salesmgr-003',
+      performedByName: currentUser?.username || 'Quản lý kinh doanh',
+      reason: dto.reason || 'Phân công nhân viên kinh doanh phụ trách',
+      notes: dto.notes,
+      createdAt: new Date(),
+    });
+
+    this.assignmentHistories.unshift(history);
+    return customer;
+  }
+
+  /**
+   * Chuyển giao địa bàn hàng loạt khi nhân viên nghỉ việc (SN-35)
+   */
+  async bulkTransferTerritory(
+    dto: BulkTransferTerritoryDto,
+    currentUser?: ICurrentUser,
+  ): Promise<any> {
+    if (dto.fromSalesRepId === dto.toSalesRepId) {
+      throw new BadRequestException('Nhân sự bàn giao và tiếp nhận không được trùng nhau');
+    }
+    if (!dto.reason || !dto.reason.trim()) {
+      throw new BadRequestException('Bắt buộc phải nhập lý do chuyển giao địa bàn');
+    }
+
+    let toSalesRepName = 'Lê Quản Lý (Sales Manager)';
+    if (dto.toSalesRepId === 'usr-sales-002') toSalesRepName = 'Trần Văn Nam';
+    else if (dto.toSalesRepId === 'usr-salesmgr-003') toSalesRepName = 'Lê Quản Lý (Sales Manager)';
+    else if (dto.toSalesRepId === 'usr-sale-01') toSalesRepName = 'Trần Văn Long';
+    else if (dto.toSalesRepId === 'usr-sale-02') toSalesRepName = 'Lê Thị Thu Thảo';
+
+    let fromSalesRepName = 'Trần Văn Nam';
+    if (dto.fromSalesRepId === 'usr-sales-002') fromSalesRepName = 'Trần Văn Nam';
+    else if (dto.fromSalesRepId === 'usr-sale-01') fromSalesRepName = 'Trần Văn Long';
+    else if (dto.fromSalesRepId === 'usr-sale-02') fromSalesRepName = 'Lê Thị Thu Thảo';
+    else if (dto.fromSalesRepId === 'usr-salesmgr-003') fromSalesRepName = 'Lê Quản Lý (Sales Manager)';
+
+    let targets = Array.from(this.customers.values()).filter(
+      (c) => c.salesRepId === dto.fromSalesRepId || (c.salesRep && c.salesRep.id === dto.fromSalesRepId),
+    );
+
+    if (dto.customerIds && dto.customerIds.length > 0) {
+      const set = new Set(dto.customerIds);
+      targets = targets.filter((c) => set.has(c.id) || set.has(c.code));
+    }
+
+    const batchId = `BATCH-${Date.now()}`;
+    const transferred: CustomerEntity[] = [];
+
+    for (const c of targets) {
+      const oldId = c.salesRepId || dto.fromSalesRepId;
+      const oldName = c.salesRepName || fromSalesRepName;
+
+      c.salesRepId = dto.toSalesRepId;
+      c.salesRepName = toSalesRepName;
+      c.salesRep = { id: dto.toSalesRepId, name: toSalesRepName };
+      c.updatedAt = new Date();
+
+      const hist = new CustomerAssignmentHistoryEntity({
+        id: `hist-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        transferBatchId: batchId,
+        customerId: c.id,
+        customerCode: c.code,
+        customerName: c.name,
+        region: c.region || 'Miền Bắc',
+        fromSalesRepId: oldId,
+        fromSalesRepName: oldName,
+        toSalesRepId: dto.toSalesRepId,
+        toSalesRepName,
+        performedById: currentUser?.userId || 'usr-salesmgr-003',
+        performedByName: currentUser?.username || 'Quản lý kinh doanh',
+        reason: dto.reason.trim(),
+        notes: dto.notes,
+        createdAt: new Date(),
+      });
+      this.assignmentHistories.unshift(hist);
+      transferred.push(c);
+    }
+
+    return {
+      message: `Chuyển giao thành công ${transferred.length} đại lý`,
+      transferBatchId: batchId,
+      transferredCount: transferred.length,
+      fromSalesRep: { id: dto.fromSalesRepId, name: fromSalesRepName },
+      toSalesRep: { id: dto.toSalesRepId, name: toSalesRepName },
+      transferredCustomers: transferred.map((c) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        region: c.region,
+      })),
+    };
+  }
+
+  /**
+   * Lấy lịch sử chuyển giao & phân công địa bàn (SN-35)
+   */
+  async getAssignmentHistory(query?: QueryAssignmentHistoryDto): Promise<any> {
+    let list = [...this.assignmentHistories];
+    if (query?.customerId) {
+      list = list.filter((h) => h.customerId === query.customerId);
+    }
+    if (query?.fromSalesRepId) {
+      list = list.filter((h) => h.fromSalesRepId === query.fromSalesRepId);
+    }
+    if (query?.toSalesRepId) {
+      list = list.filter((h) => h.toSalesRepId === query.toSalesRepId);
+    }
+    if (query?.transferBatchId) {
+      list = list.filter((h) => h.transferBatchId === query.transferBatchId);
+    }
+
+    const page = Number(query?.page) || 1;
+    const limit = Number(query?.limit) || 20;
+    const startIndex = (page - 1) * limit;
+    const pagedData = list.slice(startIndex, startIndex + limit);
+
+    return {
+      data: pagedData,
+      total: list.length,
+      page,
+      limit,
+      totalPages: Math.ceil(list.length / limit) || 1,
+    };
+  }
+
+  /**
+   * Tạo đại lý mới (SN-35)
+   */
+  async createCustomer(dto: CreateCustomerDto): Promise<CustomerEntity> {
+    const newId = `cust-${Date.now()}`;
+    let salesRepName: string | undefined;
+    if (dto.salesRepId === 'usr-sales-002') salesRepName = 'Trần Văn Nam';
+    else if (dto.salesRepId === 'usr-sale-01') salesRepName = 'Trần Văn Long';
+    else if (dto.salesRepId === 'usr-sale-02') salesRepName = 'Lê Thị Thu Thảo';
+
+    const newCustomer = new CustomerEntity({
+      id: newId,
+      code: dto.code,
+      name: dto.name,
+      region: dto.region,
+      customerGroup: dto.customerGroup || 'AGENT_LEVEL_2',
+      taxCode: dto.taxCode,
+      salesRepId: dto.salesRepId,
+      salesRepName,
+      phone: dto.phone,
+      email: dto.email,
+      address: dto.address,
+      creditLimit: dto.creditLimit ?? 0,
+      maxDebtDays: dto.maxDebtDays ?? 30,
+      status: CustomerStatus.ACTIVE,
+      deliveryPoints: [],
+    });
+
+    this.customers.set(newId, newCustomer);
+    return newCustomer;
+  }
 }
+
 
