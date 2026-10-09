@@ -622,10 +622,13 @@ export class OrdersService implements OnModuleInit {
         : requestedStatus;
     let orderNote = dto.note;
 
-    if (isCreditLimitExceeded) {
+    if (isCreditLimitExceeded && requestedStatus !== OrderStatus.DRAFT) {
       // Tự động đánh dấu đơn hàng ở trạng thái "Cần phê duyệt" (PENDING_APPROVAL)
       orderStatus = OrderStatus.PENDING_APPROVAL;
       const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    } else if (isCreditLimitExceeded) {
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ)]`;
       orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
     }
 
