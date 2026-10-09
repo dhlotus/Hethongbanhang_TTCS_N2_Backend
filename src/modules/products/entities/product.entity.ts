@@ -20,6 +20,10 @@ export class ProductEntity {
   costPrice: number;
   margin?: number;
   stockQuantity: number;
+  physicalStock: number;
+  reservedStock: number;
+  availableStock: number;
+  availableQuantity: number;
   status: ProductStatus;
   imageUrl?: string;
   description?: string;
@@ -109,6 +113,10 @@ export class ProductEntity {
     }
 
     if (this.stockQuantity === undefined) this.stockQuantity = 0;
+    this.physicalStock = partial.physicalStock !== undefined ? Number(partial.physicalStock) : this.stockQuantity;
+    this.reservedStock = partial.reservedStock !== undefined ? Number(partial.reservedStock) : 0;
+    this.availableStock = partial.availableStock !== undefined ? Number(partial.availableStock) : Math.max(0, this.physicalStock - this.reservedStock);
+    this.availableQuantity = this.availableStock;
     if (!this.status) this.status = ProductStatus.ACTIVE;
     if (this.hasTransactions === undefined) this.hasTransactions = false;
     if (!this.createdAt) this.createdAt = new Date();
@@ -184,6 +192,14 @@ export class ProductEntity {
       margin: this.margin,
       stockQuantity: this.stockQuantity,
       stock_quantity: this.stockQuantity,
+      physicalStock: this.physicalStock !== undefined ? this.physicalStock : this.stockQuantity,
+      physical_stock: this.physicalStock !== undefined ? this.physicalStock : this.stockQuantity,
+      reservedStock: this.reservedStock ?? 0,
+      reserved_stock: this.reservedStock ?? 0,
+      availableStock: this.availableStock !== undefined ? this.availableStock : this.stockQuantity,
+      available_stock: this.availableStock !== undefined ? this.availableStock : this.stockQuantity,
+      availableQuantity: this.availableStock !== undefined ? this.availableStock : this.stockQuantity,
+      available_quantity: this.availableStock !== undefined ? this.availableStock : this.stockQuantity,
       status: this.status,
       imageUrl: this.imageUrl,
       image_url: this.imageUrl,
