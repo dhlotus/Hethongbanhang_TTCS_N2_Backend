@@ -17,6 +17,7 @@ import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
 import { FilterCustomersDto } from './dto/filter-customers.dto';
+import { LockCustomerDto } from './dto/lock-customer.dto';
 import { CustomerEntity } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
@@ -194,5 +195,27 @@ export class CustomersController {
     @Param('pointId') pointId: string,
   ): Promise<{ success: boolean; message: string }> {
     return this.customersService.deleteDeliveryPoint(customerId, pointId);
+  }
+
+  /**
+   * Khoá giao dịch đại lý - Kế toán công nợ (SN-36)
+   * PATCH /api/customers/:id/lock
+   */
+  @Patch(':id/lock')
+  async lockCustomer(
+    @Param('id') id: string,
+    @Body() dto: LockCustomerDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    return this.customersService.lockCustomer(id, dto, currentUser);
+  }
+
+  /**
+   * Mở khoá giao dịch đại lý - Kế toán công nợ (SN-36)
+   * PATCH /api/customers/:id/unlock
+   */
+  @Patch(':id/unlock')
+  async unlockCustomer(@Param('id') id: string): Promise<CustomerEntity> {
+    return this.customersService.unlockCustomer(id);
   }
 }

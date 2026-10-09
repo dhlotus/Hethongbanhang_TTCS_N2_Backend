@@ -88,4 +88,28 @@ describe('Order Cloning (SN-48)', () => {
     expect(cloned.grandTotal).toBe(20900000); // 50 * 418.000 = 20.900.000 đ
     expect(cloned.status).toBe(OrderStatus.DRAFT);
   });
+
+  it('bản sao luôn ở trạng thái DRAFT kể cả khi tổng tiền đơn hàng làm vượt hạn mức công nợ (SN-48)', async () => {
+    // cust-001 có creditLimit = 50.000.000 đ. Tạo đơn số lượng lớn vượt hạn mức
+    const source = await ordersService.createOrder({
+      customerId: 'cust-001',
+      status: OrderStatus.PENDING,
+      lines: [
+        {
+          productId: 'prod-001',
+          productSku: 'LH-MILK-900G',
+          productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
+          unit: 'Lon',
+          baseUnit: 'Lon',
+          conversionRate: 1,
+          quantity: 200, // 200 * 418.000 = 83.600.000 > 50.000.000
+        },
+      ],
+    });
+
+    const cloned = await ordersService.cloneOrder(source.id);
+
+    // Bản sao BẮT BUỘC luôn bắt đầu ở trạng thái Nháp (DRAFT) theo đúng AC của SN-48
+    expect(cloned.status).toBe(OrderStatus.DRAFT);
+  });
 });

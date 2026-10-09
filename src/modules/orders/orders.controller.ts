@@ -10,6 +10,7 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { CreateOrderDto, UpdateOrderStatusDto } from './dto/create-order.dto';
@@ -22,28 +23,40 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { DecideOrderDto } from './dto/decide-order.dto';
+import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 
 /**
- * Controller Quản lý Đặt hàng B2B (SN-38 & SN-39)
+ * Controller Quản lý Đặt hàng B2B (SN-38, SN-39 & SN-46)
  */
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   /**
-   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38)
+   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38 & SN-46)
+   * - Hỗ trợ lọc trạng thái, đại lý, nhân viên, khu vực, khoảng thời gian
+   * - Trả về tổng tiền của tập kết quả đang lọc (totalAmount)
+   * - Phân quyền: Nhân viên kinh doanh chỉ thấy đơn của đại lý mình phụ trách
    * GET /api/orders
    */
   @Get()
   @Public()
-  async getOrders(@Query() query: QueryOrdersDto): Promise<{
+  async getOrders(
+    @Query() query: QueryOrdersDto,
+    @Req() req?: any,
+  ): Promise<{
     data: OrderEntity[];
     total: number;
+    totalAmount: number;
     page: number;
     limit: number;
     totalPages: number;
   }> {
-    return this.ordersService.findAllOrders(query);
+    const user = req?.user;
+    return this.ordersService.findAllOrders(query, user);
   }
 
   /**
@@ -54,6 +67,26 @@ export class OrdersController {
   @Public()
   async getOrderById(@Param('id') id: string): Promise<OrderEntity> {
     return this.ordersService.findOrderById(id);
+  }
+
+  @Get(':id/approval-history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async getApprovalHistory(
+    @Param('id') id: string,
+  ): Promise<OrderApprovalHistoryEntity[]> {
+    return this.ordersService.getApprovalHistory(id);
+  }
+
+  @Post(':id/decision')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async decideOrder(
+    @Param('id') id: string,
+    @Body() dto: DecideOrderDto,
+    @CurrentUser() reviewer: ICurrentUser,
+  ): Promise<OrderEntity> {
+    return this.ordersService.decideOrder(id, dto, reviewer);
   }
 
   /**
