@@ -20,6 +20,7 @@ import { CreditLimitModule } from './modules/credit-limit/credit-limit.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
 import { AgencyModule } from './modules/agencies/agency.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { AgencyModule } from './modules/agencies/agency.module';
     ReportsModule,
     AuditLogsModule,
     AgencyModule,
+    DashboardModule,
   ],
 })
 export class AppModule { }
