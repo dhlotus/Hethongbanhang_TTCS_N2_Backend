@@ -26,6 +26,7 @@ export class OrderEntity {
   customerGroup?: string;
   salesRepId?: string;
   salesRepName?: string;
+  region?: string;
   deliveryPoint?: IOrderDeliveryPoint;
   deliveryDate?: string;
   lines: OrderLineEntity[];
