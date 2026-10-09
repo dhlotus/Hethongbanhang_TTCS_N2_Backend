@@ -66,7 +66,8 @@ src/database/
 │   ├── 004_warehouse_and_inventory.sql             # EP-05, EP-06: Warehouses, Locations, User-Warehouses, Inventories, Batches, Goods Receipts/Issues
 │   ├── 005_orders_and_approvals.sql                # EP-04: Orders, Order Items, Approvals, FK Goods Issues
 │   ├── 006_invoices_payments_and_debt.sql          # EP-07, EP-08, EP-09: Invoices, Payments, Debt Ledger, Return Orders
-│   └── 007_functions_triggers_and_indexes.sql      # Triggers updated_at, fn_allocate_inventory, fn_confirm_goods_issue, fn_check_customer_credit
+│   ├── 007_functions_triggers_and_indexes.sql      # Triggers updated_at, fn_allocate_inventory, fn_confirm_goods_issue, fn_check_customer_credit
+│   └── 008_app_order_records.sql                   # Lưu đơn hàng ứng dụng dạng JSONB để giữ snapshot và dòng hàng
 └── seeders/
     └── 001_seed_initial_data.sql                   # Dữ liệu ban đầu: 7 roles, tài khoản demo tiếng Việt, danh mục, kho, bảng giá, đại lý, tồn kho FEFO
 ```
@@ -97,6 +98,9 @@ psql -U postgres -d htbh_db -f src/database/migrations/004_warehouse_and_invento
 psql -U postgres -d htbh_db -f src/database/migrations/005_orders_and_approvals.sql
 psql -U postgres -d htbh_db -f src/database/migrations/006_invoices_payments_and_debt.sql
 psql -U postgres -d htbh_db -f src/database/migrations/007_functions_triggers_and_indexes.sql
+psql -U postgres -d htbh_db -f src/database/migrations/008_app_order_records.sql
+psql -U postgres -d htbh_db -f src/database/migrations/009_order_approval_workflow.sql
+psql -U postgres -d htbh_db -f src/database/migrations/010_persistent_inventory_stock_balances.sql
 psql -U postgres -d htbh_db -f src/database/seeders/001_seed_initial_data.sql
 ```
 
