@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, forwardRef, Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
@@ -48,6 +48,7 @@ export class InventoryService implements OnModuleInit {
   private stockBalanceSchemaPromise: Promise<void> | null = null;
 
   constructor(
+    @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
     private readonly databaseService: DatabaseService,
   ) {}

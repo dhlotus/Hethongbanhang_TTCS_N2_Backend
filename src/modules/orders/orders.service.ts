@@ -9,6 +9,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { randomUUID } from 'crypto';
 import { DiscountPoliciesService } from '../discount-policies/discount-policies.service';
 import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
@@ -905,7 +906,7 @@ export class OrdersService implements OnModuleInit {
       orderStatus = OrderStatus.PENDING_APPROVAL;
     }
 
-    const orderId = `ord-${Date.now()}`;
+    const orderId = `ord-${randomUUID()}`;
     const orderCode = this.generateOrderCode();
 
     const newOrder = new OrderEntity({
@@ -1090,7 +1091,7 @@ export class OrdersService implements OnModuleInit {
   async findOrderById(id: string): Promise<OrderEntity> {
     const rows = this.databaseService
       ? await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
-          'SELECT payload FROM app_order_records WHERE id = $1',
+          'SELECT payload FROM app_order_records WHERE id = $1 OR order_code = $1 LIMIT 1',
           [id],
         )
       : [];
@@ -1104,7 +1105,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   async getApprovalHistory(orderId: string): Promise<OrderApprovalHistoryEntity[]> {
-    await this.findOrderById(orderId);
+    const order = await this.findOrderById(orderId);
     if (!this.databaseService) return this.memoryApprovalHistory.get(orderId) ?? [];
     const rows = await this.databaseService.query<{
       [key: string]: unknown;
@@ -1122,7 +1123,7 @@ export class OrdersService implements OnModuleInit {
        FROM app_order_approval_history
        WHERE order_id = $1
        ORDER BY created_at DESC, id DESC`,
-      [orderId],
+      [order.id],
     );
     return rows.map((row) => this.toApprovalHistoryEntity(row));
   }
@@ -1190,7 +1191,7 @@ export class OrdersService implements OnModuleInit {
 
   private async loadLockedOrder(client: PoolClient, orderId: string): Promise<OrderEntity> {
     const result = await client.query<{ payload: unknown }>(
-      'SELECT payload FROM app_order_records WHERE id = $1 FOR UPDATE',
+      'SELECT payload FROM app_order_records WHERE id = $1 OR order_code = $1 LIMIT 1 FOR UPDATE',
       [orderId],
     );
     if (!result.rows[0]) throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);

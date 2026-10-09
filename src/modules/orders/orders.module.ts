@@ -13,7 +13,7 @@ import { OrdersService } from './orders.service';
     PriceListsModule,
     DiscountPoliciesModule,
     forwardRef(() => ProductsModule),
-    InventoryModule,
+    forwardRef(() => InventoryModule),
   ],
   controllers: [OrdersController],
   providers: [OrdersService],
