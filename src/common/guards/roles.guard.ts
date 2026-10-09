@@ -50,11 +50,20 @@ export class RolesGuard implements CanActivate {
     }
 
     // Đồng bộ danh sách vai trò của user (hỗ trợ cả mảng roles và thuộc tính role đơn)
-    const userRoles: string[] = Array.isArray(user.roles)
+    const rawRoles: string[] = Array.isArray(user.roles)
       ? user.roles
       : user.role
         ? [user.role]
         : [];
+
+    const userRoles: string[] = [];
+    for (const r of rawRoles) {
+      userRoles.push(r);
+      if (r === 'ACCOUNTANT') userRoles.push('ACCOUNTANT_DEBT');
+      if (r === 'ACCOUNTANT_DEBT') userRoles.push('ACCOUNTANT');
+      if (r === 'SALES_MANAGER') userRoles.push('BUSINESS_MANAGER');
+      if (r === 'BUSINESS_MANAGER') userRoles.push('SALES_MANAGER');
+    }
 
     // 4. Quản trị hệ thống (ADMIN) luôn có toàn quyền trên toàn bộ hệ thống
     if (userRoles.includes(UserRole.ADMIN)) {

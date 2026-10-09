@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Integration Test: Excel Import – Tạo Tài Khoản Hàng Loạt (SN-147)
  *
  * Bao phủ toàn bộ các luồng nghiệp vụ:
@@ -94,13 +94,14 @@ describe('[SN-147] Excel Import – Tao Tai Khoan Hang Loat', () => {
       );
     });
 
-    it('TC-03: Nem BadRequestException khi file qua dung luong (> 5MB)', async () => {
-      const hugeBuffer = Buffer.alloc(6 * 1024 * 1024, 0);
+    it('TC-03: Nem BadRequestException khi file qua dung luong (> 25MB)', async () => {
+      const hugeBuffer = Buffer.alloc(26 * 1024 * 1024, 0);
       const file = buildMulterFile(hugeBuffer, 'large.xlsx');
       await expect(excelImportService.importFromExcel(file)).rejects.toBeInstanceOf(
         BadRequestException,
       );
     });
+
 
     it('TC-04: Nem BadRequestException khi file Excel rong (khong co dong nao)', async () => {
       const worksheet = XLSX.utils.aoa_to_sheet([]);
@@ -378,4 +379,219 @@ describe('[SN-147] Excel Import – Tao Tai Khoan Hang Loat', () => {
       expect(report.results[0].status).toBe('SUCCESS');
     });
   });
+
+  // ──────────────────────────────────────────────────
+  // NHOM 8: File Tiếng Việt 50 Dòng Hợp Lệ & Hiệu Năng
+  // ──────────────────────────────────────────────────
+
+  describe('File Tiếng Việt 50 dòng hợp lệ (Ngăn chặn triệt để timeout 10000ms)', () => {
+    it('TC-23: Import file 50 dòng tiếng Việt hợp lệ thành công trong thời gian ngắn', async () => {
+      const vietnameseHeaders = [
+        'Họ và tên',
+        'Username',
+        'Email',
+        'Mật khẩu',
+        'Vai trò',
+        'Số ĐT',
+        'Kho phụ trách',
+      ];
+
+      const rows: Record<string, unknown>[] = [];
+      for (let i = 1; i <= 50; i++) {
+        rows.push({
+          'Họ và tên': `Nguyễn Văn Nhân Viên ${i}`,
+          'Username': `nvkd_vn_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+          'Email': `nhanvien_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}@loha.vn`,
+          'Mật khẩu': 'Loha@123456',
+          'Vai trò': 'Nhân viên kinh doanh',
+          'Số ĐT': `09012345${(i % 90 + 10).toString()}`,
+          'Kho phụ trách': '',
+        });
+      }
+
+      const worksheet = XLSX.utils.json_to_sheet(rows, { header: vietnameseHeaders });
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+      const buffer = Buffer.from(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+      const file = buildMulterFile(buffer, 'Danh_Sach_50_Tai_Khoan_NVKD_TiengViet.xlsx');
+
+      const startTime = Date.now();
+      const report = await excelImportService.importFromExcel(file);
+      const durationMs = Date.now() - startTime;
+
+      expect(report.totalRows).toBe(50);
+      expect(report.successCount).toBe(50);
+      expect(report.failedCount).toBe(0);
+      expect(report.createdUsers).toHaveLength(50);
+      // Đảm bảo thời gian chạy 50 dòng nhanh hơn nhiều so với giới hạn timeout 10000ms
+      expect(durationMs).toBeLessThan(8000);
+    });
+  });
+
+  // ──────────────────────────────────────────────────
+  // NHOM 9: Kiểm Thử Định Dạng Username
+  // ──────────────────────────────────────────────────
+
+  describe('Kiểm thử định dạng Username (Chứa khoảng trắng, độ dài, ký tự)', () => {
+    it('TC-24: Username chứa khoảng trắng -> FAILED, bắt đúng lỗi', async () => {
+      const rows = [buildValidRow({ username: 'nguyen van a' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+      expect(
+        report.results[0].errors!.some((e) => e.toLowerCase().includes('khoảng trắng')),
+      ).toBe(true);
+    });
+
+    it('TC-25: Username quá ngắn (< 3 ký tự) -> FAILED', async () => {
+      const rows = [buildValidRow({ username: 'ab' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+      expect(
+        report.results[0].errors!.some((e) => e.toLowerCase().includes('3 ký tự')),
+      ).toBe(true);
+    });
+
+    it('TC-26: Username chứa ký tự đặc biệt không cho phép -> FAILED', async () => {
+      const rows = [buildValidRow({ username: 'user@name#123' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+    });
+  });
+
+  // ──────────────────────────────────────────────────
+  // NHOM 10: Kiểm Thử Định Dạng Email
+  // ──────────────────────────────────────────────────
+
+  describe('Kiểm thử định dạng Email (Thiếu ký tự @, domain)', () => {
+    it('TC-27: Email thiếu ký tự @ -> FAILED, báo lỗi thiếu @ rõ ràng', async () => {
+      const rows = [buildValidRow({ email: 'nguyenvana_loha.vn' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+      expect(
+        report.results[0].errors!.some((e) => e.includes('@')),
+      ).toBe(true);
+    });
+
+    it('TC-28: Email sai định dạng miền -> FAILED', async () => {
+      const rows = [buildValidRow({ email: 'test@invalid_domain' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+    });
+  });
+
+  // ──────────────────────────────────────────────────
+  // NHOM 11: Kiểm Thử Định Dạng Số Điện Thoại
+  // ──────────────────────────────────────────────────
+
+  describe('Kiểm thử định dạng Số điện thoại (Chứa chữ cái, ngắn quá)', () => {
+    it('TC-29: Số điện thoại chứa chữ cái -> FAILED, báo lỗi rõ ràng', async () => {
+      const rows = [buildValidRow({ phone: '090123abc' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+      expect(
+        report.results[0].errors!.some(
+          (e) => e.toLowerCase().includes('chữ') || e.toLowerCase().includes('không hợp lệ'),
+        ),
+      ).toBe(true);
+    });
+
+    it('TC-30: Số điện thoại quá ngắn (< 10 số) -> FAILED', async () => {
+      const rows = [buildValidRow({ phone: '0901234' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('FAILED');
+      expect(
+        report.results[0].errors!.some((e) => e.toLowerCase().includes('ngắn')),
+      ).toBe(true);
+    });
+
+    it('TC-31: Số điện thoại hợp lệ (10 số) -> SUCCESS', async () => {
+      const rows = [buildValidRow({ phone: '0901234567' })];
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer);
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.results[0].status).toBe('SUCCESS');
+    });
+  });
+
+  // ──────────────────────────────────────────────────
+  // NHOM 12: Kịch Bản Hỗn Hợp (Scenario 4)
+  // ──────────────────────────────────────────────────
+
+  describe('Kiểm thử kịch bản hỗn hợp (Test_Kich_Ban_4_Validate_Format_Va_Logic)', () => {
+    it('TC-32: File chứa dòng hợp lệ và các dòng sai format (email thiếu @, phone có chữ, username có space)', async () => {
+      const rows = [
+        // Dòng 1: Hợp lệ
+        buildValidRow({ fullName: 'Nguyễn Văn Một' }),
+        // Dòng 2: Email thiếu @
+        buildValidRow({ fullName: 'Trần Văn Hai', email: 'thieu_at_loha.vn' }),
+        // Dòng 3: Phone chứa chữ cái
+        buildValidRow({ fullName: 'Lê Văn Ba', phone: '0901abc456' }),
+        // Dòng 4: Phone quá ngắn
+        buildValidRow({ fullName: 'Phạm Văn Bốn', phone: '09123' }),
+        // Dòng 5: Username chứa khoảng trắng
+        buildValidRow({ fullName: 'Hoàng Văn Năm', username: 'hoang van nam' }),
+        // Dòng 6: Thủ kho thiếu kho
+        buildValidRow({ fullName: 'Đỗ Văn Sáu', role: 'Thủ kho', assignedWarehouse: '' }),
+        // Dòng 7: Hợp lệ
+        buildValidRow({ fullName: 'Vũ Văn Bảy' }),
+      ];
+
+      const buffer = buildExcelBuffer(rows);
+      const file = buildMulterFile(buffer, 'Test_Kich_Ban_4_Validate_Format_Va_Logic.xlsx');
+
+      const report = await excelImportService.importFromExcel(file);
+
+      expect(report.totalRows).toBe(7);
+      expect(report.successCount).toBe(2);
+      expect(report.failedCount).toBe(5);
+
+      // Dòng 1 thành công
+      expect(report.results[0].status).toBe('SUCCESS');
+      // Dòng 2 lỗi email
+      expect(report.results[1].status).toBe('FAILED');
+      expect(report.results[1].errors!.some((e) => e.includes('@'))).toBe(true);
+      // Dòng 3 lỗi SĐT chứa chữ
+      expect(report.results[2].status).toBe('FAILED');
+      // Dòng 4 lỗi SĐT ngắn
+      expect(report.results[3].status).toBe('FAILED');
+      // Dòng 5 lỗi username khoảng trắng
+      expect(report.results[4].status).toBe('FAILED');
+      expect(report.results[4].errors!.some((e) => e.includes('khoảng trắng'))).toBe(true);
+      // Dòng 6 lỗi kho
+      expect(report.results[5].status).toBe('FAILED');
+      // Dòng 7 thành công
+      expect(report.results[6].status).toBe('SUCCESS');
+    });
+  });
 });
+

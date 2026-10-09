@@ -12,6 +12,9 @@ export interface SafeUser {
   status: UserStatus;
   avatarUrl?: string | null;
   assignedWarehouse?: string;
+  dateOfBirth?: string | null;
+  gender?: string | null;
+  isIdentityLocked?: boolean;
   lockReason?: string | null;
   resetCode?: string | null;
   resetCodeCreatedAt?: Date | null;
@@ -31,6 +34,9 @@ export class UserEntity {
   status: UserStatus;
   avatarUrl: string | null;
   assignedWarehouse?: string;
+  dateOfBirth?: string | null;
+  gender?: string | null;
+  isIdentityLocked?: boolean;
   lockReason?: string | null;
   resetCode?: string | null;
   resetCodeCreatedAt?: Date | null;
@@ -62,13 +68,26 @@ export class UserEntity {
     this.status = partial.status ?? UserStatus.ACTIVE;
     this.avatarUrl = partial.avatarUrl ?? null;
     this.assignedWarehouse = partial.assignedWarehouse;
+    this.dateOfBirth = partial.dateOfBirth ?? null;
+    this.gender = partial.gender ?? null;
+    this.isIdentityLocked = partial.isIdentityLocked ?? false;
     this.lockReason = partial.lockReason ?? null;
     this.resetCode = partial.resetCode ?? null;
     this.resetCodeCreatedAt = partial.resetCodeCreatedAt ?? null;
     this.failedAttempts = partial.failedAttempts ?? 0;
     this.lockedUntil = partial.lockedUntil ?? null;
-    this.createdAt = partial.createdAt ?? new Date();
-    this.updatedAt = partial.updatedAt ?? new Date();
+    this.createdAt =
+      partial.createdAt instanceof Date
+        ? partial.createdAt
+        : partial.createdAt
+        ? new Date(partial.createdAt)
+        : new Date();
+    this.updatedAt =
+      partial.updatedAt instanceof Date
+        ? partial.updatedAt
+        : partial.updatedAt
+        ? new Date(partial.updatedAt)
+        : new Date();
   }
 
   /**
@@ -86,6 +105,9 @@ export class UserEntity {
       status: this.status,
       avatarUrl: this.avatarUrl ?? null,
       assignedWarehouse: this.assignedWarehouse,
+      dateOfBirth: this.dateOfBirth,
+      gender: this.gender,
+      isIdentityLocked: this.isIdentityLocked,
       lockReason: this.lockReason,
       resetCode: this.resetCode,
       resetCodeCreatedAt: this.resetCodeCreatedAt,

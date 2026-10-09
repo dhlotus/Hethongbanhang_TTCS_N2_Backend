@@ -3,6 +3,7 @@ dotenv.config();
 
 import * as fs from 'fs';
 import { join } from 'path';
+import { json, urlencoded } from 'express';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -12,6 +13,9 @@ import { appConfig } from './config/app.config';
 
 export async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  app.use(json({ limit: '50mb' }));
+  app.use(urlencoded({ extended: true, limit: '50mb' }));
 
   // Đảm bảo thư mục lưu trữ uploads/avatars luôn tồn tại
   const uploadDir = join(process.cwd(), 'uploads', 'avatars');

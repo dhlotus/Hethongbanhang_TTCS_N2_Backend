@@ -45,7 +45,7 @@ export class PriceListsService implements OnModuleInit {
       // 1. Bảng giá Bán lẻ Niêm yết 2026: RETAIL, ACTIVE, hasOrders: false -> Sửa/Xóa tự do
       new PriceListEntity({
         id: 'pl-001',
-        code: 'BG-RETAIL-2026',
+        code: 'DL-0001',
         name: 'Bảng giá Bán lẻ Niêm yết 2026',
         customerGroup: CustomerGroup.RETAIL,
         startDate: '2026-01-01',
@@ -114,7 +114,7 @@ export class PriceListsService implements OnModuleInit {
       // 2. Bảng giá Đại lý Cấp 1 - Q4/2026: AGENT_LEVEL_1, ACTIVE, hasOrders: true -> Khóa Sửa/Xóa, bật Clone Version
       new PriceListEntity({
         id: 'pl-002',
-        code: 'BG-AGENT1-Q4-2026',
+        code: 'DL-0002',
         name: 'Bảng giá Đại lý Cấp 1 - Q4/2026',
         customerGroup: CustomerGroup.AGENT_LEVEL_1,
         startDate: '2026-10-01',
@@ -183,7 +183,7 @@ export class PriceListsService implements OnModuleInit {
       // 3. Bảng giá Đại lý Cấp 2 - Mùa Tết: AGENT_LEVEL_2, ACTIVE, hasOrders: false -> Dùng kiểm thử nhập Giá bán < Giá sàn
       new PriceListEntity({
         id: 'pl-003',
-        code: 'BG-AGENT2-TET-2027',
+        code: 'DL-0003',
         name: 'Bảng giá Đại lý Cấp 2 - Mùa Tết',
         customerGroup: CustomerGroup.AGENT_LEVEL_2,
         startDate: '2026-11-01',
@@ -252,7 +252,7 @@ export class PriceListsService implements OnModuleInit {
       // 4. Bảng giá Đại lý Cấp 1 - v2.0: AGENT_LEVEL_1, DRAFT, parentVersionId = pl-002 -> Mô phỏng kết quả sau khi Clone Version
       new PriceListEntity({
         id: 'pl-004',
-        code: 'BG-AGENT1-Q4-2026-V2',
+        code: 'DL-0002-v2',
         name: 'Bảng giá Đại lý Cấp 1 - v2.0',
         customerGroup: CustomerGroup.AGENT_LEVEL_1,
         startDate: '2026-10-01',
@@ -261,7 +261,7 @@ export class PriceListsService implements OnModuleInit {
         version: 2,
         parentVersionId: 'pl-002',
         hasOrders: false,
-        description: 'Bản nháp phiên bản 2.0 nhân bản từ BG-AGENT1-Q4-2026, chuẩn bị cập nhật mức giá mới',
+        description: 'Bản nháp phiên bản 2.0 nhân bản từ DL-0002, chuẩn bị cập nhật mức giá mới',
         createdAt: new Date('2026-10-02T14:15:00.000Z'),
         updatedAt: new Date('2026-10-02T14:15:00.000Z'),
         items: [
@@ -321,7 +321,7 @@ export class PriceListsService implements OnModuleInit {
       // 5. Khuyến mãi Mùa Hè 2026: RETAIL, EXPIRED (ngày trong quá khứ) -> Dùng kiểm thử bộ lọc thời gian & hết hạn
       new PriceListEntity({
         id: 'pl-005',
-        code: 'BG-SUMMER-PROMO-2026',
+        code: 'DL-0005',
         name: 'Khuyến mãi Mùa Hè 2026',
         customerGroup: CustomerGroup.RETAIL,
         startDate: '2026-06-01',
@@ -409,6 +409,45 @@ export class PriceListsService implements OnModuleInit {
         );
       }
     }
+  }
+
+  /**
+   * Tìm giá và giá sàn hiệu lực cho SKU theo nhóm đại lý tại thời điểm tạo đơn.
+   */
+  findEffectivePrice(
+    customerGroup: string,
+    productId: string,
+    productCode: string,
+    effectiveDate = new Date(),
+  ): { priceList: PriceListEntity; item: PriceListItemEntity } {
+    const date = effectiveDate.toISOString().slice(0, 10);
+    const candidates = Array.from(this.priceLists.values())
+      .filter(
+        (priceList) =>
+          priceList.customerGroup === customerGroup &&
+          priceList.status === PriceListStatus.ACTIVE &&
+          priceList.startDate <= date &&
+          (!priceList.endDate || priceList.endDate >= date),
+      )
+      .sort((first, second) => second.startDate.localeCompare(first.startDate));
+
+    if (candidates.length === 0) {
+      throw new BadRequestException(
+        `Không có bảng giá đang hiệu lực cho nhóm đại lý ${customerGroup}`,
+      );
+    }
+
+    const priceList = candidates[0];
+    const item = priceList.items.find(
+      (priceListItem) =>
+        priceListItem.productId === productId ||
+        priceListItem.productCode.toLowerCase() === productCode.toLowerCase(),
+    );
+    if (item) return { priceList, item };
+
+    throw new BadRequestException(
+      `SKU ${productCode} không có trong bảng giá đang hiệu lực của nhóm đại lý ${customerGroup}`,
+    );
   }
 
   /**
@@ -641,9 +680,10 @@ export class PriceListsService implements OnModuleInit {
     const nextVersion = source.version + 1;
     const newId = `pl-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
 
-    // Tự sinh mã mới
-    const defaultCode = `${source.code}-V${nextVersion}`;
-    const newCode = cloneDto?.code ? cloneDto.code.trim().toUpperCase() : defaultCode;
+    // Tự sinh mã mới chuẩn hóa (VD: DL-0001-v2, DL-0001-v3)
+    const baseCode = source.code.replace(/-v\d+$/i, '');
+    const defaultCode = `${baseCode}-v${nextVersion}`;
+    const newCode = cloneDto?.code ? cloneDto.code.trim() : defaultCode;
 
     // Tự sinh tên mới
     const defaultName = `${source.name} (Bản sao v${nextVersion}.0)`;

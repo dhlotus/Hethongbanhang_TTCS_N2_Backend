@@ -22,6 +22,7 @@ export class CustomerEntity {
   region?: string;
   salesRepId?: string;
   salesRepName?: string;
+  salesRep?: { id: string; name: string };
   creditLimit: number;
   currentDebt: number;
   maxDebtDays: number;
@@ -45,6 +46,14 @@ export class CustomerEntity {
     this.lockReason = partial.lockReason;
     this.lockedAt = partial.lockedAt ? new Date(partial.lockedAt) : undefined;
     this.lockedBy = partial.lockedBy;
+    if (partial.salesRep) {
+      this.salesRep = partial.salesRep;
+    } else if (partial.salesRepId || partial.salesRepName) {
+      this.salesRep = {
+        id: partial.salesRepId ?? '',
+        name: partial.salesRepName ?? '',
+      };
+    }
     this.deliveryPoints = (partial.deliveryPoints || []).map(
       (dp) => (dp instanceof DeliveryPointEntity ? dp : new DeliveryPointEntity(dp)),
     );
