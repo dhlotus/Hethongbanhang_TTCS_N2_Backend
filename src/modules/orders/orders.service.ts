@@ -298,10 +298,11 @@ export class OrdersService implements OnModuleInit {
       requestedPriceListId,
     );
     const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
-    if (item.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
-      throw new BadRequestException(
-        `Đơn vị cơ sở của SKU ${line.productSku} không khớp với bảng giá`,
-      );
+    if (item.baseUnit && line.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
+      // Tự động chuẩn hóa theo đơn vị cơ sở của Bảng giá hiện hành
+      line.baseUnit = item.baseUnit;
+    } else if (item.baseUnit && !line.baseUnit) {
+      line.baseUnit = item.baseUnit;
     }
 
     const calculatedPrice = this.calculateLinePrices(line, item, conversionRate);
@@ -630,10 +631,13 @@ export class OrdersService implements OnModuleInit {
         : requestedStatus;
     let orderNote = dto.note;
 
-    if (isCreditLimitExceeded) {
+    if (isCreditLimitExceeded && requestedStatus !== OrderStatus.DRAFT) {
       // Tự động đánh dấu đơn hàng ở trạng thái "Cần phê duyệt" (PENDING_APPROVAL)
       orderStatus = OrderStatus.PENDING_APPROVAL;
       const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    } else if (isCreditLimitExceeded) {
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ)]`;
       orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
     }
 
@@ -884,7 +888,7 @@ export class OrdersService implements OnModuleInit {
       productSku: line.productSku,
       productName: line.productName,
       unit: line.unit,
-      baseUnit: line.baseUnit,
+      baseUnit: line.baseUnit || line.unit,
       conversionRate: line.conversionRate,
       quantity: line.quantity,
     }));
