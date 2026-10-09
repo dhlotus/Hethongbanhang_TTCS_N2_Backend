@@ -814,6 +814,29 @@ export class OrdersService implements OnModuleInit {
     dto: UpdateOrderStatusDto,
   ): Promise<OrderEntity> {
     const order = await this.findOrderById(id);
+
+    // Xử lý nghiệp vụ Hủy đơn hàng (SN-45)
+    if (dto.status === OrderStatus.CANCELLED) {
+      if (!dto.reason || dto.reason.trim() === '') {
+        throw new BadRequestException('Bắt buộc nhập lý do khi hủy đơn hàng');
+      }
+
+      const uncancelableStatuses = [
+        OrderStatus.SHIPPED,
+        OrderStatus.DELIVERED,
+        OrderStatus.CLOSED,
+        OrderStatus.CANCELLED,
+      ];
+
+      if (uncancelableStatuses.includes(order.status)) {
+        throw new BadRequestException(
+          'Đơn hàng đã xuất kho hoặc đã đóng/hủy, không thể hủy. Vui lòng sử dụng quy trình Trả Hàng (Return).',
+        );
+      }
+
+      order.cancelReason = dto.reason;
+    }
+
     order.status = dto.status;
     order.updatedAt = new Date();
     return order;
