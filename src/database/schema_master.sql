@@ -508,6 +508,71 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
 
+-- Application workflow payloads keep order snapshots and nested line items
+-- durable while the legacy normalized tables retain strict UUID foreign keys.
+CREATE TABLE IF NOT EXISTS app_order_records (
+    id TEXT PRIMARY KEY,
+    order_code TEXT NOT NULL UNIQUE,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_app_order_records_created_at
+    ON app_order_records(created_at DESC);
+CREATE TABLE IF NOT EXISTS app_order_storage_state (
+    state_key TEXT PRIMARY KEY,
+    seeded BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS app_order_approval_history (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    action VARCHAR(30) NOT NULL CHECK (action IN ('APPROVE', 'REJECT', 'RETURN_FOR_UPDATE')),
+    comment TEXT,
+    approver_id TEXT NOT NULL,
+    approver_name TEXT NOT NULL,
+    approver_roles TEXT[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_app_order_approval_history_order
+    ON app_order_approval_history(order_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    order_line_id TEXT NOT NULL,
+    product_sku TEXT NOT NULL,
+    base_quantity NUMERIC(15, 2) NOT NULL CHECK (base_quantity > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS app_inventory_stock_balances (
+    product_sku TEXT PRIMARY KEY,
+    physical_quantity NUMERIC(15, 2) NOT NULL CHECK (physical_quantity >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_order_active_line_reservation
+    ON app_order_inventory_reservations(order_id, order_line_id)
+    WHERE status = 'RESERVED';
+CREATE INDEX IF NOT EXISTS idx_app_order_active_sku_reservations
+    ON app_order_inventory_reservations(product_sku)
+    WHERE status = 'RESERVED';
+
+CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Order approval history is append-only';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_app_order_approval_history_immutable
+    ON app_order_approval_history;
+CREATE TRIGGER trg_app_order_approval_history_immutable
+    BEFORE UPDATE OR DELETE ON app_order_approval_history
+    FOR EACH ROW EXECUTE FUNCTION app_reject_order_approval_history_mutation();
+
 CREATE TABLE IF NOT EXISTS order_approvals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -932,5 +997,51 @@ BEGIN
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+-- SN-44: immutable approval history and active inventory reservations.
+CREATE TABLE IF NOT EXISTS app_order_approval_history (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    action VARCHAR(30) NOT NULL CHECK (action IN ('APPROVE', 'REJECT', 'RETURN_FOR_UPDATE')),
+    comment TEXT,
+    approver_id TEXT NOT NULL,
+    approver_name TEXT NOT NULL,
+    approver_roles TEXT[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_order_approval_history_order
+    ON app_order_approval_history(order_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    order_line_id TEXT NOT NULL,
+    product_sku TEXT NOT NULL,
+    base_quantity NUMERIC(15, 2) NOT NULL CHECK (base_quantity > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_order_active_line_reservation
+    ON app_order_inventory_reservations(order_id, order_line_id)
+    WHERE status = 'RESERVED';
+CREATE INDEX IF NOT EXISTS idx_app_order_active_sku_reservations
+    ON app_order_inventory_reservations(product_sku)
+    WHERE status = 'RESERVED';
+
+CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Order approval history is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_app_order_approval_history_immutable
+    ON app_order_approval_history;
+CREATE TRIGGER trg_app_order_approval_history_immutable
+    BEFORE UPDATE OR DELETE ON app_order_approval_history
+    FOR EACH ROW EXECUTE FUNCTION app_reject_order_approval_history_mutation();
 
 COMMIT;

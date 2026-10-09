@@ -7,6 +7,8 @@ export enum OrderStatus {
   PENDING_APPROVAL = 'PENDING_APPROVAL', // Cần phê duyệt (do vượt hạn mức công nợ - SN-41)
   PENDING_INVENTORY_APPROVAL = 'PENDING_INVENTORY_APPROVAL', // Chờ duyệt tồn kho
   APPROVED = 'APPROVED', // Đã duyệt
+  REJECTED = 'REJECTED', // Bị từ chối sau khi quản lý xét duyệt
+  RETURNED_FOR_UPDATE = 'RETURNED_FOR_UPDATE', // Trả lại nhân viên kinh doanh để chỉnh sửa
   PROCESSING = 'PROCESSING', // Đang soạn hàng
   SHIPPED = 'SHIPPED', // Đã xuất kho / giao vận
   DELIVERED = 'DELIVERED', // Giao thành công
