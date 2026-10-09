@@ -837,3 +837,21 @@ est build -> 0 lỗi.
 px eslint -> 0 lỗi, 0 warnings.
   - Frontend Build: 
 pm run build (	sc -b && vite build) -> 0 lỗi, build production thành công.
+### [Sprint 4] - [SN-48]: Sao Chép Đơn Hàng Cũ Thành Đơn Mới (Clone Order)
+- **Thời gian hoàn thành:** 2026-10-09
+- **Mã Jira / Task:** SN-48 (Epic EP-04 / SN-39)
+- **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn sao chép một đơn cũ thành đơn mới, để tạo đơn định kỳ cho khách quen trong vài giây."
+- **Danh sách file tạo mới / thay đổi:**
+  - **Backend (HTBH_Backend):**
+    - src/modules/orders/orders.service.ts: Thêm method cloneOrder(id, salesRep) - sao chép toàn bộ dòng hàng (sản phẩm, quy cách, đơn vị, số lượng), áp lại giá và chiết khấu theo bảng giá hiện hành, đặt trạng thái luôn là DRAFT. Cập nhật updateOrder cho phép chuyển trạng thái từ DRAFT sang PENDING khi hoàn tất đơn.
+    - src/modules/orders/orders.controller.ts: Thêm endpoint POST /api/orders/:id/clone gọi ordersService.cloneOrder(id).
+    - 	est/orders-clone-sn48.spec.ts: Bộ kiểm thử tự động 3 test cases cho tính năng sao chép đơn hàng.
+- **Chi tiết kỹ thuật:**
+  - **Sao chép toàn bộ dòng hàng:** Giữ nguyên toàn bộ SKU, đơn vị tính, hệ số quy đổi và số lượng từ đơn gốc.
+  - **Tái áp giá & chiết khấu hiện hành:** Không kế thừa đơn giá và chiết khấu cũ; tự động định giá theo bảng giá hiệu lực và tính lại chiết khấu bậc sản lượng hiện hành.
+  - **Trạng thái khởi tạo:** Bản sao luôn bắt đầu ở trạng thái DRAFT với mã đơn duy nhất tự sinh.
+- **Trạng thái kiểm thử:**
+  - Backend Test: 
+px jest test/orders-clone-sn48.spec.ts -> 3/3 tests passed (100%).
+  - Backend Build: 
+est build -> 0 lỗi.
