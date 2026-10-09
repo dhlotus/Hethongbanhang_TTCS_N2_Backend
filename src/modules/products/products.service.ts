@@ -71,6 +71,28 @@ export class ProductsService implements OnModuleInit {
     }
     if (this.dbService?.isConnected()) {
       await this.loadProductsFromDatabase();
+      await this.loadPersistedStockBalances();
+    }
+  }
+
+  private async loadPersistedStockBalances(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    const table = await this.dbService.query<{ table_name: string | null }>(
+      `SELECT to_regclass('public.app_inventory_stock_balances')::text AS table_name`,
+    );
+    if (!table[0]?.table_name) return;
+    const balances = await this.dbService.query<{
+      product_sku: string;
+      physical_quantity: string;
+    }>(
+      `SELECT product_sku, physical_quantity::text FROM app_inventory_stock_balances`,
+    );
+    const balanceBySku = new Map(
+      balances.map((balance) => [balance.product_sku.toUpperCase(), Number(balance.physical_quantity)]),
+    );
+    for (const product of this.products.values()) {
+      const balance = balanceBySku.get(product.sku.toUpperCase());
+      if (balance !== undefined) product.stockQuantity = balance;
     }
   }
 
@@ -1130,6 +1152,15 @@ export class ProductsService implements OnModuleInit {
       product.stockQuantity = 0;
     }
     // Ghi nhận đã phát sinh biến động tồn kho
+    this.recordTransaction(product.id);
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return product;
+  }
+
+  async setStockQuantity(idOrSku: string, quantity: number): Promise<ProductEntity> {
+    const product = await this.findById(idOrSku);
+    product.stockQuantity = Math.max(0, quantity);
     this.recordTransaction(product.id);
     product.updatedAt = new Date();
     this.products.set(product.id, product);

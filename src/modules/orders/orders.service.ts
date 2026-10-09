@@ -24,6 +24,7 @@ import { DecideOrderDto } from './dto/decide-order.dto';
 import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { InventoryService } from '../inventory/inventory.service';
 
 interface PricedOrderLineDto extends CreateOrderLineDto {
   minPrice?: number;
@@ -55,6 +56,7 @@ export class OrdersService implements OnModuleInit {
     @Optional() private readonly discountPoliciesService?: DiscountPoliciesService,
     @Optional() private readonly databaseService?: DatabaseService,
     @Optional() private readonly productsService?: ProductsService,
+    @Optional() private readonly inventoryService?: InventoryService,
   ) {
     if (!this.databaseService) {
       for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
@@ -847,6 +849,13 @@ export class OrdersService implements OnModuleInit {
       return this.decideOrderInMemory(orderId, dto, reviewer);
     }
 
+    if (dto.action === OrderApprovalAction.APPROVE) {
+      if (!this.inventoryService) {
+        throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
+      }
+      await this.inventoryService.ensureStockBalanceTable();
+    }
+
     const client = await this.databaseService.getClient();
     try {
       await client.query('BEGIN');
@@ -920,13 +929,14 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async reserveOrderInventory(client: PoolClient, order: OrderEntity): Promise<void> {
-    if (!this.productsService) {
+    if (!this.productsService || !this.inventoryService) {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
     const linesBySku = this.groupOrderLinesBySku(order.lines);
     for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
       const product = await this.productsService.findById(sku);
+      const physicalQuantity = await this.inventoryService.getStockBalanceForUpdate(client, product);
       const reservationResult = await client.query<{ reserved: string }>(
         `SELECT COALESCE(SUM(base_quantity), 0)::text AS reserved
          FROM app_order_inventory_reservations
@@ -934,7 +944,7 @@ export class OrdersService implements OnModuleInit {
         [sku],
       );
       const required = lines.reduce((sum, line) => sum + line.baseQuantity, 0);
-      const available = product.stockQuantity - Number(reservationResult.rows[0]?.reserved ?? 0);
+      const available = physicalQuantity - Number(reservationResult.rows[0]?.reserved ?? 0);
       if (required > available) {
         throw new BadRequestException(
           `Không đủ tồn khả dụng cho SKU ${sku}: còn ${available}, cần giữ ${required}.`,

@@ -547,6 +547,13 @@ CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     released_at TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS app_inventory_stock_balances (
+    product_sku TEXT PRIMARY KEY,
+    physical_quantity NUMERIC(15, 2) NOT NULL CHECK (physical_quantity >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_app_order_active_line_reservation
     ON app_order_inventory_reservations(order_id, order_line_id)
     WHERE status = 'RESERVED';
