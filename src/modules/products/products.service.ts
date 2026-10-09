@@ -24,6 +24,7 @@ import {
   ConfirmImportResult,
 } from './dto/import-product.dto';
 import { ProductUnitDto } from './dto/product-unit.dto';
+import { OrdersService } from '../orders/orders.service';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -61,8 +62,34 @@ export class ProductsService implements OnModuleInit {
     @Optional()
     @Inject(forwardRef(() => CategoriesService))
     private readonly categoriesService?: CategoriesService,
+    @Optional()
+    @Inject(forwardRef(() => OrdersService))
+    private readonly ordersService?: OrdersService,
   ) {
     this.seedInitialProducts();
+  }
+
+  /**
+   * Tính toán và cập nhật tồn khả dụng cho thực thể sản phẩm (SN-39):
+   * availableStock = physicalStock (Tồn thực tế) - reservedStock (Tồn đang giữ chỗ)
+   */
+  public populateProductStock(
+    product: ProductEntity,
+    reservedMap?: Map<string, number>,
+  ): ProductEntity {
+    const reserved = reservedMap
+      ? (reservedMap.get(product.id) ||
+          (product.sku ? reservedMap.get(product.sku.toUpperCase()) : 0) ||
+          0)
+      : this.ordersService
+      ? this.ordersService.getReservedStock(product.id || product.sku)
+      : 0;
+
+    product.physicalStock = product.stockQuantity ?? 0;
+    product.reservedStock = reserved;
+    product.availableStock = Math.max(0, product.physicalStock - reserved);
+    product.availableQuantity = product.availableStock;
+    return product;
   }
 
   async onModuleInit(): Promise<void> {
@@ -451,7 +478,10 @@ export class ProductsService implements OnModuleInit {
    */
   async findAll(filterDto?: GetProductsFilterDto): Promise<ProductEntity[]> {
     if (!filterDto || Object.keys(filterDto).length === 0) {
-      return Array.from(this.products.values());
+      const reservedMap = this.ordersService?.getReservedStockMap();
+      return Array.from(this.products.values()).map((p) =>
+        this.populateProductStock(p, reservedMap),
+      );
     }
     const paginated = await this.findAllPaginated(filterDto);
     return paginated.data;
@@ -564,7 +594,10 @@ export class ProductsService implements OnModuleInit {
     const totalPages = Math.ceil(total / limit) || 1;
     const safePage = Math.max(1, page);
     const startIndex = (safePage - 1) * limit;
-    const data = items.slice(startIndex, startIndex + limit);
+    const reservedMap = this.ordersService?.getReservedStockMap();
+    const data = items
+      .slice(startIndex, startIndex + limit)
+      .map((p) => this.populateProductStock(p, reservedMap));
 
     return {
       data,
@@ -573,6 +606,40 @@ export class ProductsService implements OnModuleInit {
       limit,
       totalPages,
     };
+  }
+
+  /**
+   * Lấy lịch sử thay đổi giá của 1 sản phẩm (SN-29)
+   */
+  async getPriceHistory(productId: string): Promise<any[]> {
+    if (!this.dbService?.isConnected()) {
+      return []; // Fallback khi không có DB
+    }
+    
+    // Kiểm tra sản phẩm có tồn tại không
+    await this.findById(productId);
+
+    try {
+      const rows = await this.dbService.query(
+        `SELECT id, product_id, old_price, new_price, changed_by, changed_at
+         FROM product_price_histories
+         WHERE product_id = $1
+         ORDER BY changed_at DESC`,
+        [productId]
+      );
+      
+      return rows.map(row => ({
+        id: row.id,
+        productId: row.product_id,
+        oldPrice: Number(row.old_price),
+        newPrice: Number(row.new_price),
+        changedBy: row.changed_by,
+        changedAt: new Date(row.changed_at),
+      }));
+    } catch (err) {
+      console.error(`[ProductsService] Lỗi khi lấy lịch sử giá SP ${productId}:`, err);
+      return [];
+    }
   }
 
   /**
@@ -588,7 +655,7 @@ export class ProductsService implements OnModuleInit {
       );
     }
 
-    return product;
+    return this.populateProductStock(product);
   }
 
   /**
@@ -781,6 +848,7 @@ export class ProductsService implements OnModuleInit {
   async update(
     idOrSku: string,
     dto: UpdateProductDto,
+    updatedBy: string = 'Quản trị viên',
   ): Promise<ProductEntity> {
     const product = await this.findById(idOrSku);
 
@@ -874,7 +942,25 @@ export class ProductsService implements OnModuleInit {
       if (dto.price <= 0) {
         throw new BadRequestException('Giá bán phải là số dương lớn hơn 0');
       }
-      product.price = Number(dto.price);
+      
+      const oldPrice = product.price || 0;
+      const newPrice = Number(dto.price);
+      
+      // BẮT ĐẦU LOGIC SN-29: LƯU LỊCH SỬ GIÁ
+      if (oldPrice !== newPrice) {
+        if (this.dbService?.isConnected()) {
+          this.dbService.query(
+            `INSERT INTO product_price_histories (product_id, old_price, new_price, changed_by)
+             VALUES ($1, $2, $3, $4)`,
+            [product.id, oldPrice, newPrice, updatedBy]
+          ).catch(err => {
+            console.error(`[ProductsService] Lỗi khi lưu lịch sử giá SP ${product.id}:`, err);
+          });
+        }
+      }
+      // KẾT THÚC LOGIC SN-29
+      
+      product.price = newPrice;
     }
 
     if (dto.costPrice !== undefined) {
@@ -1350,7 +1436,7 @@ export class ProductsService implements OnModuleInit {
       }
 
       previewData.push({
-        row: rowNumber,
+        row: rowNumber - 1,
         sku: sku || '',
         name: name || '',
         category: category || '',
@@ -1710,9 +1796,9 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
-   * Hàm nội bộ tìm kiếm sản phẩm theo ID hoặc SKU
+   * Hàm tìm kiếm sản phẩm theo ID hoặc SKU (SN-39)
    */
-  private findProductInternal(idOrSku: string): ProductEntity | undefined {
+  public findProductInternal(idOrSku: string): ProductEntity | undefined {
     if (!idOrSku) return undefined;
     const direct = this.products.get(idOrSku);
     if (direct) return direct;

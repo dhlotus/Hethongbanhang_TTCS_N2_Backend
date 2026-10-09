@@ -17,19 +17,89 @@ import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
 import { FilterCustomersDto } from './dto/filter-customers.dto';
+import { LockCustomerDto } from './dto/lock-customer.dto';
 import { CustomerEntity } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { CustomerDebtStatusDto } from './dto/customer-debt-status.dto';
+import { Public } from '../../common/decorators/public.decorator';
+import { AssignSalesRepDto } from './dto/assign-sales-rep.dto';
+import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
+import { CreateCustomerDto } from './dto/create-customer.dto';
+import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 
 /**
- * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-37)
+ * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32, SN-35 & SN-37)
  */
 @Controller('customers')
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
+
+  /**
+   * Tạo đại lý mới (SN-35)
+   * POST /api/customers
+   */
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @Public()
+  async createCustomer(@Body() dto: CreateCustomerDto): Promise<CustomerEntity> {
+    return this.customersService.createCustomer(dto);
+  }
+
+  /**
+   * Lấy lịch sử chuyển giao & phân công địa bàn (SN-35)
+   * GET /api/customers/assignment-history
+   */
+  @Get('assignment-history')
+  @Public()
+  async getAssignmentHistory(@Query() query: QueryAssignmentHistoryDto): Promise<any> {
+    return this.customersService.getAssignmentHistory(query);
+  }
+
+  /**
+   * Chuyển giao địa bàn hàng loạt khi nhân viên nghỉ việc (SN-35)
+   * POST /api/customers/bulk-transfer-territory
+   */
+  @Post('bulk-transfer-territory')
+  @HttpCode(HttpStatus.OK)
+  @Public()
+  async bulkTransferTerritory(
+    @Body() dto: BulkTransferTerritoryDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<any> {
+    return this.customersService.bulkTransferTerritory(dto, currentUser);
+  }
+
+  /**
+   * Gán nhân viên kinh doanh phụ trách chính cho đại lý (SN-35)
+   * PATCH /api/customers/:id/assign-sales-rep
+   */
+  @Patch(':id/assign-sales-rep')
+  @Public()
+  async assignSalesRep(
+    @Param('id') customerId: string,
+    @Body() dto: AssignSalesRepDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    return this.customersService.assignSalesRep(customerId, dto, currentUser);
+  }
+
+  /**
+   * Gán nhân viên kinh doanh phụ trách chính cho đại lý (SN-35 alias)
+   * PUT /api/customers/:id/sales-rep
+   */
+  @Put(':id/sales-rep')
+  @Public()
+  async updateSalesRep(
+    @Param('id') customerId: string,
+    @Body() dto: AssignSalesRepDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    return this.customersService.assignSalesRep(customerId, dto, currentUser);
+  }
 
   /**
    * Lấy danh sách đại lý có hỗ trợ tìm kiếm & lọc linh hoạt (SN-37 & EP-03 / S3-08)
@@ -45,10 +115,23 @@ export class CustomersController {
   }
 
   /**
+   * Kiểm tra tình trạng công nợ của đại lý trước khi lập đơn (SN-41)
+   * GET /api/customers/:id/debt-status
+   */
+  @Get(':id/debt-status')
+  @Public()
+  async getCustomerDebtStatus(
+    @Param('id') id: string,
+  ): Promise<CustomerDebtStatusDto> {
+    return this.customersService.getCustomerDebtStatus(id);
+  }
+
+  /**
    * Lấy chi tiết đại lý theo ID
    * GET /api/customers/:id
    */
   @Get(':id')
+  @Public()
   async getCustomerById(@Param('id') id: string): Promise<CustomerEntity> {
     return this.customersService.getCustomerById(id);
   }
@@ -112,5 +195,27 @@ export class CustomersController {
     @Param('pointId') pointId: string,
   ): Promise<{ success: boolean; message: string }> {
     return this.customersService.deleteDeliveryPoint(customerId, pointId);
+  }
+
+  /**
+   * Khoá giao dịch đại lý - Kế toán công nợ (SN-36)
+   * PATCH /api/customers/:id/lock
+   */
+  @Patch(':id/lock')
+  async lockCustomer(
+    @Param('id') id: string,
+    @Body() dto: LockCustomerDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    return this.customersService.lockCustomer(id, dto, currentUser);
+  }
+
+  /**
+   * Mở khoá giao dịch đại lý - Kế toán công nợ (SN-36)
+   * PATCH /api/customers/:id/unlock
+   */
+  @Patch(':id/unlock')
+  async unlockCustomer(@Param('id') id: string): Promise<CustomerEntity> {
+    return this.customersService.unlockCustomer(id);
   }
 }

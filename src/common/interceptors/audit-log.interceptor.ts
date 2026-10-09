@@ -290,10 +290,24 @@ export class AuditLogInterceptor implements NestInterceptor {
 
     // 3. Thao tác Tạo mới (POST / CREATE)
     if (action === AuditAction.CREATE) {
+      const isExceeded = resObj?.isCreditLimitExceeded;
+      const orderCode = (resObj?.orderCode as string) || (body?.orderCode as string);
       return {
         oldValues: null,
-        newValues: { ...body, ...(resObj.id ? { id: resObj.id } : {}) },
-        summary: `Khởi tạo dữ liệu mới thành công cho [${finalEntityId || ''}]`,
+        newValues: {
+          ...body,
+          ...(resObj.id ? { id: resObj.id } : {}),
+          ...(isExceeded
+            ? {
+                isCreditLimitExceeded: true,
+                creditLimitExceededAmount: resObj.creditLimitExceededAmount,
+                status: resObj.status,
+              }
+            : {}),
+        },
+        summary: isExceeded
+          ? `Tạo đơn hàng ${orderCode || finalEntityId} - VƯỢT HẠN MỨC CÔNG NỢ (Tự động chuyển Chờ duyệt)`
+          : `Khởi tạo dữ liệu mới thành công cho [${finalEntityId || ''}]`,
       };
     }
 

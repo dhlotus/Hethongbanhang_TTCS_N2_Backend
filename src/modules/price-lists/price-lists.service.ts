@@ -186,7 +186,7 @@ export class PriceListsService implements OnModuleInit {
         code: 'DL-0003',
         name: 'Bảng giá Đại lý Cấp 2 - Mùa Tết',
         customerGroup: CustomerGroup.AGENT_LEVEL_2,
-        startDate: '2026-11-01',
+        startDate: '2026-01-01',
         endDate: '2027-02-28',
         status: PriceListStatus.ACTIVE,
         version: 1,
@@ -409,6 +409,67 @@ export class PriceListsService implements OnModuleInit {
         );
       }
     }
+  }
+
+  /**
+   * Tìm giá và giá sàn hiệu lực cho SKU theo nhóm đại lý tại thời điểm tạo đơn.
+   */
+  findEffectivePrice(
+    customerGroup: string,
+    productId: string,
+    productCode: string,
+    effectiveDate = new Date(),
+  ): { priceList: PriceListEntity; item: PriceListItemEntity } {
+    const date = effectiveDate.toISOString().slice(0, 10);
+    let candidates = Array.from(this.priceLists.values())
+      .filter(
+        (priceList) =>
+          priceList.customerGroup === customerGroup &&
+          priceList.status === PriceListStatus.ACTIVE &&
+          priceList.startDate <= date &&
+          (!priceList.endDate || priceList.endDate >= date),
+      )
+      .sort((first, second) => second.startDate.localeCompare(first.startDate));
+
+    // Fallback 1: Nếu chưa đến ngày hoặc bảng giá ACTIVE cùng nhóm
+    if (candidates.length === 0) {
+      candidates = Array.from(this.priceLists.values())
+        .filter(
+          (priceList) =>
+            priceList.customerGroup === customerGroup &&
+            priceList.status === PriceListStatus.ACTIVE,
+        )
+        .sort((first, second) => second.startDate.localeCompare(first.startDate));
+    }
+
+    // Fallback 2: Dùng bảng giá Bán lẻ Niêm Yết (RETAIL) đang ACTIVE
+    if (candidates.length === 0) {
+      candidates = Array.from(this.priceLists.values())
+        .filter(
+          (priceList) =>
+            priceList.customerGroup === CustomerGroup.RETAIL &&
+            priceList.status === PriceListStatus.ACTIVE,
+        )
+        .sort((first, second) => second.startDate.localeCompare(first.startDate));
+    }
+
+    if (candidates.length === 0) {
+      throw new BadRequestException(
+        `Không có bảng giá đang hiệu lực cho nhóm đại lý ${customerGroup}`,
+      );
+    }
+
+    const priceList = candidates[0];
+    const item = priceList.items.find(
+      (priceListItem) =>
+        priceListItem.productId === productId ||
+        priceListItem.productCode.toLowerCase() === productCode.toLowerCase(),
+    );
+    if (item) return { priceList, item };
+
+    throw new BadRequestException(
+      `SKU ${productCode} không có trong bảng giá đang hiệu lực của nhóm đại lý ${customerGroup}`,
+    );
   }
 
   /**

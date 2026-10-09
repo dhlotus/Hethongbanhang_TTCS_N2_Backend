@@ -15,6 +15,7 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
@@ -171,6 +172,18 @@ export class ProductsController {
   }
 
   /**
+   * Lấy lịch sử thay đổi giá của sản phẩm (SN-29)
+   * GET /api/products/:id/price-history
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  @Get(':id/price-history')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async getPriceHistory(@Param('id') id: string) {
+    return this.productsService.getPriceHistory(id);
+  }
+
+  /**
    * Lấy chi tiết sản phẩm theo ID hoặc SKU
    * GET /api/products/:id
    * Quyền: Mọi vai trò đã đăng nhập (Giá vốn và biên LN được lọc theo vai trò)
@@ -201,10 +214,12 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async update(
+    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
   ): Promise<ProductEntity> {
-    return this.productsService.update(id, updateDto);
+    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    return this.productsService.update(id, updateDto, userName);
   }
 
   /**
@@ -214,10 +229,12 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async updatePut(
+    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
   ): Promise<ProductEntity> {
-    return this.productsService.update(id, updateDto);
+    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    return this.productsService.update(id, updateDto, userName);
   }
 
   /**

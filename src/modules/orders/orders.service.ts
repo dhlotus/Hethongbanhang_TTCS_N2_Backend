@@ -1,10 +1,18 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
+import { DiscountPoliciesService } from '../discount-policies/discount-policies.service';
+import { PriceListsService } from '../price-lists/price-lists.service';
+import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
+import { CustomerStatus } from '../customers/entities/customer.entity';
+import { ProductsService } from '../products/products.service';
 import { CreateOrderDto, CreateOrderLineDto } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -13,20 +21,157 @@ import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
 import { OrderStatus, PaymentStatus } from './entities/order-status.enum';
 
+interface PricedOrderLineDto extends CreateOrderLineDto {
+  minPrice?: number;
+  requiresApproval?: boolean;
+}
+
+interface ResolvedOrderPricing {
+  lines: PricedOrderLineDto[];
+  priceListId?: string;
+}
+
+interface OrderLineCalculation {
+  line: OrderLineEntity;
+  subtotal: number;
+  approvalReason?: string;
+}
+
+/**
+ * Async Lock ngắn phòng ngừa race condition khi 2 Sales cùng chốt đơn (SN-39)
+ */
+class AsyncLock {
+  private queue: Promise<void> = Promise.resolve();
+
+  async acquire<T>(fn: () => Promise<T> | T): Promise<T> {
+    let release: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prev = this.queue;
+    this.queue = this.queue.then(() => wait);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+}
+
 /**
  * Service Quản lý Đặt hàng B2B (SN-38 & SN-39)
  */
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, OrderEntity>();
+  private readonly orderLock = new AsyncLock();
 
-  constructor(private readonly customersService: CustomersService) {
+  constructor(
+    private readonly customersService: CustomersService,
+    @Optional() private readonly priceListsService?: PriceListsService,
+    @Optional() private readonly discountPoliciesService?: DiscountPoliciesService,
+    @Optional()
+    @Inject(forwardRef(() => ProductsService))
+    private readonly productsService?: ProductsService,
+  ) {
     this.seedInitialOrders();
   }
 
   async onModuleInit(): Promise<void> {
     if (this.orders.size === 0) {
       this.seedInitialOrders();
+    }
+  }
+
+  /**
+   * Tính toán lượng tồn giữ chỗ (reservedStock) của tất cả SKU (SN-39):
+   * reservedStock = Tổng số lượng của SKU đó trong các đơn hàng đang ở trạng thái
+   * "Chờ duyệt" (PENDING, PENDING_APPROVAL, PENDING_INVENTORY_APPROVAL) hoặc "Đã duyệt - Chưa xuất kho" (APPROVED, PROCESSING).
+   */
+  getReservedStockMap(excludeOrderId?: string): Map<string, number> {
+    const map = new Map<string, number>();
+    const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+    ]);
+
+    for (const order of this.orders.values()) {
+      if (excludeOrderId && order.id === excludeOrderId) continue;
+      if (!reservedStatuses.has(order.status)) continue;
+      if (!order.lines) continue;
+
+      for (const line of order.lines) {
+        const baseQty =
+          line.baseQuantity ||
+          Math.round((line.quantity || 0) * (line.conversionRate || 1));
+        if (line.productId) {
+          map.set(line.productId, (map.get(line.productId) || 0) + baseQty);
+        }
+        if (line.productSku) {
+          const upperSku = line.productSku.toUpperCase();
+          map.set(upperSku, (map.get(upperSku) || 0) + baseQty);
+        }
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Lấy lượng tồn giữ chỗ của một SKU hoặc Product ID cụ thể (SN-39)
+   */
+  getReservedStock(productIdOrSku: string, excludeOrderId?: string): number {
+    if (!productIdOrSku) return 0;
+    const map = this.getReservedStockMap(excludeOrderId);
+    return (
+      map.get(productIdOrSku) ||
+      map.get(productIdOrSku.toUpperCase()) ||
+      0
+    );
+  }
+
+  /**
+   * Validation Guard kiểm tra số lượng đặt với tồn khả dụng (SN-39):
+   * availableStock = physicalStock - reservedStock
+   * Nếu orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
+   * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Còn tối đa [availableStock] [Đơn vị])"
+   */
+  validateOrderLinesAvailableStock(
+    lines: CreateOrderLineDto[],
+    excludeOrderId?: string,
+  ): void {
+    if (!this.productsService || !lines || lines.length === 0) return;
+
+    for (const line of lines) {
+      const product = this.productsService.findProductInternal(
+        line.productId || line.productSku,
+      );
+      if (!product) continue;
+
+      const physicalStock = product.stockQuantity ?? 0;
+      const reservedStock = this.getReservedStock(
+        product.id || product.sku,
+        excludeOrderId,
+      );
+      const availableStock = Math.max(0, physicalStock - reservedStock);
+
+      const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
+      const orderBaseQuantity = Math.round(line.quantity * conversionRate);
+
+      if (orderBaseQuantity > availableStock) {
+        const maxAllowedInUnit =
+          conversionRate > 1
+            ? Math.floor(availableStock / conversionRate)
+            : availableStock;
+        const unitName = line.unit || product.baseUnit;
+        const skuName = product.name || line.productName || line.productSku;
+        throw new BadRequestException(
+          `Sản phẩm ${skuName} vượt quá tồn khả dụng (Còn tối đa ${maxAllowedInUnit} ${unitName})`,
+        );
+      }
     }
   }
 
@@ -44,49 +189,184 @@ export class OrdersService implements OnModuleInit {
   /**
    * Tính toán toàn bộ tổng tiền hàng, chiết khấu và tổng phải thu (SN-38)
    */
-  private calculateOrderTotals(linesDto: CreateOrderLineDto[]): {
+  private calculateOrderTotals(linesDto: PricedOrderLineDto[]): {
     lines: OrderLineEntity[];
     subtotal: number;
     totalDiscount: number;
     grandTotal: number;
+    requiresApproval: boolean;
+    approvalReasons: string[];
   } {
-    let subtotal = 0;
-    let totalDiscount = 0;
+    const calculations = linesDto.map((item, index) =>
+      this.calculateOrderLine(item, index),
+    );
+    const lines = calculations.map(({ line }) => line);
+    const subtotal = calculations.reduce((sum, item) => sum + item.subtotal, 0);
+    const grandTotal = lines.reduce((sum, item) => sum + item.lineTotal, 0);
+    const totalDiscount = subtotal - grandTotal;
+    const approvalReasons = calculations
+      .map((item) => item.approvalReason)
+      .filter((reason): reason is string => Boolean(reason));
 
-    const lines: OrderLineEntity[] = linesDto.map((item, index) => {
-      const convRate = item.conversionRate > 0 ? item.conversionRate : 1;
-      const baseQty = Math.round(item.quantity * convRate);
-      const listPrice = item.listPrice >= 0 ? item.listPrice : item.unitPrice;
-      let unitPrice = item.unitPrice >= 0 ? item.unitPrice : listPrice;
-      if (item.discountPercent && item.discountPercent > 0 && unitPrice === listPrice) {
-        unitPrice = Math.round(listPrice * (1 - item.discountPercent / 100));
-      }
-      const lineTotal = Math.round(item.quantity * unitPrice);
-      const listTotal = Math.round(item.quantity * listPrice);
+    return {
+      lines,
+      subtotal,
+      totalDiscount,
+      grandTotal,
+      requiresApproval: approvalReasons.length > 0,
+      approvalReasons,
+    };
+  }
 
-      subtotal += listTotal;
-      totalDiscount += Math.max(0, listTotal - lineTotal);
+  private calculateOrderLine(
+    item: PricedOrderLineDto,
+    index: number,
+  ): OrderLineCalculation {
+    const conversionRate = item.conversionRate > 0 ? item.conversionRate : 1;
+    const baseQuantity = Math.round(item.quantity * conversionRate);
+    const listPrice = item.listPrice !== undefined ? item.listPrice : item.unitPrice || 0;
+    const unitPrice = item.unitPrice !== undefined ? item.unitPrice : listPrice;
+    const lineTotal = Math.round(item.quantity * unitPrice);
+    const listTotal = Math.round(item.quantity * listPrice);
 
-      return new OrderLineEntity({
+    return {
+      line: new OrderLineEntity({
         id: `line-${Date.now()}-${index + 1}`,
         productId: item.productId,
         productSku: item.productSku,
         productName: item.productName,
         unit: item.unit,
         baseUnit: item.baseUnit,
-        conversionRate: convRate,
+        conversionRate,
         quantity: item.quantity,
-        baseQuantity: baseQty,
+        baseQuantity,
         unitPrice,
         listPrice,
         discountPercent: item.discountPercent || 0,
         lineTotal,
         stockAvailable: item.stockAvailable,
-      });
+        minPrice: item.minPrice,
+        requiresApproval: item.requiresApproval,
+      }),
+      subtotal: listTotal,
+      approvalReason: item.requiresApproval
+        ? `Giá bán SKU ${item.productSku} thấp hơn giá sàn ${item.minPrice?.toLocaleString('vi-VN')} đ`
+        : undefined,
+    };
+  }
+
+  /**
+   * Áp giá theo nhóm đại lý và tính lại chiết khấu mỗi khi thay đổi số lượng.
+   */
+  private resolveOrderPricing(
+    lines: CreateOrderLineDto[],
+    customerGroup: string,
+    requestedPriceListId?: string,
+  ): ResolvedOrderPricing {
+    if (!this.priceListsService) return { lines };
+
+    let selectedPriceListId: string | undefined;
+    const pricedLines = lines.map((line) => {
+      const resolved = this.resolveOrderLinePricing(
+        line,
+        customerGroup,
+        requestedPriceListId,
+      );
+      if (selectedPriceListId && selectedPriceListId !== resolved.priceListId) {
+        throw new BadRequestException(
+          'Các SKU trong đơn không thuộc cùng một bảng giá đang hiệu lực',
+        );
+      }
+      selectedPriceListId = resolved.priceListId;
+      return resolved.line;
     });
 
-    const grandTotal = Math.max(0, subtotal - totalDiscount);
-    return { lines, subtotal, totalDiscount, grandTotal };
+    return { lines: pricedLines, priceListId: selectedPriceListId };
+  }
+
+  /**
+   * Áp giá hiệu lực, chiết khấu theo sản lượng và kiểm tra giá sàn cho một dòng hàng.
+   */
+  private resolveOrderLinePricing(
+    line: CreateOrderLineDto,
+    customerGroup: string,
+    requestedPriceListId?: string,
+  ): { line: PricedOrderLineDto; priceListId: string } {
+    const { item, priceListId } = this.findEffectivePriceItem(
+      line,
+      customerGroup,
+      requestedPriceListId,
+    );
+    const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
+    if (item.baseUnit && line.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
+      // Tự động chuẩn hóa theo đơn vị cơ sở của Bảng giá hiện hành
+      line.baseUnit = item.baseUnit;
+    } else if (item.baseUnit && !line.baseUnit) {
+      line.baseUnit = item.baseUnit;
+    }
+
+    const calculatedPrice = this.calculateLinePrices(line, item, conversionRate);
+
+    return {
+      priceListId,
+      line: {
+        ...line,
+        ...calculatedPrice,
+      },
+    };
+  }
+
+  private findEffectivePriceItem(
+    line: CreateOrderLineDto,
+    customerGroup: string,
+    requestedPriceListId?: string,
+  ): { item: PriceListItemEntity; priceListId: string } {
+    const { priceList, item } = this.priceListsService!.findEffectivePrice(
+      customerGroup,
+      line.productId,
+      line.productSku,
+    );
+    if (requestedPriceListId && requestedPriceListId !== priceList.id) {
+      throw new BadRequestException(
+        'Bảng giá được chọn không phải bảng giá đang hiệu lực của đại lý',
+      );
+    }
+    return { item, priceListId: priceList.id };
+  }
+
+  private calculateLinePrices(
+    line: CreateOrderLineDto,
+    item: PriceListItemEntity,
+    conversionRate: number,
+  ): Pick<PricedOrderLineDto, 'listPrice' | 'unitPrice' | 'discountPercent' | 'minPrice' | 'requiresApproval'> {
+    const listPrice = Math.round(item.price * conversionRate);
+    const baseQuantity = Math.round(line.quantity * conversionRate);
+    const tierDiscount =
+      this.discountPoliciesService?.calculateBestDiscount(
+        line.productId,
+        '',
+        baseQuantity,
+        line.productSku,
+      ) || 0;
+    const automaticUnitPrice = Math.round(
+      (listPrice * (100 - tierDiscount)) / 100,
+    );
+    if (line.isPriceManuallyEdited && line.unitPrice === undefined) {
+      throw new BadRequestException(
+        `Vui lòng nhập giá bán thủ công cho SKU ${line.productSku}`,
+      );
+    }
+
+    const unitPrice = line.isPriceManuallyEdited
+      ? line.unitPrice!
+      : automaticUnitPrice;
+    const minPrice = Math.round(item.minPrice * conversionRate);
+    const discountPercent =
+      listPrice > 0
+        ? Number((((listPrice - unitPrice) / listPrice) * 100).toFixed(2))
+        : 0;
+
+    return { listPrice, unitPrice, discountPercent, minPrice, requiresApproval: unitPrice < minPrice };
   }
 
   /**
@@ -255,7 +535,29 @@ export class OrdersService implements OnModuleInit {
     dto: CreateOrderDto,
     salesRep?: { id?: string; name?: string },
   ): Promise<OrderEntity> {
-    const customer = await this.customersService.getCustomerById(dto.customerId);
+    return this.orderLock.acquire(async () => {
+      // 0. API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng
+      this.validateOrderLinesAvailableStock(dto.lines || []);
+
+      const customer = await this.customersService.getCustomerById(dto.customerId);
+
+    // Kiểm tra trạng thái đại lý (SN-36: Đại lý bị khóa không tạo được đơn mới, kể cả trên cổng đặt hàng)
+    if (customer.status === CustomerStatus.LOCKED) {
+      throw new BadRequestException(
+        `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do khóa: ${customer.lockReason || 'Không xác định'}). Không thể tạo đơn hàng mới, kể cả trên cổng đặt hàng!`,
+      );
+    }
+
+    // 1. Kiểm tra điều kiện công nợ của đại lý (Task SN-41)
+    const debtStatus = await this.customersService.getCustomerDebtStatus(dto.customerId);
+
+    // Trường hợp 1: Chặn hoàn toàn (Hard Block) nếu nợ quá hạn vượt quá số ngày cho phép
+    if (!debtStatus.canCreateOrder) {
+      throw new BadRequestException(
+        debtStatus.blockReason ||
+          'Đại lý có khoản nợ quá hạn vượt quá thời hạn cho phép. Không thể tạo đơn hàng mới.',
+      );
+    }
 
     // Xác thực điểm giao hàng (SN-31: Đơn hàng chọn điểm giao trong danh sách của đúng đại lý đó)
     let assignedDeliveryPoint: IOrderDeliveryPoint | undefined;
@@ -298,13 +600,49 @@ export class OrdersService implements OnModuleInit {
     }
 
     // Tính toán chi tiết dòng hàng
-    const { lines, subtotal, totalDiscount, grandTotal } = this.calculateOrderTotals(
+    const pricing = this.resolveOrderPricing(
       dto.lines || [],
+      customer.customerGroup,
+      dto.priceListId,
     );
+    const {
+      lines,
+      subtotal,
+      totalDiscount,
+      grandTotal,
+      requiresApproval,
+      approvalReasons,
+    } = this.calculateOrderTotals(pricing.lines);
+
+    // 2. Kiểm tra hạn mức công nợ (Task SN-41 - Approval Flow)
+    // Trường hợp 2: Nếu (Tổng tiền đơn hàng mới + Công nợ hiện tại) > Hạn mức công nợ
+    const currentDebt = customer.currentDebt || 0;
+    const creditLimit = customer.creditLimit || 0;
+    const projectedDebt = currentDebt + grandTotal;
+    const isCreditLimitExceeded = creditLimit > 0 && projectedDebt > creditLimit;
+    const creditLimitExceededAmount = isCreditLimitExceeded
+      ? projectedDebt - creditLimit
+      : 0;
+
+    const requestedStatus = dto.status || OrderStatus.PENDING;
+    let orderStatus =
+      requestedStatus === OrderStatus.APPROVED
+        ? OrderStatus.PENDING
+        : requestedStatus;
+    let orderNote = dto.note;
+
+    if (isCreditLimitExceeded && requestedStatus !== OrderStatus.DRAFT) {
+      // Tự động đánh dấu đơn hàng ở trạng thái "Cần phê duyệt" (PENDING_APPROVAL)
+      orderStatus = OrderStatus.PENDING_APPROVAL;
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    } else if (isCreditLimitExceeded) {
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ)]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    }
 
     const orderId = `ord-${Date.now()}`;
     const orderCode = this.generateOrderCode();
-    const orderStatus = dto.status || OrderStatus.PENDING;
 
     const newOrder = new OrderEntity({
       id: orderId,
@@ -321,16 +659,21 @@ export class OrdersService implements OnModuleInit {
       subtotal,
       totalDiscount,
       grandTotal,
-      note: dto.note,
+      note: orderNote,
       status: orderStatus,
       paymentStatus: PaymentStatus.UNPAID,
-      priceListId: dto.priceListId,
+      priceListId: pricing.priceListId || dto.priceListId,
+      requiresApproval,
+      approvalReasons,
+      isCreditLimitExceeded,
+      creditLimitExceededAmount,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    this.orders.set(orderId, newOrder);
-    return newOrder;
+      this.orders.set(orderId, newOrder);
+      return newOrder;
+    });
   }
 
   /**
@@ -389,6 +732,25 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
+   * Bổ sung cảnh báo nếu đại lý của đơn hàng dở đang bị khóa giao dịch (SN-36)
+   */
+  private async checkAndAttachLockWarning(order: OrderEntity): Promise<OrderEntity> {
+    try {
+      const customer = await this.customersService.getCustomerById(order.customerId);
+      if (customer.status === CustomerStatus.LOCKED) {
+        order.isCustomerLocked = true;
+        order.warningMessage = `CẢNH BÁO (SN-36): Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không xác định'}). Đơn đang dở vẫn xử lý tiếp được nhưng cần cảnh báo trước khi duyệt/xuất kho.`;
+      } else {
+        order.isCustomerLocked = false;
+        order.warningMessage = undefined;
+      }
+    } catch {
+      // Bỏ qua nếu không tìm thấy đại lý
+    }
+    return order;
+  }
+
+  /**
    * Lấy chi tiết đơn hàng theo ID
    */
   async findOrderById(id: string): Promise<OrderEntity> {
@@ -396,52 +758,90 @@ export class OrdersService implements OnModuleInit {
     if (!order) {
       throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
     }
-    return order;
+    return this.checkAndAttachLockWarning(order);
   }
 
   /**
    * Cập nhật thông tin đơn hàng (đặc biệt là đơn nháp DRAFT để tiếp tục gõ)
    */
   async updateOrder(id: string, dto: UpdateOrderDto): Promise<OrderEntity> {
-    const order = await this.findOrderById(id);
+    return this.orderLock.acquire(async () => {
+      const order = await this.findOrderById(id);
 
-    if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
-    }
+      if (dto.status !== undefined) {
+        if (
+          order.status === OrderStatus.DRAFT &&
+          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING)
+        ) {
+          order.status = dto.status;
+        } else {
+          throw new BadRequestException(
+            'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
+          );
+        }
+      }
 
-    if (dto.customerId && dto.customerId !== order.customerId) {
-      const customer = await this.customersService.getCustomerById(dto.customerId);
-      order.customerId = customer.id;
-      order.customerCode = customer.code;
-      order.customerName = customer.name;
-      order.customerGroup = customer.customerGroup;
-    }
+      if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
+        throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
+      }
 
-    if (dto.deliveryPoint) {
-      order.deliveryPoint = {
-        id: dto.deliveryPoint.id,
-        name: dto.deliveryPoint.name || order.deliveryPoint?.name || 'Điểm giao hàng',
-        address: dto.deliveryPoint.address,
-        receiverName: dto.deliveryPoint.receiverName || order.deliveryPoint?.receiverName || '',
-        phone: dto.deliveryPoint.phone || order.deliveryPoint?.phone || '',
-        roadNote: dto.deliveryPoint.roadNote,
-      };
-    }
+      if (dto.customerId && dto.customerId !== order.customerId) {
+        const customer = await this.customersService.getCustomerById(dto.customerId);
 
-    if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
-    if (dto.note !== undefined) order.note = dto.note;
-    if (dto.status !== undefined) order.status = dto.status;
+        if (customer.status === CustomerStatus.LOCKED) {
+          throw new BadRequestException(
+            `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không có'}). Không thể đổi đơn hàng sang đại lý bị khóa!`,
+          );
+        }
 
-    if (dto.lines && dto.lines.length > 0) {
-      const { lines, subtotal, totalDiscount, grandTotal } = this.calculateOrderTotals(dto.lines);
-      order.lines = lines;
-      order.subtotal = subtotal;
-      order.totalDiscount = totalDiscount;
-      order.grandTotal = grandTotal;
-    }
+        order.customerId = customer.id;
+        order.customerCode = customer.code;
+        order.customerName = customer.name;
+        order.customerGroup = customer.customerGroup;
+      }
 
-    order.updatedAt = new Date();
-    return order;
+      if (dto.deliveryPoint) {
+        order.deliveryPoint = {
+          id: dto.deliveryPoint.id,
+          name: dto.deliveryPoint.name || order.deliveryPoint?.name || 'Điểm giao hàng',
+          address: dto.deliveryPoint.address,
+          receiverName: dto.deliveryPoint.receiverName || order.deliveryPoint?.receiverName || '',
+          phone: dto.deliveryPoint.phone || order.deliveryPoint?.phone || '',
+          roadNote: dto.deliveryPoint.roadNote,
+        };
+      }
+
+      if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
+      if (dto.note !== undefined) order.note = dto.note;
+      if (dto.lines && dto.lines.length > 0) {
+        // API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng (trừ đi đơn hiện tại)
+        this.validateOrderLinesAvailableStock(dto.lines, id);
+
+        const pricing = this.resolveOrderPricing(
+          dto.lines,
+          order.customerGroup || '',
+          dto.priceListId,
+        );
+        const {
+          lines,
+          subtotal,
+          totalDiscount,
+          grandTotal,
+          requiresApproval,
+          approvalReasons,
+        } = this.calculateOrderTotals(pricing.lines);
+        order.lines = lines;
+        order.subtotal = subtotal;
+        order.totalDiscount = totalDiscount;
+        order.grandTotal = grandTotal;
+        order.requiresApproval = requiresApproval;
+        order.approvalReasons = approvalReasons;
+        order.priceListId = pricing.priceListId || order.priceListId;
+      }
+
+      order.updatedAt = new Date();
+      return this.checkAndAttachLockWarning(order);
+    });
   }
 
   /**
@@ -467,5 +867,55 @@ export class OrdersService implements OnModuleInit {
     }
     this.orders.delete(id);
     return { success: true, message: 'Đã xóa đơn hàng thành công' };
+  }
+
+  /**
+   * Sao chép một đơn cũ thành đơn mới (SN-48)
+   * - Sao chép toàn bộ dòng hàng của đơn đã chọn
+   * - Giá và chiết khấu được áp lại theo bảng giá hiện hành, không kế thừa giá cũ
+   * - Bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT)
+   */
+  async cloneOrder(
+    id: string,
+    salesRep?: { id?: string; name?: string },
+  ): Promise<OrderEntity> {
+    const sourceOrder = await this.findOrderById(id);
+
+    // Sao chép toàn bộ dòng hàng, nhưng KHÔNG truyền unitPrice / listPrice / discountPercent
+    // để createOrder tự động tính lại theo bảng giá và chính sách chiết khấu hiện hành
+    const linesDto: CreateOrderLineDto[] = sourceOrder.lines.map((line) => ({
+      productId: line.productId,
+      productSku: line.productSku,
+      productName: line.productName,
+      unit: line.unit,
+      baseUnit: line.baseUnit || line.unit,
+      conversionRate: line.conversionRate,
+      quantity: line.quantity,
+    }));
+
+    const createDto: CreateOrderDto = {
+      customerId: sourceOrder.customerId,
+      deliveryPoint: sourceOrder.deliveryPoint
+        ? {
+            id: sourceOrder.deliveryPoint.id,
+            address: sourceOrder.deliveryPoint.address,
+            name: sourceOrder.deliveryPoint.name,
+            receiverName: sourceOrder.deliveryPoint.receiverName,
+            phone: sourceOrder.deliveryPoint.phone,
+            roadNote: sourceOrder.deliveryPoint.roadNote,
+          }
+        : undefined,
+      deliveryDate: sourceOrder.deliveryDate,
+      lines: linesDto,
+      note: sourceOrder.note
+        ? `[Bản sao từ ${sourceOrder.orderCode}] ${sourceOrder.note}`
+        : `Bản sao từ ${sourceOrder.orderCode}`,
+      status: OrderStatus.DRAFT,
+    };
+
+    return this.createOrder(
+      createDto,
+      salesRep || { id: sourceOrder.salesRepId, name: sourceOrder.salesRepName },
+    );
   }
 }
