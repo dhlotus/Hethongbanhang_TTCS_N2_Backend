@@ -914,7 +914,7 @@ export class ProductsService implements OnModuleInit {
       const newPrice = Number(dto.price);
       
       // BẮT ĐẦU LOGIC SN-29: LƯU LỊCH SỬ GIÁ
-      if (oldPrice !== newPrice && oldPrice > 0) {
+      if (oldPrice !== newPrice) {
         if (this.dbService?.isConnected()) {
           this.dbService.query(
             `INSERT INTO product_price_histories (product_id, old_price, new_price, changed_by)
