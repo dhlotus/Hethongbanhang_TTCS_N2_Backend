@@ -297,10 +297,11 @@ export class OrdersService implements OnModuleInit {
       requestedPriceListId,
     );
     const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
-    if (item.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
-      throw new BadRequestException(
-        `Đơn vị cơ sở của SKU ${line.productSku} không khớp với bảng giá`,
-      );
+    if (item.baseUnit && line.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
+      // Tự động chuẩn hóa theo đơn vị cơ sở của Bảng giá hiện hành
+      line.baseUnit = item.baseUnit;
+    } else if (item.baseUnit && !line.baseUnit) {
+      line.baseUnit = item.baseUnit;
     }
 
     const calculatedPrice = this.calculateLinePrices(line, item, conversionRate);
@@ -853,7 +854,7 @@ export class OrdersService implements OnModuleInit {
       productSku: line.productSku,
       productName: line.productName,
       unit: line.unit,
-      baseUnit: line.baseUnit,
+      baseUnit: line.baseUnit || line.unit,
       conversionRate: line.conversionRate,
       quantity: line.quantity,
     }));
