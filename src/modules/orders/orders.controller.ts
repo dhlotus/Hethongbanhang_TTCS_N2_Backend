@@ -10,6 +10,7 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { CreateOrderDto, UpdateOrderStatusDto } from './dto/create-order.dto';
@@ -24,26 +25,34 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 
 /**
- * Controller Quản lý Đặt hàng B2B (SN-38 & SN-39)
+ * Controller Quản lý Đặt hàng B2B (SN-38, SN-39 & SN-46)
  */
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   /**
-   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38)
+   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38 & SN-46)
+   * - Hỗ trợ lọc trạng thái, đại lý, nhân viên, khu vực, khoảng thời gian
+   * - Trả về tổng tiền của tập kết quả đang lọc (totalAmount)
+   * - Phân quyền: Nhân viên kinh doanh chỉ thấy đơn của đại lý mình phụ trách
    * GET /api/orders
    */
   @Get()
   @Public()
-  async getOrders(@Query() query: QueryOrdersDto): Promise<{
+  async getOrders(
+    @Query() query: QueryOrdersDto,
+    @Req() req?: any,
+  ): Promise<{
     data: OrderEntity[];
     total: number;
+    totalAmount: number;
     page: number;
     limit: number;
     totalPages: number;
   }> {
-    return this.ordersService.findAllOrders(query);
+    const user = req?.user;
+    return this.ordersService.findAllOrders(query, user);
   }
 
   /**

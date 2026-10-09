@@ -515,11 +515,100 @@ export class OrdersService implements OnModuleInit {
         subtotal: 4350000,
         totalDiscount: 0,
         grandTotal: 4350000,
+        region: 'Miền Nam',
         note: 'Đơn nháp lưu lại kiểm tra thêm tồn kho',
         status: OrderStatus.DRAFT,
         paymentStatus: PaymentStatus.UNPAID,
         createdAt: new Date('2026-10-07T14:20:00Z'),
         updatedAt: new Date('2026-10-07T14:20:00Z'),
+      }),
+      new OrderEntity({
+        id: 'ord-004',
+        orderCode: 'DH2610-10101',
+        customerId: 'cust-hn-001',
+        customerCode: 'DL-HN-001',
+        customerName: 'Đại Lý Thực Phẩm Sạch Thăng Long',
+        customerGroup: 'AGENT_LEVEL_1',
+        salesRepId: 'usr-sales-002',
+        salesRepName: 'Trần Văn Nam',
+        region: 'Miền Bắc',
+        deliveryPoint: {
+          id: 'dp-hn-001-1',
+          name: 'Kho Phân Phối Cầu Giấy',
+          address: '102 Cầu Giấy, Q. Cầu Giấy, Hà Nội',
+          receiverName: 'Anh Vũ Hoàng',
+          phone: '0981234561',
+        },
+        deliveryDate: '2026-10-18',
+        lines: [
+          new OrderLineEntity({
+            id: 'line-004-1',
+            productId: 'prod-001',
+            productSku: 'LH-MILK-900G',
+            productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
+            unit: 'Thùng (12 lon)',
+            baseUnit: 'Lon',
+            conversionRate: 12,
+            quantity: 4,
+            baseQuantity: 48,
+            listPrice: 5000000,
+            unitPrice: 4750000,
+            discountPercent: 5,
+            lineTotal: 19000000,
+          }),
+        ],
+        subtotal: 20000000,
+        totalDiscount: 1000000,
+        grandTotal: 19000000,
+        note: 'Đơn hàng đại lý miền Bắc',
+        status: OrderStatus.APPROVED,
+        paymentStatus: PaymentStatus.PAID,
+        createdAt: new Date('2026-10-08T09:00:00Z'),
+        updatedAt: new Date('2026-10-08T09:30:00Z'),
+      }),
+      new OrderEntity({
+        id: 'ord-005',
+        orderCode: 'DH2610-10102',
+        customerId: 'cust-dl-0004',
+        customerCode: 'DL-0004',
+        customerName: 'Công Ty CP Bách Hóa Tiện Lợi Sao Mai',
+        customerGroup: 'AGENT_LEVEL_2',
+        salesRepId: 'usr-sales-003',
+        salesRepName: 'Lê Hoàng Trưởng Phòng',
+        region: 'Miền Trung',
+        deliveryPoint: {
+          id: 'dp-004-1',
+          name: 'Kho Đà Nẵng',
+          address: '88 Nguyễn Văn Linh, Q. Hải Châu, TP. Đà Nẵng',
+          receiverName: 'Anh Nguyễn Sao Mai',
+          phone: '0909554433',
+        },
+        deliveryDate: '2026-10-19',
+        lines: [
+          new OrderLineEntity({
+            id: 'line-005-1',
+            productId: 'prod-002',
+            productSku: 'LH-NUT-180ML',
+            productName: 'Sữa Hạt Óc Chó Yến Mạch LOHA 180ml',
+            unit: 'Thùng (48 hộp)',
+            baseUnit: 'Hộp',
+            conversionRate: 48,
+            quantity: 15,
+            baseQuantity: 720,
+            listPrice: 620000,
+            unitPrice: 589000,
+            discountPercent: 5,
+            lineTotal: 8835000,
+          }),
+        ],
+        subtotal: 9300000,
+        totalDiscount: 465000,
+        grandTotal: 8835000,
+        note: 'Đơn hàng khu vực Miền Trung',
+        status: OrderStatus.DELIVERED,
+        paymentStatus: PaymentStatus.PAID,
+        createdAt: new Date('2026-10-08T15:00:00Z'),
+        updatedAt: new Date('2026-10-09T08:00:00Z'),
       }),
     ];
 
@@ -653,6 +742,7 @@ export class OrdersService implements OnModuleInit {
       customerGroup: customer.customerGroup,
       salesRepId: salesRep?.id || customer.salesRepId,
       salesRepName: salesRep?.name || customer.salesRepName,
+      region: customer.region || (assignedDeliveryPoint?.address?.includes('Hà Nội') ? 'Miền Bắc' : 'Miền Nam'),
       deliveryPoint: assignedDeliveryPoint,
       deliveryDate: dto.deliveryDate,
       lines,
@@ -677,11 +767,18 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Lấy danh sách đơn hàng có phân trang & bộ lọc (SN-38)
+   * Lấy danh sách đơn hàng có phân trang & bộ lọc (SN-38, SN-39 & SN-46)
+   * - Hỗ trợ lọc theo trạng thái, đại lý, nhân viên, khu vực, khoảng thời gian
+   * - Hiển thị tổng tiền của tập kết quả đang lọc (totalAmount)
+   * - Phân quyền: Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn của đại lý mình phụ trách
    */
-  async findAllOrders(query: QueryOrdersDto): Promise<{
+  async findAllOrders(
+    query: QueryOrdersDto,
+    currentUser?: { id?: string; role?: string; username?: string; roles?: string[] },
+  ): Promise<{
     data: OrderEntity[];
     total: number;
+    totalAmount: number;
     page: number;
     limit: number;
     totalPages: number;
@@ -691,18 +788,71 @@ export class OrdersService implements OnModuleInit {
     // Sắp xếp đơn mới nhất lên đầu
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+    // 1. Phân quyền theo vai trò (SN-46):
+    // Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn do mình phụ trách
+    const userRole = currentUser?.role || (currentUser?.roles && currentUser.roles[0]);
+    const isOnlySalesRep = userRole === 'SALES_REP';
+
+    if (isOnlySalesRep && (currentUser?.id || currentUser?.username)) {
+      const repId = currentUser.id;
+      const repName = currentUser.username?.toLowerCase();
+      list = list.filter((o) => {
+        const matchId = repId && o.salesRepId === repId;
+        const matchName = repName && o.salesRepName?.toLowerCase().includes(repName);
+        return matchId || matchName;
+      });
+    }
+
+    // 2. Lọc theo trạng thái
     if (query.status && (query.status as string) !== 'ALL') {
       list = list.filter((o) => o.status === query.status);
     }
 
-    if (query.customerId) {
-      list = list.filter((o) => o.customerId === query.customerId);
+    // 3. Lọc theo đại lý (customerId)
+    if (query.customerId && query.customerId !== 'ALL') {
+      list = list.filter(
+        (o) => o.customerId === query.customerId || o.customerCode === query.customerId,
+      );
     }
 
-    if (query.salesRepId) {
-      list = list.filter((o) => o.salesRepId === query.salesRepId);
+    // 4. Lọc theo nhân viên kinh doanh (salesRepId / assignedUser)
+    const salesRepFilter = query.salesRepId || query.assignedUser;
+    if (salesRepFilter && salesRepFilter !== 'ALL') {
+      const repQuery = salesRepFilter.toLowerCase().trim();
+      list = list.filter(
+        (o) =>
+          o.salesRepId === salesRepFilter ||
+          (o.salesRepName && o.salesRepName.toLowerCase().includes(repQuery)),
+      );
     }
 
+    // 5. Lọc theo khu vực (region: Miền Bắc, Miền Trung, Miền Nam...)
+    if (query.region && query.region !== 'ALL') {
+      const reg = query.region.toLowerCase().trim();
+      list = list.filter((o) => {
+        const inOrder = o.region && o.region.toLowerCase().includes(reg);
+        const inDelivery = o.deliveryPoint?.address?.toLowerCase().includes(reg);
+        return inOrder || inDelivery;
+      });
+    }
+
+    // 6. Lọc theo khoảng thời gian (fromDate, toDate)
+    if (query.fromDate) {
+      const fromTime = new Date(query.fromDate).getTime();
+      if (!isNaN(fromTime)) {
+        list = list.filter((o) => new Date(o.createdAt).getTime() >= fromTime);
+      }
+    }
+    if (query.toDate) {
+      const toDateObj = new Date(query.toDate);
+      toDateObj.setHours(23, 59, 59, 999);
+      const toTime = toDateObj.getTime();
+      if (!isNaN(toTime)) {
+        list = list.filter((o) => new Date(o.createdAt).getTime() <= toTime);
+      }
+    }
+
+    // 7. Tìm kiếm tự do (mã đơn, mã đại lý, tên đại lý, sđt, người nhận, nhân viên)
     if (query.search) {
       const q = query.search.toLowerCase().trim();
       list = list.filter(
@@ -710,10 +860,14 @@ export class OrdersService implements OnModuleInit {
           o.orderCode.toLowerCase().includes(q) ||
           o.customerName.toLowerCase().includes(q) ||
           o.customerCode.toLowerCase().includes(q) ||
+          (o.salesRepName && o.salesRepName.toLowerCase().includes(q)) ||
           o.deliveryPoint?.receiverName.toLowerCase().includes(q) ||
           o.deliveryPoint?.phone.includes(q),
       );
     }
+
+    // 8. Tính tổng tiền của tập kết quả đang lọc (Yêu cầu cốt lõi SN-46)
+    const totalAmount = list.reduce((sum, o) => sum + (o.grandTotal || 0), 0);
 
     const page = Math.max(1, query.page || 1);
     const limit = Math.max(1, query.limit || 10);
@@ -725,6 +879,7 @@ export class OrdersService implements OnModuleInit {
     return {
       data,
       total,
+      totalAmount,
       page,
       limit,
       totalPages,
