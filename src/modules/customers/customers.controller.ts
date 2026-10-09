@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
@@ -48,8 +49,9 @@ import {
 export class CustomersController {
   constructor(
     private readonly customersService: CustomersService,
+    @Optional()
     @Inject(forwardRef(() => OrdersService))
-    private readonly ordersService: OrdersService,
+    private readonly ordersService?: OrdersService,
   ) {}
 
   /**
@@ -244,6 +246,9 @@ export class CustomersController {
     @Param('customerId') customerId: string,
     @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<CustomerPurchaseHistoryResponse> {
+    if (!this.ordersService) {
+      throw new Error('OrdersService chưa được khởi tạo');
+    }
     return this.ordersService.getPurchaseHistorySuggestions(customerId, currentUser);
   }
 
@@ -258,6 +263,9 @@ export class CustomersController {
     @Param('customerId') customerId: string,
     @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<LatestOrderSummary | null> {
+    if (!this.ordersService) {
+      throw new Error('OrdersService chưa được khởi tạo');
+    }
     return this.ordersService.getLatestCustomerOrder(customerId, currentUser);
   }
 }
