@@ -22,6 +22,10 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { DecideOrderDto } from './dto/decide-order.dto';
+import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 
 /**
  * Controller Quản lý Đặt hàng B2B (SN-38 & SN-39)
@@ -54,6 +58,26 @@ export class OrdersController {
   @Public()
   async getOrderById(@Param('id') id: string): Promise<OrderEntity> {
     return this.ordersService.findOrderById(id);
+  }
+
+  @Get(':id/approval-history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async getApprovalHistory(
+    @Param('id') id: string,
+  ): Promise<OrderApprovalHistoryEntity[]> {
+    return this.ordersService.getApprovalHistory(id);
+  }
+
+  @Post(':id/decision')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async decideOrder(
+    @Param('id') id: string,
+    @Body() dto: DecideOrderDto,
+    @CurrentUser() reviewer: ICurrentUser,
+  ): Promise<OrderEntity> {
+    return this.ordersService.decideOrder(id, dto, reviewer);
   }
 
   /**
