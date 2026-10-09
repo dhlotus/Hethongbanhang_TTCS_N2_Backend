@@ -855,3 +855,21 @@ pm run build (	sc -b && vite build) -> 0 lá»—i, build production thÃ nh cÃ´ng.
 px jest test/orders-clone-sn48.spec.ts -> 3/3 tests passed (100%).
   - Backend Build: 
 est build -> 0 lá»—i.
+
+### [Sprint 4] - [SN-43]: API L?ch S? Mua Hàng 3 Tháng & G?i Ý M?t Hàng Khi Lên Ðon (Order Suggestions & 1-Click Reorder)
+- **Th?i gian hoàn thành:** 2026-10-09
+- **Mã Jira / Task:** SN-43 (Parent Story: SN-39 / S4-04 - Sprint 4)
+- **Tiêu d?:** "Là Nhân viên kinh doanh, tôi mu?n xem l?ch s? mua hàng c?a d?i lý ngay khi gõ don, d? g?i ý dúng m?t hàng khách v?n l?y d?u thay vì ph?i h?i l?i."
+- **Tiêu chí ch?p nh?n (AC) dã d?t 100%:**
+  1. **AC1 - G?i ý m?t hàng 3 tháng g?n nh?t:** T? d?ng truy v?n t?t c? don hàng h?p l? c?a d?i lý trong ph?m vi 3 tháng qua (createdAt >= now() - 3 months), gom nhóm theo t?ng SKU/s?n ph?m: productId, sku, productName, unit, aseUnit, price, 	otalQuantity, orderCount, verageQuantity (s? lu?ng bình quân m?i don), lastPurchasedAt (ngày mua g?n nh?t), lastPurchasedQuantity (s? lu?ng mua ? l?n g?n nh?t).
+  2. **AC2 - 1-Click Reorder / Sao chép don g?n nh?t:** Cung c?p endpoint l?y chi ti?t các dòng hàng c?a don hàng thành công g?n nh?t c?a d?i lý d? ph?c v? thêm nhanh nguyên nhóm hàng cu vào don m?i.
+  3. **AC3 - Ràng bu?c b?o m?t & phân quy?n (RBAC Scope):** N?u ngu?i dùng có vai trò SALES_REP, ki?m tra nghiêm ng?t xem d?i lý có thu?c quy?n ph? trách c?a nhân viên hay không (customer.salesRepId === user.id). N?u không thu?c quy?n ph? trách, l?p t?c ném l?i ForbiddenException("B?n không có quy?n xem thông tin c?a d?i lý này"). Vai trò ADMIN và SALES_MANAGER có toàn quy?n truy c?p m?i d?i lý.
+- **Danh sách file t?o m?i / thay d?i:**
+  - src/modules/orders/dto/customer-purchase-history.dto.ts (T?o m?i: LOOKBACK_MONTHS = 3, SuggestedProductItem, LatestOrderItem, LatestOrderSummary, CustomerPurchaseHistoryResponse).
+  - src/modules/orders/orders.service.ts (C?p nh?t: B? sung logic getPurchaseHistorySuggestions(), getLatestCustomerOrder(), erifyCustomerAccess(), làm giàu d? li?u don hàng m?u trong 3 tháng cho d?i lý).
+  - src/modules/orders/orders.module.ts (C?p nh?t: S? d?ng orwardRef(() => CustomersModule) d?ng b? vòng l?p dependency).
+  - src/modules/customers/customers.module.ts (C?p nh?t: Import orwardRef(() => OrdersModule)).
+  - src/modules/customers/customers.controller.ts (C?p nh?t: Thêm 2 endpoints chu?n RESTful GET /api/customers/:customerId/purchase-history/suggestions và GET /api/customers/:customerId/orders/latest du?c b?o v? b?i JwtAuthGuard, RolesGuard, @Roles(ADMIN, SALES_MANAGER, SALES_REP)).
+- **Tr?ng thái ki?m th?:**
+  - Backend Build: 
+est build -> 0 l?i, 100% type-safe, không dùng ny.
