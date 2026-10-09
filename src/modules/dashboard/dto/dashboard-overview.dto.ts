@@ -6,6 +6,8 @@ export class DashboardOverviewResponseDto {
     readyToShipOrdersCount: number;
     totalOverdueDebt: number;
     lowStockAlertCount: number;
+    salesGrowthPercent?: number;
+    debtGrowthPercent?: number;
   };
   charts: {
     salesTrend: { date: string; value: number }[];
@@ -17,4 +19,6 @@ export class DashboardOverviewResponseDto {
       salesRepName?: string;
     }[];
   };
+  executiveInsights: string;
+  lastUpdated: string;
 }

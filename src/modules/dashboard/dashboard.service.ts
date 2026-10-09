@@ -18,7 +18,7 @@ export class DashboardService {
     private readonly productsService: ProductsService,
   ) {}
 
-  async getOverview(currentUser: ICurrentUser): Promise<DashboardOverviewResponseDto> {
+  async getOverview(currentUser: ICurrentUser, timeRange?: string): Promise<DashboardOverviewResponseDto> {
     const roles = currentUser.roles || [];
     const isManager = roles.some((r: string) => 
       r === UserRole.ADMIN || r === UserRole.SALES_MANAGER || r === Role.BUSINESS_MANAGER
@@ -123,6 +123,10 @@ export class DashboardService {
     // Filter based on roles
     const result = new DashboardOverviewResponseDto();
     
+    // Add mock growth percentages for UI demonstration
+    const salesGrowthPercent = 12.5; // positive growth
+    const debtGrowthPercent = -5.2; // negative growth (good thing)
+
     result.metrics = {
       todaySales: (isManager || isSalesRep) ? todaySales : 0,
       monthlySales: (isManager || isSalesRep) ? monthlySales : 0,
@@ -130,12 +134,21 @@ export class DashboardService {
       readyToShipOrdersCount: (isManager || isWarehouse) ? readyToShipOrdersCount : 0,
       totalOverdueDebt: (isManager || isAccountant) ? totalOverdueDebt : 0,
       lowStockAlertCount: (isManager || isWarehouse) ? lowStockAlertCount : 0,
+      salesGrowthPercent: (isManager || isSalesRep) ? salesGrowthPercent : undefined,
+      debtGrowthPercent: (isManager || isAccountant) ? debtGrowthPercent : undefined,
     };
 
     result.charts = {
       salesTrend: (isManager || isSalesRep) ? salesTrend : [],
       highRiskAgencies: (isManager || isAccountant) ? topHighRisk : [],
     };
+    
+    let insights = 'Tất cả các chỉ số đang ở mức ổn định.';
+    if (topHighRisk.length > 0 || lowStockAlertCount > 0) {
+      insights = `Hôm nay có ${topHighRisk.length} đại lý vượt hạn mức/công nợ cần thu hồi và ${lowStockAlertCount} SKU dưới định mức tồn kho.`;
+    }
+    result.executiveInsights = insights;
+    result.lastUpdated = new Date().toISOString();
 
     return result;
   }

@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, UseGuards, Query } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -10,7 +10,7 @@ export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
   @Get('overview')
-  async getOverview(@CurrentUser() user: ICurrentUser) {
-    return this.dashboardService.getOverview(user);
+  async getOverview(@CurrentUser() user: ICurrentUser, @Query('timeRange') timeRange?: string) {
+    return this.dashboardService.getOverview(user, timeRange);
   }
 }
