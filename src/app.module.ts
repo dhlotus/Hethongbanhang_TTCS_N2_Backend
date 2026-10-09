@@ -19,6 +19,8 @@ import { DiscountPoliciesModule } from './modules/discount-policies/discount-pol
 import { CreditLimitModule } from './modules/credit-limit/credit-limit.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
+import { AgencyModule } from './modules/agencies/agency.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { MailModule } from './modules/mail/mail.module';
     ReturnsModule,
     ReportsModule,
     AuditLogsModule,
+    AgencyModule,
+    DashboardModule,
   ],
 })
 export class AppModule { }

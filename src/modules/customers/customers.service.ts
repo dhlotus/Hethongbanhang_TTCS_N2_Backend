@@ -11,6 +11,7 @@ import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
 import { UpdateDeliveryPointDto } from './dto/update-delivery-point.dto';
 import { QueryCustomerDto } from './dto/query-customer.dto';
+import { LockCustomerDto } from './dto/lock-customer.dto';
 import { FilterCustomersDto } from './dto/filter-customers.dto';
 import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -787,6 +788,42 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
+  /**
+   * Khóa giao dịch với một đại lý kèm lý do bắt buộc (SN-36)
+   */
+  async lockCustomer(
+    id: string,
+    dto: LockCustomerDto,
+    currentUser?: { userId?: string; fullName?: string },
+  ): Promise<CustomerEntity> {
+    if (!dto.reason || dto.reason.trim() === '') {
+      throw new BadRequestException('Bắt buộc phải nhập lý do khi khóa đại lý');
+    }
+
+    const customer = await this.getCustomerById(id);
+    customer.status = CustomerStatus.LOCKED;
+    customer.lockReason = dto.reason.trim();
+    customer.lockedAt = new Date();
+    customer.lockedBy = currentUser?.fullName || currentUser?.userId || 'Hệ thống';
+    customer.updatedAt = new Date();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers 
+           SET status = $1, lock_reason = $2, updated_at = NOW() 
+           WHERE id = $3 OR code = $3;`,
+          [CustomerStatus.LOCKED, customer.lockReason, id],
+        );
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    return customer;
+  }
+
+  /**
    * Cập nhật hạn mức công nợ cho đại lý (SN-34)
    */
   async updateCustomerCredit(
@@ -805,9 +842,6 @@ export class CustomersService implements OnModuleInit {
     if (data.maxDebtDays !== undefined) {
       customer.maxDebtDays = data.maxDebtDays;
     }
-    if (data.paymentTerms !== undefined) {
-      // customer.paymentTerms = data.paymentTerms;
-    }
 
     customer.updatedAt = new Date();
 
@@ -818,6 +852,33 @@ export class CustomersService implements OnModuleInit {
            SET credit_limit = $1, max_debt_days = $2, payment_terms = $3, updated_at = NOW() 
            WHERE id = $4 OR code = $4;`,
           [customer.creditLimit, customer.maxDebtDays, data.paymentTerms || 'NET_30', customerId],
+        );
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    return customer;
+  }
+
+  /**
+   * Mở khóa giao dịch với đại lý (SN-36)
+   */
+  async unlockCustomer(id: string): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(id);
+    customer.status = CustomerStatus.ACTIVE;
+    customer.lockReason = undefined;
+    customer.lockedAt = undefined;
+    customer.lockedBy = undefined;
+    customer.updatedAt = new Date();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers 
+           SET status = $1, lock_reason = NULL, updated_at = NOW() 
+           WHERE id = $2 OR code = $2;`,
+          [CustomerStatus.ACTIVE, id],
         );
       } catch {
         // Fallback in-memory

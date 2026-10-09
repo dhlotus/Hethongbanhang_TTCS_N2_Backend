@@ -26,6 +26,7 @@ export class OrderEntity {
   customerGroup?: string;
   salesRepId?: string;
   salesRepName?: string;
+  region?: string;
   deliveryPoint?: IOrderDeliveryPoint;
   deliveryDate?: string;
   lines: OrderLineEntity[];
@@ -36,6 +37,8 @@ export class OrderEntity {
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   priceListId?: string;
+  isCustomerLocked?: boolean;
+  warningMessage?: string;
   requiresApproval: boolean;
   approvalReasons: string[];
   isCreditLimitExceeded?: boolean;

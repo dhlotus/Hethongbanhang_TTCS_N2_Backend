@@ -32,6 +32,9 @@ export class CustomerEntity {
   email?: string;
   address?: string;
   status: CustomerStatus;
+  lockReason?: string;
+  lockedAt?: Date;
+  lockedBy?: string;
   deliveryPoints: DeliveryPointEntity[];
   createdAt: Date;
   updatedAt: Date;
@@ -44,6 +47,9 @@ export class CustomerEntity {
     this.overdueAmount = partial.overdueAmount ?? 0;
     this.overdueDays = partial.overdueDays ?? 0;
     this.status = partial.status ?? CustomerStatus.ACTIVE;
+    this.lockReason = partial.lockReason;
+    this.lockedAt = partial.lockedAt ? new Date(partial.lockedAt) : undefined;
+    this.lockedBy = partial.lockedBy;
     if (partial.salesRep) {
       this.salesRep = partial.salesRep;
     } else if (partial.salesRepId || partial.salesRepName) {
