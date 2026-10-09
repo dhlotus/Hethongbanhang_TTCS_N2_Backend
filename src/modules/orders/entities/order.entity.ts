@@ -36,6 +36,8 @@ export class OrderEntity {
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   priceListId?: string;
+  isCustomerLocked?: boolean;
+  warningMessage?: string;
   requiresApproval: boolean;
   approvalReasons: string[];
   isCreditLimitExceeded?: boolean;
