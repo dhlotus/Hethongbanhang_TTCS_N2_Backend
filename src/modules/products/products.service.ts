@@ -576,6 +576,40 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
+   * Lấy lịch sử thay đổi giá của 1 sản phẩm (SN-29)
+   */
+  async getPriceHistory(productId: string): Promise<any[]> {
+    if (!this.dbService?.isConnected()) {
+      return []; // Fallback khi không có DB
+    }
+    
+    // Kiểm tra sản phẩm có tồn tại không
+    await this.findById(productId);
+
+    try {
+      const rows = await this.dbService.query(
+        `SELECT id, product_id, old_price, new_price, changed_by, changed_at
+         FROM product_price_histories
+         WHERE product_id = $1
+         ORDER BY changed_at DESC`,
+        [productId]
+      );
+      
+      return rows.map(row => ({
+        id: row.id,
+        productId: row.product_id,
+        oldPrice: Number(row.old_price),
+        newPrice: Number(row.new_price),
+        changedBy: row.changed_by,
+        changedAt: new Date(row.changed_at),
+      }));
+    } catch (err) {
+      console.error(`[ProductsService] Lỗi khi lấy lịch sử giá SP ${productId}:`, err);
+      return [];
+    }
+  }
+
+  /**
    * Lấy chi tiết sản phẩm theo ID hoặc SKU
    * GET /api/products/:id
    */
@@ -781,6 +815,7 @@ export class ProductsService implements OnModuleInit {
   async update(
     idOrSku: string,
     dto: UpdateProductDto,
+    updatedBy: string = 'Quản trị viên',
   ): Promise<ProductEntity> {
     const product = await this.findById(idOrSku);
 
@@ -874,7 +909,25 @@ export class ProductsService implements OnModuleInit {
       if (dto.price <= 0) {
         throw new BadRequestException('Giá bán phải là số dương lớn hơn 0');
       }
-      product.price = Number(dto.price);
+      
+      const oldPrice = product.price || 0;
+      const newPrice = Number(dto.price);
+      
+      // BẮT ĐẦU LOGIC SN-29: LƯU LỊCH SỬ GIÁ
+      if (oldPrice !== newPrice) {
+        if (this.dbService?.isConnected()) {
+          this.dbService.query(
+            `INSERT INTO product_price_histories (product_id, old_price, new_price, changed_by)
+             VALUES ($1, $2, $3, $4)`,
+            [product.id, oldPrice, newPrice, updatedBy]
+          ).catch(err => {
+            console.error(`[ProductsService] Lỗi khi lưu lịch sử giá SP ${product.id}:`, err);
+          });
+        }
+      }
+      // KẾT THÚC LOGIC SN-29
+      
+      product.price = newPrice;
     }
 
     if (dto.costPrice !== undefined) {
