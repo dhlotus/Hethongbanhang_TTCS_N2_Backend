@@ -598,25 +598,56 @@ export class ProductsService implements OnModuleInit {
       });
     }
 
-    // 2. Lọc theo nhóm hàng cấp 1 (parentCategory)
+    // 2. Lọc theo nhóm hàng cấp 1 (parentCategory - hỗ trợ tên tiếng Việt, code hoặc ID)
     if (parentCategory && parentCategory !== 'ALL') {
-      const parentLower = parentCategory.trim().toLowerCase();
-      items = items.filter(
-        (p) =>
-          (p.parentCategory &&
-            p.parentCategory.toLowerCase() === parentLower) ||
-          (p.category && p.category.toLowerCase().includes(parentLower)),
-      );
+      const parentTrim = parentCategory.trim();
+      const parentLower = parentTrim.toLowerCase();
+      const matchSet = new Set<string>([parentLower]);
+
+      if (this.categoriesService) {
+        const cat = this.categoriesService.findCategoryInternal(parentTrim);
+        if (cat) {
+          if (cat.name) matchSet.add(cat.name.trim().toLowerCase());
+          if (cat.code) matchSet.add(cat.code.trim().toLowerCase());
+          if (cat.id) matchSet.add(cat.id.trim().toLowerCase());
+        }
+      }
+
+      items = items.filter((p) => {
+        const pParent = p.parentCategory?.trim().toLowerCase();
+        const pCat = p.category?.trim().toLowerCase();
+        for (const target of matchSet) {
+          if (pParent && pParent === target) return true;
+          if (pCat && pCat.includes(target)) return true;
+        }
+        return false;
+      });
     }
 
-    // 3. Lọc theo nhóm hàng cấp 2 (subCategory)
+    // 3. Lọc theo nhóm hàng cấp 2 (subCategory - hỗ trợ tên tiếng Việt, code hoặc ID)
     if (subCategory && subCategory !== 'ALL') {
-      const subLower = subCategory.trim().toLowerCase();
-      items = items.filter(
-        (p) =>
-          (p.subCategory && p.subCategory.toLowerCase() === subLower) ||
-          (p.category && p.category.toLowerCase().includes(subLower)),
-      );
+      const subTrim = subCategory.trim();
+      const subLower = subTrim.toLowerCase();
+      const matchSet = new Set<string>([subLower]);
+
+      if (this.categoriesService) {
+        const cat = this.categoriesService.findCategoryInternal(subTrim);
+        if (cat) {
+          if (cat.name) matchSet.add(cat.name.trim().toLowerCase());
+          if (cat.code) matchSet.add(cat.code.trim().toLowerCase());
+          if (cat.id) matchSet.add(cat.id.trim().toLowerCase());
+        }
+      }
+
+      items = items.filter((p) => {
+        const pSub = p.subCategory?.trim().toLowerCase();
+        const pCat = p.category?.trim().toLowerCase();
+        for (const target of matchSet) {
+          if (pSub && pSub === target) return true;
+          if (pCat && pCat.includes(target)) return true;
+        }
+        return false;
+      });
     }
 
     // 4. Lọc theo ngành hàng (category)
@@ -629,7 +660,8 @@ export class ProductsService implements OnModuleInit {
 
     // 5. Lọc theo trạng thái hoạt động (ACTIVE / INACTIVE)
     if (status && (status as string) !== 'ALL') {
-      items = items.filter((p) => p.status === status);
+      const statusUpper = String(status).toUpperCase();
+      items = items.filter((p) => String(p.status).toUpperCase() === statusUpper);
     }
 
     const total = items.length;
