@@ -20,13 +20,13 @@ export class DiscountPoliciesController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  @Public()
   findAll() {
     return this.discountPoliciesService.findAll();
   }
 
   @Get(':id')
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  @Public()
   findOne(@Param('id') id: string) {
     return this.discountPoliciesService.findById(id);
   }

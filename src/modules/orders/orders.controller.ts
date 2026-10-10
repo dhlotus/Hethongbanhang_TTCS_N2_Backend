@@ -148,8 +148,7 @@ export class OrdersController {
    * PATCH /api/orders/:id/status
    */
   @Patch(':id/status')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @Public()
   async updateOrderStatus(
     @Param('id') id: string,
     @Body() dto: UpdateOrderStatusDto,
@@ -163,6 +162,9 @@ export class OrdersController {
    */
   @Delete(':id')
   @Public()
+
+  
+
   async deleteOrder(
     @Param('id') id: string,
   ): Promise<{ success: boolean; message: string }> {

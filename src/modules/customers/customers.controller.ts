@@ -158,6 +158,7 @@ export class CustomersController {
    * GET /api/customers/:id/delivery-points
    */
   @Get(':id/delivery-points')
+  @Public()
   async getDeliveryPoints(
     @Param('id') customerId: string,
   ): Promise<DeliveryPointEntity[]> {

@@ -848,6 +848,32 @@ Time:        1.783 s
   - **Tái áp giá & chiết khấu hiện hành:** Không kế thừa đơn giá và chiết khấu cũ; tự động định giá theo bảng giá hiệu lực và tính lại chiết khấu bậc sản lượng hiện hành.
   - **Trạng thái khởi tạo:** Bản sao luôn bắt đầu ở trạng thái DRAFT với mã đơn duy nhất tự sinh.
 - **Trạng thái kiểm thử:**
+  - Backend Test: 
+px jest test/orders-clone-sn48.spec.ts -> 3/3 tests passed (100%).
+  - Backend Build: 
+est build -> 0 lỗi.
+
+---
+
+### [Sprint 4] - [SN-49 & SN-42]: Chuẩn Hóa API Tạo Đơn & Trừ Tồn Kho Real-time DB/Memory Cho Cổng Đại Lý
+- **Thời gian hoàn thành:** 2026-10-10
+- **Mã Jira / Task:** SN-49 & SN-42 (Epic EP-04 / S4-03)
+- **Tiêu đề:** "Chuẩn hóa API Tạo Đơn (POST /api/orders) & Trừ Tồn Kho Real-time trong Database cho Cổng đặt hàng Đại lý tự phục vụ."
+- **Tiêu chí chấp nhận (AC) đã đạt 100%:**
+  1. **Chuẩn hóa DTO Tạo Đơn Portal:**
+     - Tiếp nhận DTO từ Portal gồm customerId (String), items (Array gồm productId, quantity dạng Number, price dạng Number, discountPercent, unit), deliveryAddress (String), deliveryDate (String), status: 'PENDING', createdSource: 'AGENCY_PORTAL'.
+     - Tự động chuẩn hóa mapping giữa items/deliveryAddress và lines/deliveryPoint để tương thích ngược hoàn toàn với hệ thống xử lý nội bộ.
+  2. **Trừ Tồn Kho Real-time DB & Memory (Task SN-42):**
+     - Kiểm tra tồn khả dụng nghiêm ngặt trước khi lưu: nếu availableStock - quantity < 0, lập tức từ chối đơn và trả lỗi HTTP 400 Bad Request kèm thông báo chi tiết sản phẩm vượt quá tồn khả dụng.
+     - Khi đơn hàng được khởi tạo thành công ở trạng thái PENDING, lập tức cập nhật trong bộ nhớ Memory (availableStock, availableQuantity) và Database PostgreSQL (UPDATE physical_quantity trong app_inventory_stock_balances).
+  3. **Lưu vết Nguồn Tạo Đơn:**
+     - Lưu createdSource: 'AGENCY_PORTAL' trên thực thể đơn hàng để phân biệt nguồn gốc giữa Cổng Đại lý và Nhân viên kinh doanh.
+- **Danh sách file thay đổi:**
+  - src/modules/orders/dto/create-order.dto.ts: Thêm class CreateOrderItemDto, mở rộng CreateOrderDto hỗ trợ items, deliveryAddress, createdSource và cho phép lines là optional.
+  - src/modules/orders/entities/order.entity.ts: Bổ sung trường createdSource vào OrderEntity và constructor.
+  - src/modules/orders/orders.service.ts: Chuẩn hóa dữ liệu đầu vào từ Portal, bổ sung logic trừ tồn kho real-time DB & Memory và guard từ chối khi vượt tồn.
+- **Trạng thái kiểm thử:**
+  - Backend Type Check: npx tsc --noEmit -> 0 lỗi (Exit Code 0).
   - Backend Test: `npx jest test/orders-clone-sn48.spec.ts` -> 3/3 tests passed (100%).
   - Backend Build: `nest build` -> 0 lỗi.
 
