@@ -358,11 +358,17 @@ export class OrdersService implements OnModuleInit {
    * Nếu availableStock <= 0 hoặc orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
    * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Hàng trong kho đã hết / Vượt quá tồn khả dụng...)"
    */
-  validateOrderLinesAvailableStock(
+  async validateOrderLinesAvailableStock(
     lines: CreateOrderLineDto[],
+    customerId: string,
     excludeOrderId?: string,
-  ): void {
+  ): Promise<void> {
     if (!this.productsService || !lines || lines.length === 0) return;
+
+    if (this.databaseService?.isConnected() && this.inventoryService) {
+      await this.validatePersistedOrderStock(lines, customerId, excludeOrderId);
+      return;
+    }
 
     for (const line of lines) {
       const product = this.productsService.findProductInternal(
@@ -399,6 +405,52 @@ export class OrdersService implements OnModuleInit {
             : availableStock;
         throw new BadRequestException(
           `Sản phẩm ${skuName} vượt quá tồn khả dụng (Hàng trong kho đã hết / Vượt quá tồn khả dụng: Còn tối đa ${maxAllowedInUnit} ${unitName})`,
+        );
+      }
+    }
+  }
+
+  private async validatePersistedOrderStock(
+    lines: CreateOrderLineDto[],
+    customerId: string,
+    excludeOrderId?: string,
+  ): Promise<void> {
+    if (!this.databaseService || !this.inventoryService) {
+      throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
+    }
+    const warehouseRows = await this.databaseService.query<{ warehouse_id: string }>(
+      'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+      [customerId],
+    );
+    const warehouseId = warehouseRows[0]?.warehouse_id ?? DEFAULT_WAREHOUSE_ID;
+    const stockRows = await this.inventoryService.getStockOverview(warehouseId);
+    const availableBySku = new Map(
+      stockRows.map((row) => [row.sku.trim().toUpperCase(), row.stockQuantity]),
+    );
+    if (excludeOrderId) {
+      const reservations = await this.databaseService.query<{ product_sku: string; quantity: string }>(
+        `SELECT product_sku, SUM(base_quantity)::text AS quantity
+         FROM app_order_inventory_reservations
+         WHERE order_id = $1 AND warehouse_id = $2::uuid AND status = 'RESERVED'
+         GROUP BY product_sku`,
+        [excludeOrderId, warehouseId],
+      );
+      for (const reservation of reservations) {
+        const sku = reservation.product_sku.toUpperCase();
+        availableBySku.set(sku, (availableBySku.get(sku) ?? 0) + Number(reservation.quantity));
+      }
+    }
+    const requiredBySku = new Map<string, number>();
+    for (const line of lines) {
+      const sku = line.productSku.trim().toUpperCase();
+      const required = Math.round(line.quantity * line.conversionRate);
+      requiredBySku.set(sku, (requiredBySku.get(sku) ?? 0) + required);
+    }
+    for (const [sku, required] of requiredBySku) {
+      const available = availableBySku.get(sku) ?? 0;
+      if (required > available) {
+        throw new BadRequestException(
+          `Sản phẩm ${sku} vượt quá tồn khả dụng tại kho của đại lý (còn ${available}, cần ${required}).`,
         );
       }
     }
@@ -930,7 +982,7 @@ export class OrdersService implements OnModuleInit {
 
       // 0. API Validation Guard (SN-39 & SN-42): Kiểm tra số lượng đặt với tồn khả dụng
       if (dto.lines && dto.lines.length > 0) {
-        this.validateOrderLinesAvailableStock(dto.lines);
+        await this.validateOrderLinesAvailableStock(dto.lines, dto.customerId);
       }
 
       const customer = await this.customersService.getCustomerById(dto.customerId);
@@ -1072,18 +1124,9 @@ export class OrdersService implements OnModuleInit {
 
     await this.saveOrder(newOrder);
 
-    // 3. THÊM LOGIC TRỪ TỒN KHO REAL-TIME DB & MEMORY (Task SN-42)
-    // Ngay khi đơn được khởi tạo ở trạng thái PENDING (hoặc các trạng thái hợp lệ),
-    // lập tức cập nhật trong Database PostgreSQL / Memory:
-    // availableStock = availableStock - quantity cho từng sản phẩm trong đơn.
-    const agencyWarehouseRows = this.databaseService?.isConnected()
-      ? await this.databaseService.query<{ warehouse_id: string }>(
-          'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
-          [customer.id],
-        )
-      : [];
-    const agencyWarehouseId = agencyWarehouseRows[0]?.warehouse_id || DEFAULT_WAREHOUSE_ID;
-    if (this.productsService && newOrder.lines) {
+    // Dữ liệu PostgreSQL chỉ giảm tồn khi có phiếu xuất kho thực tế.
+    // Giữ cách cập nhật bộ nhớ cho chế độ chạy không có cơ sở dữ liệu.
+    if (!this.databaseService?.isConnected() && this.productsService && newOrder.lines) {
       for (const line of newOrder.lines) {
         const product = this.productsService.findProductInternal(
           line.productId || line.productSku,
@@ -1106,16 +1149,6 @@ export class OrdersService implements OnModuleInit {
           product.availableQuantity = product.availableStock;
           this.productsService.deductAvailableStock(product.id || product.sku, deductQuantity);
 
-          if (this.databaseService?.isConnected()) {
-            try {
-              this.databaseService.query(
-                'UPDATE app_inventory_stock_balances SET physical_quantity = GREATEST(0, physical_quantity - $1), updated_at = CURRENT_TIMESTAMP WHERE product_sku = $2 AND warehouse_id = $3::uuid',
-                [deductQuantity, (product.sku || line.productSku).trim().toUpperCase(), agencyWarehouseId]
-              ).catch(() => {});
-            } catch {
-              // Bỏ qua nếu bảng PostgreSQL chưa tồn tại
-            }
-          }
         }
       }
     }
@@ -1562,7 +1595,7 @@ export class OrdersService implements OnModuleInit {
       if (dto.note !== undefined) order.note = dto.note;
       if (dto.lines && dto.lines.length > 0) {
         // API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng (trừ đi đơn hiện tại)
-        this.validateOrderLinesAvailableStock(dto.lines, id);
+        await this.validateOrderLinesAvailableStock(dto.lines, order.customerId, id);
 
         const pricing = this.resolveOrderPricing(
           dto.lines,

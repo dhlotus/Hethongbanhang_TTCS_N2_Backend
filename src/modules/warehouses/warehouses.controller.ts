@@ -67,6 +67,12 @@ export class WarehousesController {
     return this.warehousesService.listAgencyDefaults();
   }
 
+  @Get('agencies/:agencyId/default')
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.SALES_REP, UserRole.SALES_MANAGER)
+  getAgencyDefault(@Param('agencyId') agencyId: string): Promise<AgencyWarehouseAssignmentEntity> {
+    return this.warehousesService.getAgencyDefault(agencyId);
+  }
+
   @Put('agencies/:agencyId/default')
   @Roles(...WAREHOUSE_MANAGER_ROLES)
   setAgencyDefault(
