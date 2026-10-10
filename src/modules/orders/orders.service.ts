@@ -287,9 +287,6 @@ export class OrdersService implements OnModuleInit {
   getReservedStockMap(excludeOrderId?: string): Map<string, number> {
     const map = new Map<string, number>();
     const reservedStatuses = new Set<OrderStatus>([
-      OrderStatus.PENDING,
-      OrderStatus.PENDING_APPROVAL,
-      OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
     ]);
@@ -352,9 +349,7 @@ export class OrdersService implements OnModuleInit {
         excludeOrderId,
       );
       const computedAvailableStock = Math.max(0, physicalStock - reservedStock);
-      const availableStock = typeof product.availableStock === 'number'
-        ? Math.min(product.availableStock, computedAvailableStock)
-        : computedAvailableStock;
+      const availableStock = computedAvailableStock;
 
       const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
       const orderBaseQuantity = Math.round(line.quantity * conversionRate);
@@ -974,25 +969,14 @@ export class OrdersService implements OnModuleInit {
 
     await this.saveOrder(newOrder);
 
-    // 3. THÊM LOGIC GIỮ CHỖ TỒN KHẢ DỤNG (RESERVE STOCK - Bug Fix SN-42)
-    // Khi tạo đơn hàng mới thành công, lặp qua danh sách items trong đơn hàng.
-    // Tìm sản phẩm tương ứng trong Inventory/Products Service và TRỪ trực tiếp số lượng đặt vào trường availableStock
-    // Công thức: product.availableStock = product.availableStock - item.quantity (quy đổi)
+    // Cập nhật tính toán tồn khả dụng động cho các sản phẩm trong đơn (SN-180 & SN-42)
     if (this.productsService && newOrder.lines) {
       for (const line of newOrder.lines) {
         const product = this.productsService.findProductInternal(
           line.productId || line.productSku,
         );
         if (product) {
-          const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
-          const deductQuantity = line.baseQuantity || Math.round((line.quantity || 0) * conversionRate);
-
-          const currentStock = typeof product.availableStock === 'number'
-            ? product.availableStock
-            : Math.max(0, (product.stockQuantity ?? 0) - this.getReservedStock(product.id || product.sku));
-
-          product.availableStock = Math.max(0, currentStock - deductQuantity);
-          product.availableQuantity = product.availableStock;
+          this.productsService.populateProductStock(product);
         }
       }
     }
@@ -1311,6 +1295,10 @@ export class OrdersService implements OnModuleInit {
         ],
       );
 
+      // Đồng bộ bộ nhớ trong OrdersService và InventoryService
+      this.orders.set(order.id, order);
+      this.inventoryService?.releaseMemoryReservationsByOrderId(order.id);
+
       // Cập nhật hồi phục tồn khả dụng trong productsService
       if (this.productsService && order.lines) {
         for (const line of order.lines) {
@@ -1530,6 +1518,17 @@ export class OrdersService implements OnModuleInit {
       }
       this.applyApprovalDecision(order, dto.action);
       await this.saveDecision(client, order, dto, reviewer);
+      this.orders.set(order.id, order);
+      if (this.productsService && order.lines) {
+        for (const line of order.lines) {
+          const product = this.productsService.findProductInternal(
+            line.productId || line.productSku,
+          );
+          if (product) {
+            this.productsService.populateProductStock(product);
+          }
+        }
+      }
       await client.query('COMMIT');
       return order;
     } catch (error) {
