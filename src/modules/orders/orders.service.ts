@@ -1142,9 +1142,10 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    // 2. Lọc theo trạng thái
+    // 2. Lọc theo trạng thái đơn hàng
     if (query.status && (query.status as string) !== 'ALL') {
-      list = list.filter((o) => o.status === query.status);
+      const st = (query.status as string).toUpperCase().trim();
+      list = list.filter((o) => o.status && o.status.toUpperCase().trim() === st);
     }
 
     // 3. Lọc theo đại lý (customerId)
@@ -1192,24 +1193,25 @@ export class OrdersService implements OnModuleInit {
     }
 
     // 7. Tìm kiếm tự do (mã đơn, mã đại lý, tên đại lý, sđt, người nhận, nhân viên)
-    if (query.search) {
+    if (query.search && query.search.trim()) {
       const q = query.search.toLowerCase().trim();
       list = list.filter(
         (o) =>
-          o.orderCode.toLowerCase().includes(q) ||
-          o.customerName.toLowerCase().includes(q) ||
-          o.customerCode.toLowerCase().includes(q) ||
+          (o.orderCode && o.orderCode.toLowerCase().includes(q)) ||
+          (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+          (o.customerCode && o.customerCode.toLowerCase().includes(q)) ||
           (o.salesRepName && o.salesRepName.toLowerCase().includes(q)) ||
-          o.deliveryPoint?.receiverName.toLowerCase().includes(q) ||
-          o.deliveryPoint?.phone.includes(q),
+          (o.deliveryPoint?.receiverName &&
+            o.deliveryPoint.receiverName.toLowerCase().includes(q)) ||
+          (o.deliveryPoint?.phone && o.deliveryPoint.phone.includes(q)),
       );
     }
 
     // 8. Tính tổng tiền của tập kết quả đang lọc (Yêu cầu cốt lõi SN-46)
     const totalAmount = list.reduce((sum, o) => sum + (o.grandTotal || 0), 0);
 
-    const page = Math.max(1, query.page || 1);
-    const limit = Math.max(1, query.limit || 10);
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 10);
     const total = list.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const start = (page - 1) * limit;
