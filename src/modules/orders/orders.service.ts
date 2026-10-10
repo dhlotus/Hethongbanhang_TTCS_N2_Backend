@@ -234,6 +234,7 @@ export class OrdersService implements OnModuleInit {
         order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
         order_line_id TEXT NOT NULL,
         product_sku TEXT NOT NULL,
+        warehouse_id UUID NOT NULL DEFAULT '11111111-0000-0000-0000-000000000001',
         base_quantity NUMERIC(15, 2) NOT NULL CHECK (base_quantity > 0),
         status VARCHAR(20) NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1074,6 +1075,13 @@ export class OrdersService implements OnModuleInit {
     // Ngay khi đơn được khởi tạo ở trạng thái PENDING (hoặc các trạng thái hợp lệ),
     // lập tức cập nhật trong Database PostgreSQL / Memory:
     // availableStock = availableStock - quantity cho từng sản phẩm trong đơn.
+    const agencyWarehouseRows = this.databaseService?.isConnected()
+      ? await this.databaseService.query<{ warehouse_id: string }>(
+          'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+          [customer.id],
+        )
+      : [];
+    const agencyWarehouseId = agencyWarehouseRows[0]?.warehouse_id || '11111111-0000-0000-0000-000000000001';
     if (this.productsService && newOrder.lines) {
       for (const line of newOrder.lines) {
         const product = this.productsService.findProductInternal(
@@ -1100,8 +1108,8 @@ export class OrdersService implements OnModuleInit {
           if (this.databaseService?.isConnected()) {
             try {
               this.databaseService.query(
-                'UPDATE app_inventory_stock_balances SET physical_quantity = GREATEST(0, physical_quantity - $1), updated_at = CURRENT_TIMESTAMP WHERE product_sku = $2',
-                [deductQuantity, (product.sku || line.productSku).trim().toUpperCase()]
+                'UPDATE app_inventory_stock_balances SET physical_quantity = GREATEST(0, physical_quantity - $1), updated_at = CURRENT_TIMESTAMP WHERE product_sku = $2 AND warehouse_id = $3::uuid',
+                [deductQuantity, (product.sku || line.productSku).trim().toUpperCase(), agencyWarehouseId]
               ).catch(() => {});
             } catch {
               // Bỏ qua nếu bảng PostgreSQL chưa tồn tại
@@ -1421,15 +1429,20 @@ export class OrdersService implements OnModuleInit {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
     const linesBySku = this.groupOrderLinesBySku(order.lines);
+    const warehouseRows = await client.query<{ warehouse_id: string }>(
+      'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+      [order.customerId],
+    );
+    const warehouseId = warehouseRows.rows[0]?.warehouse_id || '11111111-0000-0000-0000-000000000001';
     for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
       const product = await this.productsService.findById(sku);
-      const physicalQuantity = await this.inventoryService.getStockBalanceForUpdate(client, product);
+      const physicalQuantity = await this.inventoryService.getStockBalanceForUpdate(client, product, warehouseId);
       const reservationResult = await client.query<{ reserved: string }>(
         `SELECT COALESCE(SUM(base_quantity), 0)::text AS reserved
          FROM app_order_inventory_reservations
-         WHERE product_sku = $1 AND status = 'RESERVED'`,
-        [sku],
+         WHERE product_sku = $1 AND warehouse_id = $2::uuid AND status = 'RESERVED'`,
+        [sku, warehouseId],
       );
       const required = lines.reduce((sum, line) => sum + line.baseQuantity, 0);
       const available = physicalQuantity - Number(reservationResult.rows[0]?.reserved ?? 0);
@@ -1442,9 +1455,9 @@ export class OrdersService implements OnModuleInit {
     for (const line of order.lines) {
       await client.query(
         `INSERT INTO app_order_inventory_reservations
-         (order_id, order_line_id, product_sku, base_quantity)
-         VALUES ($1, $2, $3, $4)`,
-        [order.id, line.id, line.productSku.trim().toUpperCase(), line.baseQuantity],
+         (order_id, order_line_id, product_sku, warehouse_id, base_quantity)
+         VALUES ($1, $2, $3, $4::uuid, $5)`,
+        [order.id, line.id, line.productSku.trim().toUpperCase(), warehouseId, line.baseQuantity],
       );
     }
   }

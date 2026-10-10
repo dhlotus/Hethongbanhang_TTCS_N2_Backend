@@ -21,6 +21,7 @@ import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
 import { AgencyModule } from './modules/agencies/agency.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { WarehousesModule } from './modules/warehouses/warehouses.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     AuditLogsModule,
     AgencyModule,
     DashboardModule,
+    WarehousesModule,
   ],
 })
 export class AppModule { }

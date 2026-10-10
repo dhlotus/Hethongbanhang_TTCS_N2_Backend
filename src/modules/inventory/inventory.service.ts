@@ -12,8 +12,8 @@ import { CreateInventoryAuditDto, UpdateAuditItemsDto, CompleteAuditDto, QueryAu
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 
-const DEFAULT_WAREHOUSE_ID = 'WH01';
-const DEFAULT_WAREHOUSE_NAME = 'Kho Tổng Miền Nam - LOHA WH01';
+const DEFAULT_WAREHOUSE_ID = '11111111-0000-0000-0000-000000000001';
+const DEFAULT_WAREHOUSE_NAME = 'Kho Tổng Miền Nam';
 
 export interface StockAdjustmentResult {
   success: boolean;
@@ -86,10 +86,13 @@ export class InventoryService implements OnModuleInit {
     if (!this.stockBalanceSchemaPromise) {
       this.stockBalanceSchemaPromise = this.databaseService.query(`
         CREATE TABLE IF NOT EXISTS app_inventory_stock_balances (
-          product_sku TEXT PRIMARY KEY,
+          product_sku TEXT NOT NULL,
+          warehouse_id UUID NOT NULL DEFAULT '${DEFAULT_WAREHOUSE_ID}',
           physical_quantity NUMERIC(15, 2) NOT NULL CHECK (physical_quantity >= 0),
+          min_stock_level NUMERIC(15, 2) DEFAULT 0,
           created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (product_sku, warehouse_id)
         )
       `).then(() => this.databaseService.query(`
         ALTER TABLE app_inventory_stock_balances
@@ -106,29 +109,29 @@ export class InventoryService implements OnModuleInit {
     const products = await this.productsService.findAll();
     if (products.length === 0) return;
     await this.databaseService.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, physical_quantity)
-       SELECT UPPER(sku), quantity
+      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+       SELECT UPPER(sku), $3::uuid, quantity
        FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
-       ON CONFLICT (product_sku) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => product.stockQuantity)],
+       ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
+      [products.map((product) => product.sku), products.map((product) => product.stockQuantity), DEFAULT_WAREHOUSE_ID],
     );
   }
 
-  private async getStockBalances(products: ProductEntity[]): Promise<Map<string, number>> {
+  private async getStockBalances(products: ProductEntity[], warehouseId: string): Promise<Map<string, number>> {
     await this.ensureStockBalanceTable();
     if (products.length === 0) return new Map();
     await this.databaseService.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, physical_quantity)
-       SELECT UPPER(sku), quantity
+      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+       SELECT UPPER(sku), $3::uuid, quantity
        FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
-       ON CONFLICT (product_sku) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => product.stockQuantity)],
+       ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
+      [products.map((product) => product.sku), products.map((product) => warehouseId === DEFAULT_WAREHOUSE_ID ? product.stockQuantity : 0), warehouseId],
     );
     const rows = await this.databaseService.query<{ product_sku: string; physical_quantity: string }>(
       `SELECT product_sku, physical_quantity::text
        FROM app_inventory_stock_balances
-       WHERE product_sku = ANY($1::text[])`,
-      [products.map((product) => product.sku.toUpperCase())],
+       WHERE product_sku = ANY($1::text[]) AND warehouse_id = $2::uuid`,
+      [products.map((product) => product.sku.toUpperCase()), warehouseId],
     );
     return new Map(rows.map((row) => [row.product_sku, Number(row.physical_quantity)]));
   }
@@ -136,18 +139,19 @@ export class InventoryService implements OnModuleInit {
   async getStockBalanceForUpdate(
     client: PoolClient,
     product: ProductEntity,
+    warehouseId: string = DEFAULT_WAREHOUSE_ID,
   ): Promise<number> {
     await this.ensureStockBalanceTable();
     const sku = product.sku.trim().toUpperCase();
     await client.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, physical_quantity)
-       VALUES ($1, $2) ON CONFLICT (product_sku) DO NOTHING`,
-      [sku, product.stockQuantity],
+      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+       VALUES ($1, $2::uuid, $3) ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
+      [sku, warehouseId, warehouseId === DEFAULT_WAREHOUSE_ID ? product.stockQuantity : 0],
     );
     const result = await client.query<{ physical_quantity: string }>(
       `SELECT physical_quantity::text FROM app_inventory_stock_balances
-       WHERE product_sku = $1 FOR UPDATE`,
-      [sku],
+       WHERE product_sku = $1 AND warehouse_id = $2::uuid FOR UPDATE`,
+      [sku, warehouseId],
     );
     return Number(result.rows[0]?.physical_quantity ?? 0);
   }
@@ -156,12 +160,13 @@ export class InventoryService implements OnModuleInit {
     client: PoolClient,
     sku: string,
     physicalQuantity: number,
+    warehouseId: string = DEFAULT_WAREHOUSE_ID,
   ): Promise<void> {
     await client.query(
       `UPDATE app_inventory_stock_balances
        SET physical_quantity = $2, updated_at = CURRENT_TIMESTAMP
-       WHERE product_sku = $1`,
-      [sku.trim().toUpperCase(), physicalQuantity],
+       WHERE product_sku = $1 AND warehouse_id = $3::uuid`,
+      [sku.trim().toUpperCase(), physicalQuantity, warehouseId],
     );
   }
 
@@ -244,7 +249,7 @@ export class InventoryService implements OnModuleInit {
   /**
    * Xem tồn kho khả dụng của danh mục sản phẩm kèm đơn vị quy đổi
    */
-  async getStockOverview(): Promise<StockBalance[]> {
+  async getStockOverview(warehouseId: string = DEFAULT_WAREHOUSE_ID): Promise<StockBalance[]> {
     const products = await this.productsService.findAll();
     if (!this.databaseService.isConnected()) {
       return products.map((p) => this.buildStockBalance({
@@ -261,23 +266,26 @@ export class InventoryService implements OnModuleInit {
         })),
       }, this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 0));
     }
-    const physicalBalances = await this.getStockBalances(products);
-    const minLevels = await this.getMinStockLevelsFromDb(products);
+    const physicalBalances = await this.getStockBalances(products, warehouseId);
+    const minLevels = await this.getMinStockLevelsFromDb(products, warehouseId);
     const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
       `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
-       FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
+       FROM app_order_inventory_reservations WHERE status = 'RESERVED' AND warehouse_id = $1::uuid GROUP BY product_sku`,
+      [warehouseId],
     );
+    const warehouseRows = await this.databaseService.query<{ name: string }>(
+      'SELECT name FROM warehouses WHERE id = $1::uuid',
+      [warehouseId],
+    );
+    const warehouseName = warehouseRows[0]?.name || DEFAULT_WAREHOUSE_NAME;
     const reservations = new Map(
       reservationResult.map((row) => [row.product_sku.toUpperCase(), Number(row.reserved)]),
     );
     return products.map((p) => {
       const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity;
       const dbReserved = reservations.get(p.sku.toUpperCase()) ?? 0;
-      const orderReserved = p.reservedStock ?? 0;
-      const reservedQuantity = Math.max(dbReserved, orderReserved);
-      const available = typeof p.availableStock === 'number'
-        ? p.availableStock
-        : Math.max(0, physicalStockQuantity - reservedQuantity);
+      const reservedQuantity = dbReserved;
+      const available = Math.max(0, physicalStockQuantity - reservedQuantity);
       return this.buildStockBalance({
         sku: p.sku,
         name: p.name,
@@ -290,7 +298,7 @@ export class InventoryService implements OnModuleInit {
           conversionRate: u.conversionRate,
           isBaseUnit: u.isBaseUnit,
         })),
-      }, minLevels.get(p.sku.trim().toUpperCase()) ?? 0);
+      }, minLevels.get(p.sku.trim().toUpperCase()) ?? 0, warehouseId, warehouseName);
     });
   }
 
@@ -300,24 +308,26 @@ export class InventoryService implements OnModuleInit {
   private buildStockBalance(
     base: Omit<StockBalance, 'warehouse' | 'warehouseId' | 'minStockLevel' | 'isBelowMinStock'>,
     minStockLevel: number,
+    warehouseId: string = DEFAULT_WAREHOUSE_ID,
+    warehouseName: string = DEFAULT_WAREHOUSE_NAME,
   ): StockBalance {
     return {
       ...base,
-      warehouse: DEFAULT_WAREHOUSE_NAME,
-      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouse: warehouseName,
+      warehouseId,
       minStockLevel,
       isBelowMinStock: minStockLevel > 0 && base.stockQuantity <= minStockLevel,
     };
   }
 
-  private async getMinStockLevelsFromDb(products: ProductEntity[]): Promise<Map<string, number>> {
+  private async getMinStockLevelsFromDb(products: ProductEntity[], warehouseId: string): Promise<Map<string, number>> {
     await this.ensureStockBalanceTable();
     if (products.length === 0) return new Map();
     const rows = await this.databaseService.query<{ product_sku: string; min_stock_level: string | null }>(
       `SELECT product_sku, COALESCE(min_stock_level, 0)::text AS min_stock_level
        FROM app_inventory_stock_balances
-       WHERE product_sku = ANY($1::text[])`,
-      [products.map((product) => product.sku.trim().toUpperCase())],
+       WHERE product_sku = ANY($1::text[]) AND warehouse_id = $2::uuid`,
+      [products.map((product) => product.sku.trim().toUpperCase()), warehouseId],
     );
     return new Map(rows.map((row) => [row.product_sku, Number(row.min_stock_level ?? 0)]));
   }
@@ -345,16 +355,16 @@ export class InventoryService implements OnModuleInit {
     if (this.databaseService.isConnected()) {
       await this.ensureStockBalanceTable();
       await this.databaseService.query(
-        `INSERT INTO app_inventory_stock_balances (product_sku, physical_quantity, min_stock_level)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (product_sku)
+        `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity, min_stock_level)
+         VALUES ($1, $4::uuid, $2, $3)
+         ON CONFLICT (product_sku, warehouse_id)
          DO UPDATE SET min_stock_level = EXCLUDED.min_stock_level, updated_at = CURRENT_TIMESTAMP`,
-        [productSku, product.stockQuantity ?? 0, level],
+        [productSku, warehouseId === DEFAULT_WAREHOUSE_ID ? product.stockQuantity ?? 0 : 0, level, warehouseId],
       );
     }
     this.minStockLevels.set(productSku, level);
 
-    const balances = await this.getStockOverview();
+    const balances = await this.getStockOverview(warehouseId);
     const updated = balances.find((row) => row.sku.trim().toUpperCase() === productSku);
     if (!updated) {
       throw new BadRequestException(`Không tìm thấy SKU ${sku}.`);
@@ -439,10 +449,10 @@ export class InventoryService implements OnModuleInit {
     try {
       await client.query('BEGIN');
       await this.lockSku(client, product.sku);
-      previousQuantity = await this.getStockBalanceForUpdate(client, product);
+      previousQuantity = await this.getStockBalanceForUpdate(client, product, dto.warehouseId || DEFAULT_WAREHOUSE_ID);
       await this.validateStockAdjustment(client, product, dto, baseQuantityChange, previousQuantity);
       newQuantity = previousQuantity + baseQuantityChange;
-      await this.updateStockBalance(client, product.sku, newQuantity);
+      await this.updateStockBalance(client, product.sku, newQuantity, dto.warehouseId || DEFAULT_WAREHOUSE_ID);
       await this.consumeOrderReservation(client, product.sku, dto.referenceCode, baseQuantityChange);
       transaction = this.createInventoryTransaction(
         product, dto, userId, conversion.unitName, conversion.conversionRate,
@@ -455,7 +465,9 @@ export class InventoryService implements OnModuleInit {
     } finally {
       client.release();
     }
-    await this.productsService.setStockQuantity(product.id, newQuantity);
+    if (!dto.warehouseId || dto.warehouseId === DEFAULT_WAREHOUSE_ID) {
+      await this.productsService.setStockQuantity(product.id, newQuantity);
+    }
     this.writeLedger(transaction);
     return this.createAdjustmentResult(transaction, dto, userId, previousQuantity, newQuantity);
   }
@@ -473,7 +485,7 @@ export class InventoryService implements OnModuleInit {
   ): Promise<void> {
     if (quantityChange >= 0) return;
     const reservations = await this.getReservationQuantities(
-      client, product.sku, dto.referenceCode?.trim(),
+      client, product.sku, dto.referenceCode?.trim(), dto.warehouseId || DEFAULT_WAREHOUSE_ID,
     );
     const requestedExport = Math.abs(quantityChange);
     if (reservations.orderQuantity > 0 && requestedExport > reservations.orderQuantity) {
@@ -497,6 +509,7 @@ export class InventoryService implements OnModuleInit {
     client: PoolClient,
     sku: string,
     orderCode?: string,
+    warehouseId: string = DEFAULT_WAREHOUSE_ID,
   ): Promise<{ totalQuantity: number; orderQuantity: number }> {
     const result = await client.query<{ total: string; order_quantity: string }>(
       `SELECT COALESCE(SUM(base_quantity), 0)::text AS total,
@@ -506,8 +519,8 @@ export class InventoryService implements OnModuleInit {
                 )
               ), 0)::text AS order_quantity
        FROM app_order_inventory_reservations
-       WHERE product_sku = $1 AND status = 'RESERVED'`,
-      [sku.trim().toUpperCase(), orderCode || null],
+       WHERE product_sku = $1 AND warehouse_id = $3::uuid AND status = 'RESERVED'`,
+      [sku.trim().toUpperCase(), orderCode || null, warehouseId],
     );
     return {
       totalQuantity: Number(result.rows[0]?.total ?? 0),

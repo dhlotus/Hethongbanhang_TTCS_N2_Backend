@@ -48,8 +48,8 @@ export class InventoryController {
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
   @Get('stock')
-  async getStockOverview(): Promise<StockBalance[]> {
-    return this.inventoryService.getStockOverview();
+  async getStockOverview(@Query('warehouseId') warehouseId?: string): Promise<StockBalance[]> {
+    return this.inventoryService.getStockOverview(warehouseId);
   }
 
   /**
