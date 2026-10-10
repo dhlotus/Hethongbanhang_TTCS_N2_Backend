@@ -66,3 +66,31 @@ COMMENT ON TABLE customer_shipping_addresses IS 'Danh sách các điểm nhận 
 COMMENT ON COLUMN customer_shipping_addresses.is_default IS 'Địa chỉ giao hàng mặc định được gán tự động khi tạo đơn';
 
 CREATE INDEX IF NOT EXISTS idx_customer_shipping_customer_id ON customer_shipping_addresses(customer_id);
+
+-- -----------------------------------------------------------------------------
+-- 3. BẢNG APP_CREDIT_LIMIT_LOGS (Lưu vết thay đổi hạn mức công nợ - SN-34)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS app_credit_limit_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    agency_id VARCHAR(64) NOT NULL,
+    agency_code VARCHAR(100) NOT NULL,
+    agency_name VARCHAR(255) NOT NULL,
+    old_credit_limit NUMERIC(15, 2) NOT NULL DEFAULT 0,
+    new_credit_limit NUMERIC(15, 2) NOT NULL DEFAULT 0,
+    old_max_debt_days INT NOT NULL DEFAULT 30,
+    new_max_debt_days INT NOT NULL DEFAULT 30,
+    old_payment_terms VARCHAR(50),
+    new_payment_terms VARCHAR(50),
+    old_temporary_limit NUMERIC(15, 2) DEFAULT 0,
+    new_temporary_limit NUMERIC(15, 2) DEFAULT 0,
+    reason TEXT NOT NULL,
+    performed_by VARCHAR(150) NOT NULL,
+    performed_by_role VARCHAR(100),
+    performed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE app_credit_limit_logs IS 'Lịch sử kiểm toán và lưu vết tất cả các lần điều chỉnh hạn mức công nợ đại lý (SN-34)';
+
+CREATE INDEX IF NOT EXISTS idx_credit_limit_logs_agency_id ON app_credit_limit_logs(agency_id);
+CREATE INDEX IF NOT EXISTS idx_credit_limit_logs_performed_at ON app_credit_limit_logs(performed_at DESC);
+

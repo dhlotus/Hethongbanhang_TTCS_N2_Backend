@@ -36,11 +36,11 @@ export class FilterCustomersDto {
   salesRepId?: string;
 
   /**
-   * Trạng thái hoạt động của đại lý
+   * Trạng thái hoạt động của đại lý (ACTIVE, LOCKED, INACTIVE hoặc ALL)
    */
   @IsOptional()
-  @IsEnum(CustomerStatus, { message: 'Trạng thái đại lý không hợp lệ' })
-  status?: CustomerStatus;
+  @IsString({ message: 'Trạng thái đại lý phải là chuỗi' })
+  status?: CustomerStatus | string;
 
   /**
    * Trang hiện tại (1-indexed)

@@ -4,6 +4,8 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -17,6 +19,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
+import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
 import { InventoryService, StockAdjustmentResult } from './inventory.service';
 
 /**
@@ -37,17 +40,48 @@ export class InventoryController {
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
   @Get('stock')
-  async getStockOverview(): Promise<
-    Array<{
-      sku: string;
-      name: string;
-      stockQuantity: number;
-      baseUnit: string;
-      units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
-      warehouse: string;
-    }>
-  > {
+  async getStockOverview(): Promise<StockBalance[]> {
     return this.inventoryService.getStockOverview();
+  }
+
+  /**
+   * Khai báo tồn tối thiểu theo SKU tại kho (SN-183)
+   * PATCH /inventory/stock-balances/warehouses/:warehouseId/sku/:sku/min-stock
+   */
+  @Patch('stock-balances/warehouses/:warehouseId/sku/:sku/min-stock')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  async setMinStockLevel(
+    @Param('warehouseId') warehouseId: string,
+    @Param('sku') sku: string,
+    @Body() body: { minStock: number },
+  ): Promise<StockBalance> {
+    return this.inventoryService.setMinStockLevel(warehouseId, sku, Number(body?.minStock));
+  }
+
+  /**
+   * Danh sách SKU dưới mức tồn tối thiểu (SN-183)
+   * GET /inventory/alerts/low-stock?warehouseId=...
+   */
+  @Get('alerts/low-stock')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getLowStockAlerts(
+    @Query('warehouseId') warehouseId?: string,
+  ): Promise<LowStockAlert[]> {
+    return this.inventoryService.getLowStockAlerts(warehouseId);
   }
 
   /**

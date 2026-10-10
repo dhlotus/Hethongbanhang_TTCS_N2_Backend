@@ -583,39 +583,50 @@ export class CustomersService implements OnModuleInit {
       });
     }
 
-    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone
-    if (query?.search) {
+    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode
+    if (query?.search && query.search.trim()) {
       const q = query.search.toLowerCase().trim();
       list = list.filter(
         (c) =>
-          c.code.toLowerCase().includes(q) ||
-          c.name.toLowerCase().includes(q) ||
-          c.phone.includes(q) ||
-          (c.address && c.address.toLowerCase().includes(q)),
+          (c.code && c.code.toLowerCase().includes(q)) ||
+          (c.name && c.name.toLowerCase().includes(q)) ||
+          (c.phone && c.phone.includes(q)) ||
+          (c.address && c.address.toLowerCase().includes(q)) ||
+          (c.taxCode && c.taxCode.toLowerCase().includes(q)),
       );
     }
 
-    // 4. Lọc theo Khu vực / Địa bàn kinh doanh
+    // 4. Lọc theo Khu vực / Địa bàn kinh doanh (hỗ trợ cả tiếng Việt và alias)
     if (query?.region && query.region !== 'ALL') {
       const reg = query.region.toLowerCase().trim();
-      list = list.filter((c) => c.region && c.region.toLowerCase() === reg);
+      list = list.filter((c) => {
+        if (!c.region) return false;
+        const cReg = c.region.toLowerCase().trim();
+        if (cReg === reg) return true;
+        if (reg === 'south' && (cReg.includes('nam') || cReg === 'miền nam')) return true;
+        if (reg === 'central' && (cReg.includes('trung') || cReg === 'miền trung')) return true;
+        if (reg === 'north' && (cReg.includes('bắc') || cReg === 'miền bắc')) return true;
+        return false;
+      });
     }
 
     // 5. Lọc theo Phân nhóm khách hàng
     if (query?.customerGroup && query.customerGroup !== 'ALL') {
-      list = list.filter((c) => c.customerGroup === query.customerGroup);
+      const grp = query.customerGroup.toUpperCase().trim();
+      list = list.filter((c) => c.customerGroup && c.customerGroup.toUpperCase().trim() === grp);
     }
 
     // 6. Lọc theo Trạng thái hoạt động
     if (query?.status && (query.status as string) !== 'ALL') {
-      list = list.filter((c) => c.status === query.status);
+      const st = (query.status as string).toUpperCase().trim();
+      list = list.filter((c) => c.status && c.status.toUpperCase().trim() === st);
     }
 
     // 7. Phân trang kết quả
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const total = list.length;
-    const totalPages = Math.ceil(total / limit) || 1;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
     const startIndex = (page - 1) * limit;
     const data = list.slice(startIndex, startIndex + limit);
 
@@ -1135,35 +1146,135 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
-   * Tạo đại lý mới (SN-35)
+   * Tạo đại lý mới (SN-30 & SN-35)
+   * - Khai báo: mã đại lý, tên, mã số thuế, nhóm khách hàng, khu vực, người phụ trách, trạng thái (SN-30 AC1)
+   * - Mã đại lý là duy nhất (SN-30 AC2)
    */
   async createCustomer(dto: CreateCustomerDto): Promise<CustomerEntity> {
+    const trimmedCode = dto.code?.trim();
+    if (!trimmedCode) {
+      throw new BadRequestException('Mã đại lý không được để trống.');
+    }
+
+    // Kiểm tra tính duy nhất của mã đại lý (không phân biệt hoa/thường)
+    const normalizedCode = trimmedCode.toUpperCase();
+    const existingCustomer = Array.from(this.customers.values()).find(
+      (c) => c.code && c.code.trim().toUpperCase() === normalizedCode,
+    );
+    if (existingCustomer) {
+      throw new BadRequestException(
+        `Mã đại lý "${trimmedCode}" đã tồn tại trong hệ thống. Vui lòng nhập mã khác.`,
+      );
+    }
+
     const newId = `cust-${Date.now()}`;
-    let salesRepName: string | undefined;
-    if (dto.salesRepId === 'usr-sales-002') salesRepName = 'Trần Văn Nam';
-    else if (dto.salesRepId === 'usr-sale-01') salesRepName = 'Trần Văn Long';
-    else if (dto.salesRepId === 'usr-sale-02') salesRepName = 'Lê Thị Thu Thảo';
+    let salesRepName: string | undefined = dto.salesRepName;
+    if (!salesRepName && dto.salesRepId) {
+      if (dto.salesRepId === 'usr-sales-002') salesRepName = 'Trần Văn Nam';
+      else if (dto.salesRepId === 'usr-sale-01') salesRepName = 'Trần Văn Long';
+      else if (dto.salesRepId === 'usr-sale-02') salesRepName = 'Nguyễn Thị Hằng';
+      else if (dto.salesRepId === 'usr-sale-03') salesRepName = 'Phạm Minh Tuấn';
+    }
+
+    const deliveryPoints: DeliveryPointEntity[] = [];
+    if (dto.deliveryPointName?.trim()) {
+      deliveryPoints.push(
+        new DeliveryPointEntity({
+          id: `dp-${newId.replace('cust-', '')}-1`,
+          customerId: newId,
+          name: dto.deliveryPointName.trim(),
+          address: dto.address?.trim() || 'Trụ sở chính',
+          receiverName: dto.receiverName?.trim() || dto.name.trim(),
+          phone: dto.phone.trim(),
+          isDefault: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      );
+    }
 
     const newCustomer = new CustomerEntity({
       id: newId,
-      code: dto.code,
-      name: dto.name,
-      region: dto.region,
+      code: trimmedCode,
+      name: dto.name.trim(),
+      region: dto.region?.trim() || 'Miền Nam',
       customerGroup: dto.customerGroup || 'AGENT_LEVEL_2',
-      taxCode: dto.taxCode,
+      taxCode: dto.taxCode?.trim(),
       salesRepId: dto.salesRepId,
       salesRepName,
-      phone: dto.phone,
-      email: dto.email,
-      address: dto.address,
+      salesRep: dto.salesRepId
+        ? { id: dto.salesRepId, name: salesRepName || '' }
+        : undefined,
+      phone: dto.phone.trim(),
+      email: dto.email?.trim(),
+      address: dto.address?.trim(),
       creditLimit: dto.creditLimit ?? 0,
+      currentDebt: 0,
       maxDebtDays: dto.maxDebtDays ?? 30,
       status: CustomerStatus.ACTIVE,
-      deliveryPoints: [],
+      deliveryPoints,
     });
 
     this.customers.set(newId, newCustomer);
     return newCustomer;
+  }
+
+  /**
+   * Xóa hồ sơ đại lý (SN-30 AC4)
+   * Chặn xóa nếu đại lý đã phát sinh giao dịch hoặc còn công nợ, chỉ cho phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE).
+   */
+  async deleteCustomer(
+    id: string,
+    hasTransactions = false,
+  ): Promise<{ success: boolean; message: string; customerId: string }> {
+    const customer = await this.getCustomerById(id);
+
+    const hasDebt = (customer.currentDebt || 0) > 0;
+    const isTransacted = hasDebt || hasTransactions;
+
+    if (isTransacted) {
+      throw new BadRequestException(
+        `Đại lý "${customer.name}" (${customer.code}) đã phát sinh giao dịch hoặc còn công nợ (${(customer.currentDebt || 0).toLocaleString('vi-VN')} đ), không thể xóa. Chỉ được phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE).`,
+      );
+    }
+
+    this.customers.delete(customer.id);
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(`DELETE FROM customers WHERE id = $1 OR code = $1;`, [id]);
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    return {
+      success: true,
+      message: `Đã xóa hồ sơ đại lý "${customer.name}" (${customer.code}) thành công.`,
+      customerId: customer.id,
+    };
+  }
+
+  /**
+   * Ngừng giao dịch với đại lý (SN-30 AC4: Chuyển sang trạng thái INACTIVE)
+   */
+  async deactivateCustomer(id: string): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(id);
+    customer.status = CustomerStatus.INACTIVE;
+    customer.updatedAt = new Date();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers SET status = $1, updated_at = NOW() WHERE id = $2 OR code = $2;`,
+          [CustomerStatus.INACTIVE, id],
+        );
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    return customer;
   }
 }
 

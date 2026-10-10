@@ -10,7 +10,12 @@ export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
   @Get('overview')
-  async getOverview(@CurrentUser() user: ICurrentUser, @Query('timeRange') timeRange?: string) {
-    return this.dashboardService.getOverview(user, timeRange);
+  async getOverview(
+    @CurrentUser() user: ICurrentUser,
+    @Query('timeRange') timeRange?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.dashboardService.getOverview(user, timeRange, startDate, endDate);
   }
 }

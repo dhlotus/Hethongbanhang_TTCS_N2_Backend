@@ -21,7 +21,10 @@ import { GetSuppliersFilterDto } from './dto/get-suppliers-filter.dto';
 import { UpdateSupplierStatusDto } from './dto/update-supplier-status.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { SupplierEntity } from './entities/supplier.entity';
-import { PaginatedSuppliersResponse } from './interfaces/paginated-suppliers.interface';
+import {
+  PaginatedSuppliersResponse,
+  SupplierSummaryDto,
+} from './interfaces/paginated-suppliers.interface';
 import { SuppliersService } from './suppliers.service';
 
 /**
@@ -42,6 +45,15 @@ export class SuppliersController {
     @Query() filterDto: GetSuppliersFilterDto,
   ): Promise<PaginatedSuppliersResponse> {
     return this.suppliersService.findAllPaginated(filterDto);
+  }
+
+  /**
+   * Thống kê tổng số lượng nhà cung cấp toàn hệ thống (Active, Inactive, Đã nhập kho)
+   * GET /api/suppliers/stats
+   */
+  @Get('stats')
+  async getStats(): Promise<SupplierSummaryDto> {
+    return this.suppliersService.getStats();
   }
 
   /**

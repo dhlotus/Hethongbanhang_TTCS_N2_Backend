@@ -9,7 +9,7 @@ export interface IJwtConfig {
 
 export const jwtConfig: IJwtConfig = {
   secret: process.env.JWT_SECRET ?? 'htbh-jwt-secret-key',
-  expiresIn: (process.env.JWT_EXPIRES_IN as StringValue) ?? '1h',
+  expiresIn: (process.env.JWT_EXPIRES_IN as StringValue) ?? '24h',
   refreshSecret: process.env.JWT_REFRESH_SECRET ?? 'htbh-jwt-refresh-secret',
   refreshExpiresIn: (process.env.JWT_REFRESH_EXPIRES_IN as StringValue) ?? '7d',
 };

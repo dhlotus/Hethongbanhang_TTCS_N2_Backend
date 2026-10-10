@@ -11,7 +11,10 @@ import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { GetSuppliersFilterDto } from './dto/get-suppliers-filter.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { SupplierEntity } from './entities/supplier.entity';
-import { PaginatedSuppliersResponse } from './interfaces/paginated-suppliers.interface';
+import {
+  PaginatedSuppliersResponse,
+  SupplierSummaryDto,
+} from './interfaces/paginated-suppliers.interface';
 
 /**
  * Service Quản lý Nhà Cung Cấp (SN-25):
@@ -266,6 +269,39 @@ export class SuppliersService implements OnModuleInit {
       page,
       limit,
       totalPages,
+      summary: this.getStats(),
+    };
+  }
+
+  /**
+   * Thống kê tổng thể Nhà cung cấp toàn hệ thống (Active, Inactive, Đã nhập kho)
+   */
+  getStats(): SupplierSummaryDto {
+    let active = 0;
+    let inactive = 0;
+    let withReceipts = 0;
+    const all = Array.from(this.suppliers.values());
+
+    for (const s of all) {
+      if (s.status === SupplierStatus.ACTIVE) {
+        active++;
+      } else if (s.status === SupplierStatus.INACTIVE) {
+        inactive++;
+      }
+      const hasReceipt =
+        s.hasReceipts ||
+        this.suppliersWithReceipts.has(s.id) ||
+        this.suppliersWithReceipts.has(s.code);
+      if (hasReceipt) {
+        withReceipts++;
+      }
+    }
+
+    return {
+      total: all.length,
+      active,
+      inactive,
+      withReceipts,
     };
   }
 

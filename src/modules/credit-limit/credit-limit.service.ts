@@ -44,8 +44,9 @@ export class CreditLimitService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    await this.initDatabaseSchema();
     await this.syncFromCustomers();
-    this.seedInitialLogs();
+    await this.loadLogsFromDatabase();
   }
 
   /**
@@ -84,10 +85,132 @@ export class CreditLimitService implements OnModuleInit {
   }
 
   /**
-   * Khởi tạo các bản ghi lịch sử mẫu phục vụ kiểm toán và demo
+   * Tạo bảng app_credit_limit_logs trong cơ sở dữ liệu PostgreSQL nếu chưa tồn tại
    */
-  private seedInitialLogs(): void {
-    const initialSeedData: Partial<CreditLimitLog>[] = [
+  private async initDatabaseSchema(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      const client = await this.dbService.getClient();
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS app_credit_limit_logs (
+            id VARCHAR(64) PRIMARY KEY,
+            agency_id VARCHAR(64) NOT NULL,
+            agency_code VARCHAR(100) NOT NULL,
+            agency_name VARCHAR(255) NOT NULL,
+            old_credit_limit NUMERIC(15, 2) NOT NULL DEFAULT 0,
+            new_credit_limit NUMERIC(15, 2) NOT NULL DEFAULT 0,
+            old_max_debt_days INT NOT NULL DEFAULT 30,
+            new_max_debt_days INT NOT NULL DEFAULT 30,
+            old_payment_terms VARCHAR(50),
+            new_payment_terms VARCHAR(50),
+            old_temporary_limit NUMERIC(15, 2) DEFAULT 0,
+            new_temporary_limit NUMERIC(15, 2) DEFAULT 0,
+            reason TEXT NOT NULL,
+            performed_by VARCHAR(150) NOT NULL,
+            performed_by_role VARCHAR(100),
+            performed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS idx_credit_limit_logs_agency_id ON app_credit_limit_logs(agency_id);
+          CREATE INDEX IF NOT EXISTS idx_credit_limit_logs_performed_at ON app_credit_limit_logs(performed_at DESC);
+        `);
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      console.error('[CreditLimitService] Lỗi tạo bảng app_credit_limit_logs:', err);
+    }
+  }
+
+  /**
+   * Tải nhật ký thay đổi hạn mức từ cơ sở dữ liệu PostgreSQL
+   */
+  private async loadLogsFromDatabase(): Promise<void> {
+    if (this.dbService?.isConnected()) {
+      try {
+        const client = await this.dbService.getClient();
+        try {
+          const countRes = await client.query('SELECT COUNT(*) AS total FROM app_credit_limit_logs;');
+          const total = parseInt(countRes.rows[0]?.total || '0', 10);
+          if (total === 0) {
+            const initialSeedData = this.getInitialSeedLogs();
+            for (const item of initialSeedData) {
+              await client.query(
+                `INSERT INTO app_credit_limit_logs (
+                  id, agency_id, agency_code, agency_name,
+                  old_credit_limit, new_credit_limit,
+                  old_max_debt_days, new_max_debt_days,
+                  old_payment_terms, new_payment_terms,
+                  old_temporary_limit, new_temporary_limit,
+                  reason, performed_by, performed_by_role, performed_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                ON CONFLICT (id) DO NOTHING;`,
+                [
+                  item.id,
+                  item.agencyId,
+                  item.agencyCode,
+                  item.agencyName,
+                  item.oldCreditLimit,
+                  item.newCreditLimit,
+                  item.oldMaxDebtDays,
+                  item.newMaxDebtDays,
+                  item.oldPaymentTerms,
+                  item.newPaymentTerms,
+                  item.oldTemporaryLimit ?? 0,
+                  item.newTemporaryLimit ?? 0,
+                  item.reason,
+                  item.performedBy,
+                  item.performedByRole,
+                  item.performedAt,
+                ],
+              );
+            }
+          }
+
+          const res = await client.query(
+            'SELECT * FROM app_credit_limit_logs ORDER BY performed_at DESC;',
+          );
+          this.creditLimitLogs.length = 0;
+          for (const row of res.rows) {
+            this.creditLimitLogs.push(this.mapRowToCreditLimitLog(row));
+          }
+          return;
+        } finally {
+          client.release();
+        }
+      } catch (err) {
+        console.error('[CreditLimitService] Lỗi tải logs từ database:', err);
+      }
+    }
+
+    if (this.creditLimitLogs.length === 0) {
+      this.seedInitialLogs();
+    }
+  }
+
+  private mapRowToCreditLimitLog(row: any): CreditLimitLog {
+    return new CreditLimitLog({
+      id: row.id,
+      agencyId: row.agency_id,
+      agencyCode: row.agency_code,
+      agencyName: row.agency_name,
+      oldCreditLimit: Number(row.old_credit_limit || 0),
+      newCreditLimit: Number(row.new_credit_limit || 0),
+      oldMaxDebtDays: Number(row.old_max_debt_days || 30),
+      newMaxDebtDays: Number(row.new_max_debt_days || 30),
+      oldPaymentTerms: row.old_payment_terms || undefined,
+      newPaymentTerms: row.new_payment_terms || undefined,
+      oldTemporaryLimit: Number(row.old_temporary_limit || 0),
+      newTemporaryLimit: Number(row.new_temporary_limit || 0),
+      reason: row.reason,
+      performedBy: row.performed_by,
+      performedByRole: row.performed_by_role,
+      performedAt: new Date(row.performed_at),
+    });
+  }
+
+  private getInitialSeedLogs(): Partial<CreditLimitLog>[] {
+    return [
       {
         id: randomUUID(),
         agencyId: 'cust-001',
@@ -125,7 +248,13 @@ export class CreditLimitService implements OnModuleInit {
         performedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12),
       },
     ];
+  }
 
+  /**
+   * Khởi tạo các bản ghi lịch sử mẫu phục vụ kiểm toán và demo in-memory
+   */
+  private seedInitialLogs(): void {
+    const initialSeedData = this.getInitialSeedLogs();
     for (const item of initialSeedData) {
       this.creditLimitLogs.push(new CreditLimitLog(item));
     }
@@ -315,8 +444,28 @@ export class CreditLimitService implements OnModuleInit {
 
     const auditSummary = `Điều chỉnh hạn mức công nợ đại lý ${currentEntity.agencyCode} (${currentEntity.agencyName}) từ ${oldCreditLimit.toLocaleString('vi-VN')} đ (thời hạn: ${oldMaxDebtDays} ngày) thành ${newCreditLimit.toLocaleString('vi-VN')} đ (thời hạn: ${newMaxDebtDays} ngày). Lý do: ${dto.reason.trim()}`;
 
+    // Khởi tạo đối tượng CreditLimitLog để lưu lịch sử
+    const logItem = new CreditLimitLog({
+      id: randomUUID(),
+      agencyId,
+      agencyCode: currentEntity.agencyCode,
+      agencyName: currentEntity.agencyName,
+      oldCreditLimit,
+      newCreditLimit,
+      oldMaxDebtDays,
+      newMaxDebtDays,
+      oldPaymentTerms: String(oldValues.paymentTerms),
+      newPaymentTerms: currentEntity.paymentTerms,
+      oldTemporaryLimit: Number(currentEntity.temporaryCreditLimit || 0),
+      newTemporaryLimit: Number(dto.temporaryCreditLimit ?? currentEntity.temporaryCreditLimit ?? 0),
+      reason: dto.reason.trim(),
+      performedBy: actorName,
+      performedByRole: String(actorRole),
+      performedAt: new Date(),
+    });
+
     // =========================================================================
-    // DATABASE TRANSACTION: Cập nhật hạn mức & Ghi Audit Log trong cùng 1 Transaction
+    // DATABASE TRANSACTION: Cập nhật hạn mức, Ghi Audit Log & Ghi app_credit_limit_logs
     // =========================================================================
     if (this.dbService?.isConnected()) {
       const client = await this.dbService.getClient();
@@ -358,6 +507,37 @@ export class CreditLimitService implements OnModuleInit {
           ],
         );
 
+        // 3. Ghi vết điều chỉnh hạn mức vào bảng app_credit_limit_logs vĩnh viễn
+        await client.query(
+          `INSERT INTO app_credit_limit_logs (
+             id, agency_id, agency_code, agency_name,
+             old_credit_limit, new_credit_limit,
+             old_max_debt_days, new_max_debt_days,
+             old_payment_terms, new_payment_terms,
+             old_temporary_limit, new_temporary_limit,
+             reason, performed_by, performed_by_role, performed_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+           ON CONFLICT (id) DO NOTHING;`,
+          [
+            logItem.id,
+            logItem.agencyId,
+            logItem.agencyCode,
+            logItem.agencyName,
+            logItem.oldCreditLimit,
+            logItem.newCreditLimit,
+            logItem.oldMaxDebtDays,
+            logItem.newMaxDebtDays,
+            logItem.oldPaymentTerms || null,
+            logItem.newPaymentTerms || null,
+            logItem.oldTemporaryLimit ?? 0,
+            logItem.newTemporaryLimit ?? 0,
+            logItem.reason,
+            logItem.performedBy,
+            logItem.performedByRole || null,
+            logItem.performedAt,
+          ],
+        );
+
         await client.query('COMMIT');
       } catch (err: unknown) {
         await client.query('ROLLBACK');
@@ -370,14 +550,14 @@ export class CreditLimitService implements OnModuleInit {
       }
     }
 
-    // 3. Đồng bộ CustomersService in-memory
+    // 4. Đồng bộ CustomersService in-memory
     await this.customersService.updateCustomerCredit(agencyId, {
       creditLimit: newCreditLimit,
       maxDebtDays: newMaxDebtDays,
       paymentTerms: dto.paymentTerms,
     });
 
-    // 4. Cập nhật AgencyCreditLimit Entity
+    // 5. Cập nhật AgencyCreditLimit Entity
     currentEntity.creditLimit = newCreditLimit;
     currentEntity.maxDebtDays = newMaxDebtDays;
     if (dto.paymentTerms) currentEntity.paymentTerms = dto.paymentTerms;
@@ -417,26 +597,10 @@ export class CreditLimitService implements OnModuleInit {
       }
     }
 
-    // 5. Ghi nhận CreditLimitLog (Lịch sử thay đổi)
-    const logItem = new CreditLimitLog({
-      id: randomUUID(),
-      agencyId,
-      agencyCode: currentEntity.agencyCode,
-      agencyName: currentEntity.agencyName,
-      oldCreditLimit,
-      newCreditLimit,
-      oldMaxDebtDays,
-      newMaxDebtDays,
-      oldPaymentTerms: String(oldValues.paymentTerms),
-      newPaymentTerms: currentEntity.paymentTerms,
-      reason: dto.reason.trim(),
-      performedBy: actorName,
-      performedByRole: String(actorRole),
-      performedAt: new Date(),
-    });
+    // 6. Ghi nhận CreditLimitLog vào in-memory cache
     this.creditLimitLogs.unshift(logItem);
 
-    // 6. Ghi nhận AuditLog qua AuditLogsService
+    // 7. Ghi nhận AuditLog qua AuditLogsService
     await this.auditLogsService.recordLog({
       userId: currentUser?.userId || 'usr-acc-006',
       action: AuditAction.UPDATE,
@@ -493,10 +657,32 @@ export class CreditLimitService implements OnModuleInit {
   }
 
   /**
-   * Lấy lịch sử thay đổi hạn mức của đại lý (CreditLimitLog)
+   * Lấy lịch sử thay đổi hạn mức của đại lý (CreditLimitLog) từ database thật hoặc in-memory
    */
   async getCreditLimitLogs(agencyId: string): Promise<CreditLimitLog[]> {
-    return this.creditLimitLogs.filter((log) => log.agencyId === agencyId);
+    if (this.dbService?.isConnected()) {
+      try {
+        const client = await this.dbService.getClient();
+        try {
+          const res = await client.query(
+            `SELECT * FROM app_credit_limit_logs
+             WHERE agency_id = $1 OR LOWER(agency_code) = LOWER($1)
+             ORDER BY performed_at DESC;`,
+            [agencyId],
+          );
+          if (res.rows && res.rows.length > 0) {
+            return res.rows.map((row) => this.mapRowToCreditLimitLog(row));
+          }
+        } finally {
+          client.release();
+        }
+      } catch (err) {
+        console.error('[CreditLimitService] Lỗi truy vấn logs theo agencyId:', err);
+      }
+    }
+    return this.creditLimitLogs.filter(
+      (log) => log.agencyId === agencyId || log.agencyCode.toLowerCase() === agencyId.toLowerCase(),
+    );
   }
 
   /** Alias phục vụ tương thích ngược */

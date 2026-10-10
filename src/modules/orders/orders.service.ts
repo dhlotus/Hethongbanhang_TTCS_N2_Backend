@@ -4,27 +4,19 @@ import {
   forwardRef,
   Inject,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import type { PoolClient } from 'pg';
+import { randomUUID } from 'crypto';
 import { DiscountPoliciesService } from '../discount-policies/discount-policies.service';
 import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
-import { CustomerEntity } from '../customers/entities/customer.entity';
-import { ProductsService } from '../products/products.service';
-import { DatabaseService } from '../../database/database.service';
-import { ProductStatus } from '../../common/enums/product-status.enum';
-import { UserRole } from '../../common/enums/user-role.enum';
-import { ICurrentUser } from '../auth/interfaces/current-user.interface';
-import {
-  CustomerPurchaseHistoryResponse,
-  LatestOrderItem,
-  LatestOrderSummary,
-  LOOKBACK_MONTHS,
-  SuggestedProductItem,
-} from './dto/customer-purchase-history.dto';
+import { CustomerEntity, CustomerStatus } from '../customers/entities/customer.entity';
 import {
   CreateOrderDto,
   CreateOrderLineDto,
@@ -34,10 +26,25 @@ import {
 } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
-
 import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
 import { OrderStatus, PaymentStatus } from './entities/order-status.enum';
+import { DatabaseService } from '../../database/database.service';
+import { ProductsService } from '../products/products.service';
+import { DecideOrderDto } from './dto/decide-order.dto';
+import { OrderApprovalAction } from './entities/order-approval-action.enum';
+import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { InventoryService } from '../inventory/inventory.service';
+import { UserRole } from '../../common/enums/user-role.enum';
+import { ProductStatus } from '../../common/enums/product-status.enum';
+import {
+  CustomerPurchaseHistoryResponse,
+  LatestOrderItem,
+  LatestOrderSummary,
+  LOOKBACK_MONTHS,
+  SuggestedProductItem,
+} from './dto/customer-purchase-history.dto';
 
 interface PricedOrderLineDto extends CreateOrderLineDto {
   minPrice?: number;
@@ -56,11 +63,36 @@ interface OrderLineCalculation {
 }
 
 /**
+ * Async Lock ngắn phòng ngừa race condition khi 2 Sales cùng chốt đơn (SN-39)
+ */
+class AsyncLock {
+  private queue: Promise<void> = Promise.resolve();
+
+  async acquire<T>(fn: () => Promise<T> | T): Promise<T> {
+    let release: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prev = this.queue;
+    this.queue = this.queue.then(() => wait);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+}
+
+/**
  * Service Quản lý Đặt hàng B2B (SN-38 & SN-39)
  */
 @Injectable()
 export class OrdersService implements OnModuleInit {
+  private readonly logger = new Logger(OrdersService.name);
   private readonly orders = new Map<string, OrderEntity>();
+  private readonly memoryApprovalHistory = new Map<string, OrderApprovalHistoryEntity[]>();
+  private readonly orderLock = new AsyncLock();
 
   constructor(
     private readonly customersService: CustomersService,
@@ -70,84 +102,112 @@ export class OrdersService implements OnModuleInit {
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService?: ProductsService,
     @Optional() private readonly databaseService?: DatabaseService,
+    @Optional() private readonly inventoryService?: InventoryService,
   ) {
-    this.seedInitialOrders();
+    if (!this.databaseService || !this.databaseService.isConnected()) {
+      for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
+    }
   }
 
   async onModuleInit(): Promise<void> {
-
-    if (this.databaseService && !this.databaseService.isConnected()) {
-      (this as any).databaseService = undefined;
-      for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
-    }
-    if (!this.databaseService) return;
-
-    await this.databaseService.query(`
-      CREATE TABLE IF NOT EXISTS app_order_records (
-        id TEXT PRIMARY KEY,
-        order_code TEXT NOT NULL UNIQUE,
-        payload JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL
-      )
-    `);
-    await this.databaseService.query(
-      'CREATE INDEX IF NOT EXISTS idx_app_order_records_created_at ON app_order_records(created_at DESC)',
-    );
-
-    await this.databaseService.query(`
-      CREATE TABLE IF NOT EXISTS app_order_storage_state (
-        state_key TEXT PRIMARY KEY,
-        seeded BOOLEAN NOT NULL DEFAULT FALSE
-      )
-    `);
-    await this.ensureApprovalTables();
-    const client = await this.databaseService.getClient();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `INSERT INTO app_order_storage_state (state_key, seeded)
-         VALUES ('orders', FALSE) ON CONFLICT (state_key) DO NOTHING`,
-      );
-      const stateResult = await client.query(
-        `SELECT seeded FROM app_order_storage_state WHERE state_key = 'orders' FOR UPDATE`,
-      );
-      if (!stateResult.rows[0]?.seeded) {
-        const countResult = await client.query(
-          'SELECT COUNT(*)::int AS count FROM app_order_records',
-        );
-        if (Number(countResult.rows[0]?.count ?? 0) === 0) {
-          for (const order of this.seedInitialOrders()) {
-            await client.query(
-              `INSERT INTO app_order_records (id, order_code, payload, created_at, updated_at)
-               VALUES ($1, $2, $3::jsonb, $4, $5)
-               ON CONFLICT (id) DO NOTHING`,
-              [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
-            );
-          }
-        }
-        await client.query(
-          `UPDATE app_order_storage_state SET seeded = TRUE WHERE state_key = 'orders'`,
-        );
+    if (!this.databaseService || !this.databaseService.isConnected()) {
+      if (this.orders.size === 0) {
+        for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
       }
-      await client.query('COMMIT');
+      return;
+    }
+
+    try {
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS app_order_records (
+          id TEXT PRIMARY KEY,
+          order_code TEXT NOT NULL UNIQUE,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+      await this.databaseService.query(
+        'CREATE INDEX IF NOT EXISTS idx_app_order_records_created_at ON app_order_records(created_at DESC)',
+      );
+
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS app_order_storage_state (
+          state_key TEXT PRIMARY KEY,
+          seeded BOOLEAN NOT NULL DEFAULT FALSE
+        )
+      `);
+      await this.ensureApprovalTables();
+      const client = await this.databaseService.getClient();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO app_order_storage_state (state_key, seeded)
+           VALUES ('orders', FALSE) ON CONFLICT (state_key) DO NOTHING`,
+        );
+        const stateResult = await client.query(
+          `SELECT seeded FROM app_order_storage_state WHERE state_key = 'orders' FOR UPDATE`,
+        );
+        if (!stateResult.rows[0]?.seeded) {
+          const countResult = await client.query(
+            'SELECT COUNT(*)::int AS count FROM app_order_records',
+          );
+          if (Number(countResult.rows[0]?.count ?? 0) === 0) {
+            for (const order of this.seedInitialOrders()) {
+              await client.query(
+                `INSERT INTO app_order_records (id, order_code, payload, created_at, updated_at)
+                 VALUES ($1, $2, $3::jsonb, $4, $5)
+                 ON CONFLICT (id) DO NOTHING`,
+                [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
+              );
+            }
+          }
+          await client.query(
+            `UPDATE app_order_storage_state SET seeded = TRUE WHERE state_key = 'orders'`,
+          );
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+
+      if (this.databaseService.isConnected()) {
+        try {
+          const rows = await this.databaseService.query<{ payload: unknown }>(
+            'SELECT payload FROM app_order_records',
+          );
+          for (const row of rows) {
+            try {
+              const order = this.restoreOrder(row.payload);
+              this.orders.set(order.id, order);
+            } catch {
+              // ignore
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
     } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+      this.logger.warn(`[PostgreSQL] Lỗi khởi tạo bảng đơn hàng, chuyển sang bộ nhớ tạm: ${(error as Error).message}`);
+      if (this.orders.size === 0) {
+        for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
+      }
     }
   }
 
   private async ensureApprovalTables(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.ensureApprovalHistoryTable();
     await this.ensureInventoryReservationTable();
     await this.ensureApprovalHistoryImmutability();
   }
 
   private async ensureApprovalHistoryTable(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_approval_history (
         id BIGSERIAL PRIMARY KEY,
@@ -167,7 +227,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureInventoryReservationTable(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
         id BIGSERIAL PRIMARY KEY,
@@ -193,7 +253,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureApprovalHistoryImmutability(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.databaseService.query(`
       CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
       RETURNS TRIGGER AS $$
@@ -226,8 +286,8 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async saveOrder(order: OrderEntity): Promise<void> {
-    if (!this.databaseService) {
-      this.orders.set(order.id, order);
+    this.orders.set(order.id, order);
+    if (!this.databaseService || !this.databaseService.isConnected()) {
       return;
     }
     await this.databaseService.query(
@@ -249,6 +309,9 @@ export class OrdersService implements OnModuleInit {
   getReservedStockMap(excludeOrderId?: string): Map<string, number> {
     const map = new Map<string, number>();
     const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
     ]);
@@ -288,10 +351,10 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Validation Guard kiểm tra số lượng đặt với tồn khả dụng (SN-39):
+   * Validation Guard kiểm tra số lượng đặt với tồn khả dụng (SN-39 & SN-42):
    * availableStock = physicalStock - reservedStock
-   * Nếu orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
-   * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Còn tối đa [availableStock] [Đơn vị])"
+   * Nếu availableStock <= 0 hoặc orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
+   * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Hàng trong kho đã hết / Vượt quá tồn khả dụng...)"
    */
   validateOrderLinesAvailableStock(
     lines: CreateOrderLineDto[],
@@ -310,23 +373,32 @@ export class OrdersService implements OnModuleInit {
         product.id || product.sku,
         excludeOrderId,
       );
-      const availableStock = Math.max(0, physicalStock - reservedStock);
+      const computedAvailableStock = Math.max(0, physicalStock - reservedStock);
+      const availableStock = typeof product.availableStock === 'number'
+        ? Math.min(product.availableStock, computedAvailableStock)
+        : computedAvailableStock;
 
       const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
       const orderBaseQuantity = Math.round(line.quantity * conversionRate);
+
+      const unitName = line.unit || product.baseUnit || 'sản phẩm';
+      const skuName = product.name || line.productName || line.productSku;
+
+      if (availableStock <= 0) {
+        throw new BadRequestException(
+          `Sản phẩm ${skuName}: Hàng trong kho đã hết / Vượt quá tồn khả dụng (Còn lại 0 ${unitName})`,
+        );
+      }
 
       if (orderBaseQuantity > availableStock) {
         const maxAllowedInUnit =
           conversionRate > 1
             ? Math.floor(availableStock / conversionRate)
             : availableStock;
-        const unitName = line.unit || product.baseUnit;
-        const skuName = product.name || line.productName || line.productSku;
         throw new BadRequestException(
-          `Sản phẩm ${skuName} vượt quá tồn khả dụng (Còn tối đa ${maxAllowedInUnit} ${unitName})`,
+          `Sản phẩm ${skuName} vượt quá tồn khả dụng (Hàng trong kho đã hết / Vượt quá tồn khả dụng: Còn tối đa ${maxAllowedInUnit} ${unitName})`,
         );
       }
-
     }
   }
 
@@ -405,7 +477,7 @@ export class OrdersService implements OnModuleInit {
       }),
       subtotal: listTotal,
       approvalReason: item.requiresApproval
-        ? `Giá bán SKU ${item.productSku} thấp hơn giá sàn ${item.minPrice?.toLocaleString('vi-VN')} đ`
+        ? `SKU ${item.productSku}: giá bán ${unitPrice.toLocaleString('vi-VN')} đ thấp hơn giá sàn ${item.minPrice?.toLocaleString('vi-VN')} đ`
         : undefined,
     };
   }
@@ -453,10 +525,11 @@ export class OrdersService implements OnModuleInit {
       requestedPriceListId,
     );
     const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
-    if (item.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
-      throw new BadRequestException(
-        `Đơn vị cơ sở của SKU ${line.productSku} không khớp với bảng giá`,
-      );
+    if (item.baseUnit && line.baseUnit && item.baseUnit.toLowerCase() !== line.baseUnit.toLowerCase()) {
+      // Tự động chuẩn hóa theo đơn vị cơ sở của Bảng giá hiện hành
+      line.baseUnit = item.baseUnit;
+    } else if (item.baseUnit && !line.baseUnit) {
+      line.baseUnit = item.baseUnit;
     }
 
     const calculatedPrice = this.calculateLinePrices(line, item, conversionRate);
@@ -537,6 +610,7 @@ export class OrdersService implements OnModuleInit {
         customerGroup: 'AGENT_LEVEL_1',
         salesRepId: 'usr-sale-01',
         salesRepName: 'Trần Văn Long',
+        region: 'Miền Nam',
         deliveryPoint: {
           id: 'dp-001-1',
           name: 'Kho Tổng Phú Nhuận',
@@ -640,6 +714,7 @@ export class OrdersService implements OnModuleInit {
         customerGroup: 'RETAIL',
         salesRepId: 'usr-sale-01',
         salesRepName: 'Trần Văn Long',
+        region: 'Miền Bắc',
         deliveryPoint: {
           id: 'dp-003-1',
           name: 'Điểm Bán Tân Bình (Mặt Tiền)',
@@ -806,9 +881,6 @@ export class OrdersService implements OnModuleInit {
       }),
     ];
 
-    for (const ord of initialOrders) {
-      this.orders.set(ord.id, ord);
-    }
     return initialOrders;
   }
 
@@ -819,7 +891,65 @@ export class OrdersService implements OnModuleInit {
     dto: CreateOrderDto,
     salesRep?: { id?: string; name?: string },
   ): Promise<OrderEntity> {
-    const customer = await this.customersService.getCustomerById(dto.customerId);
+    return this.orderLock.acquire(async () => {
+      // Chuẩn hóa DTO nếu gửi từ Portal dạng items & deliveryAddress
+      if ((!dto.lines || dto.lines.length === 0) && dto.items && dto.items.length > 0) {
+        dto.lines = dto.items.map((item) => {
+          const product = this.productsService?.findProductInternal(item.productId);
+          const unit = item.unit || product?.baseUnit || 'Cái';
+          return {
+            productId: item.productId,
+            productSku: product?.sku || item.productId,
+            productName: product?.name || 'Sản phẩm',
+            unit,
+            baseUnit: product?.baseUnit || unit,
+            conversionRate: 1,
+            quantity: Number(item.quantity),
+            unitPrice: Number(item.price ?? product?.price ?? 0),
+            listPrice: Number(product?.price ?? item.price ?? 0),
+            discountPercent: Number(item.discountPercent ?? 0),
+            isPriceManuallyEdited: false,
+            stockAvailable: product?.availableStock ?? product?.stockQuantity,
+          };
+        });
+      }
+
+      if (!dto.deliveryPoint && dto.deliveryAddress) {
+        dto.deliveryPoint = {
+          name: 'Địa chỉ giao hàng',
+          address: dto.deliveryAddress,
+        };
+      }
+
+      const requestedStatus = dto.status || OrderStatus.PENDING;
+      if (requestedStatus !== OrderStatus.DRAFT && (!dto.lines || dto.lines.length === 0)) {
+        throw new BadRequestException('Đơn hàng phải có ít nhất một sản phẩm');
+      }
+
+      // 0. API Validation Guard (SN-39 & SN-42): Kiểm tra số lượng đặt với tồn khả dụng
+      if (dto.lines && dto.lines.length > 0) {
+        this.validateOrderLinesAvailableStock(dto.lines);
+      }
+
+      const customer = await this.customersService.getCustomerById(dto.customerId);
+
+    // Kiểm tra trạng thái đại lý (SN-36: Đại lý bị khóa không tạo được đơn mới, kể cả trên cổng đặt hàng)
+    if (customer.status === CustomerStatus.LOCKED) {
+      throw new BadRequestException(
+        `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do khóa: ${customer.lockReason || 'Không xác định'}). Không thể tạo đơn hàng mới, kể cả trên cổng đặt hàng!`,
+      );
+    }
+
+    // 1. Kiểm tra điều kiện công nợ của đại lý (Task SN-41)
+    const debtStatus = await this.customersService.getCustomerDebtStatus(dto.customerId);
+
+    // Trường hợp 1: Chặn hoàn toàn (Hard Block) nếu nợ quá hạn vượt quá số ngày cho phép
+    if (!debtStatus.canCreateOrder) {
+      throw new BadRequestException(
+        debtStatus.blockReason ||
+          'Đại lý có khoản nợ quá hạn vượt quá thời hạn cho phép. Không thể tạo đơn hàng mới.',
+      );
+    }
 
     // Xác thực điểm giao hàng (SN-31: Đơn hàng chọn điểm giao trong danh sách của đúng đại lý đó)
     let assignedDeliveryPoint: IOrderDeliveryPoint | undefined;
@@ -876,14 +1006,38 @@ export class OrdersService implements OnModuleInit {
       approvalReasons,
     } = this.calculateOrderTotals(pricing.lines);
 
-    const orderId = `ord-${Date.now()}`;
+    // 2. Kiểm tra hạn mức công nợ (Task SN-41 - Approval Flow)
+    // Trường hợp 2: Nếu (Tổng tiền đơn hàng mới + Công nợ hiện tại) > Hạn mức công nợ
+    const currentDebt = customer.currentDebt || 0;
+    const creditLimit = customer.creditLimit || 0;
+    const projectedDebt = currentDebt + grandTotal;
+    const isCreditLimitExceeded = creditLimit > 0 && projectedDebt > creditLimit;
+    const creditLimitExceededAmount = isCreditLimitExceeded
+      ? projectedDebt - creditLimit
+      : 0;
+
+    const requiresOrderApproval = requiresApproval || isCreditLimitExceeded;
+    let orderStatus = requestedStatus === OrderStatus.APPROVED
+      ? OrderStatus.PENDING
+      : requestedStatus;
+    let orderNote = dto.note;
+    const orderApprovalReasons = [...approvalReasons];
+
+    if (isCreditLimitExceeded) {
+      orderApprovalReasons.push(
+        `Vượt hạn mức công nợ ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ (công nợ dự kiến ${projectedDebt.toLocaleString('vi-VN')} đ / hạn mức ${creditLimit.toLocaleString('vi-VN')} đ)`,
+      );
+      if (requestedStatus !== OrderStatus.DRAFT) {
+        orderStatus = OrderStatus.PENDING_APPROVAL;
+      }
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    } else if (isCreditLimitExceeded) {
+      const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ)]`;
+      orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
+    }
+    const orderId = `ord-${randomUUID()}`;
     const orderCode = this.generateOrderCode();
-    const requestedStatus = dto.status || OrderStatus.PENDING;
-    // Approval is only allowed through the guarded status endpoint.
-    const orderStatus =
-      requestedStatus === OrderStatus.APPROVED
-        ? OrderStatus.PENDING
-        : requestedStatus;
 
     const newOrder = new OrderEntity({
       id: orderId,
@@ -894,72 +1048,184 @@ export class OrdersService implements OnModuleInit {
       customerGroup: customer.customerGroup,
       salesRepId: salesRep?.id || customer.salesRepId,
       salesRepName: salesRep?.name || customer.salesRepName,
+      region: customer.region || (assignedDeliveryPoint?.address?.includes('Hà Nội') ? 'Miền Bắc' : 'Miền Nam'),
       deliveryPoint: assignedDeliveryPoint,
       deliveryDate: dto.deliveryDate,
       lines,
       subtotal,
       totalDiscount,
       grandTotal,
-      note: dto.note,
+      note: orderNote,
       status: orderStatus,
       paymentStatus: PaymentStatus.UNPAID,
       priceListId: pricing.priceListId || dto.priceListId,
-      requiresApproval,
-      approvalReasons,
+      requiresApproval: requiresOrderApproval,
+      approvalReasons: orderApprovalReasons,
+      isCreditLimitExceeded,
+      creditLimitExceededAmount,
+      createdSource: dto.createdSource || (salesRep ? 'SALES_REP' : 'AGENCY_PORTAL'),
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    this.orders.set(orderId, newOrder);
+    await this.saveOrder(newOrder);
+
+    // 3. THÊM LOGIC TRỪ TỒN KHO REAL-TIME DB & MEMORY (Task SN-42)
+    // Ngay khi đơn được khởi tạo ở trạng thái PENDING (hoặc các trạng thái hợp lệ),
+    // lập tức cập nhật trong Database PostgreSQL / Memory:
+    // availableStock = availableStock - quantity cho từng sản phẩm trong đơn.
+    if (this.productsService && newOrder.lines) {
+      for (const line of newOrder.lines) {
+        const product = this.productsService.findProductInternal(
+          line.productId || line.productSku,
+        );
+        if (product) {
+          const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
+          const deductQuantity = line.baseQuantity || Math.round((Number(line.quantity) || 0) * conversionRate);
+
+          const currentStock = typeof product.availableStock === 'number'
+            ? product.availableStock
+            : Math.max(0, (product.stockQuantity ?? 0) - this.getReservedStock(product.id || product.sku));
+
+          if (currentStock - deductQuantity < 0) {
+            throw new BadRequestException(
+              `Sản phẩm ${product.name || line.productName || line.productSku} vượt quá tồn khả dụng (Còn lại: ${currentStock}, yêu cầu: ${deductQuantity})`
+            );
+          }
+
+          product.availableStock = Math.max(0, currentStock - deductQuantity);
+          product.availableQuantity = product.availableStock;
+          this.productsService.deductAvailableStock(product.id || product.sku, deductQuantity);
+
+          if (this.databaseService?.isConnected()) {
+            try {
+              this.databaseService.query(
+                'UPDATE app_inventory_stock_balances SET physical_quantity = GREATEST(0, physical_quantity - $1), updated_at = CURRENT_TIMESTAMP WHERE product_sku = $2',
+                [deductQuantity, (product.sku || line.productSku).trim().toUpperCase()]
+              ).catch(() => {});
+            } catch {
+              // Bỏ qua nếu bảng PostgreSQL chưa tồn tại
+            }
+          }
+        }
+      }
+    }
+
     return newOrder;
+    });
   }
 
   /**
-   * Lấy danh sách đơn hàng có phân trang & bộ lọc (SN-38)
+   * Lấy danh sách đơn hàng có phân trang & bộ lọc (SN-38, SN-39 & SN-46)
+   * - Hỗ trợ lọc theo trạng thái, đại lý, nhân viên, khu vực, khoảng thời gian
+   * - Hiển thị tổng tiền của tập kết quả đang lọc (totalAmount)
+   * - Phân quyền: Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn của đại lý mình phụ trách
    */
-  async findAllOrders(query: QueryOrdersDto): Promise<{
+  async findAllOrders(
+    query: QueryOrdersDto,
+    currentUser?: { id?: string; role?: string; username?: string; roles?: string[] },
+  ): Promise<{
     data: OrderEntity[];
     total: number;
+    totalAmount: number;
     page: number;
     limit: number;
     totalPages: number;
   }> {
-    let list = Array.from(this.orders.values());
+    let list = this.databaseService?.isConnected()
+      ? (await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
+          'SELECT payload FROM app_order_records ORDER BY created_at DESC',
+        )).map((row) => this.restoreOrder(row.payload))
+      : Array.from(this.orders.values());
 
     // Sắp xếp đơn mới nhất lên đầu
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    if (query.status && (query.status as string) !== 'ALL') {
-      list = list.filter((o) => o.status === query.status);
+    // 1. Phân quyền theo vai trò (SN-46):
+    // Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn do mình phụ trách
+    const userRole = currentUser?.role || (currentUser?.roles && currentUser.roles[0]);
+    const isOnlySalesRep = userRole === 'SALES_REP';
+
+    if (isOnlySalesRep && (currentUser?.id || currentUser?.username)) {
+      const repId = currentUser.id;
+      const repName = currentUser.username?.toLowerCase();
+      list = list.filter((o) => {
+        const matchId = repId && o.salesRepId === repId;
+        const matchName = repName && o.salesRepName?.toLowerCase().includes(repName);
+        return matchId || matchName;
+      });
     }
 
-    if (query.customerId) {
+    // 2. Lọc theo trạng thái đơn hàng
+    if (query.status && (query.status as string) !== 'ALL') {
+      const st = (query.status as string).toUpperCase().trim();
+      list = list.filter((o) => o.status && o.status.toUpperCase().trim() === st);
+    }
+
+    // 3. Lọc theo đại lý (customerId)
+    if (query.customerId && query.customerId !== 'ALL') {
       list = list.filter(
-        (o) =>
-          o.customerId === query.customerId ||
-          (query.customerId === 'cust-dl-0001' && o.customerId === 'cust-001') ||
-          (query.customerId === 'cust-001' && o.customerId === 'cust-dl-0001'),
+        (o) => o.customerId === query.customerId || o.customerCode === query.customerId,
       );
     }
 
-    if (query.salesRepId) {
-      list = list.filter((o) => o.salesRepId === query.salesRepId);
+    // 4. Lọc theo nhân viên kinh doanh (salesRepId / assignedUser)
+    const salesRepFilter = query.salesRepId || query.assignedUser;
+    if (salesRepFilter && salesRepFilter !== 'ALL') {
+      const repQuery = salesRepFilter.toLowerCase().trim();
+      list = list.filter(
+        (o) =>
+          o.salesRepId === salesRepFilter ||
+          (o.salesRepName && o.salesRepName.toLowerCase().includes(repQuery)),
+      );
     }
 
-    if (query.search) {
+    // 5. Lọc theo khu vực (region: Miền Bắc, Miền Trung, Miền Nam...)
+    if (query.region && query.region !== 'ALL') {
+      const reg = query.region.toLowerCase().trim();
+      list = list.filter((o) => {
+        const inOrder = o.region && o.region.toLowerCase().includes(reg);
+        const inDelivery = o.deliveryPoint?.address?.toLowerCase().includes(reg);
+        return inOrder || inDelivery;
+      });
+    }
+
+    // 6. Lọc theo khoảng thời gian (fromDate, toDate)
+    if (query.fromDate) {
+      const fromTime = new Date(query.fromDate).getTime();
+      if (!isNaN(fromTime)) {
+        list = list.filter((o) => new Date(o.createdAt).getTime() >= fromTime);
+      }
+    }
+    if (query.toDate) {
+      const toDateObj = new Date(query.toDate);
+      toDateObj.setHours(23, 59, 59, 999);
+      const toTime = toDateObj.getTime();
+      if (!isNaN(toTime)) {
+        list = list.filter((o) => new Date(o.createdAt).getTime() <= toTime);
+      }
+    }
+
+    // 7. Tìm kiếm tự do (mã đơn, mã đại lý, tên đại lý, sđt, người nhận, nhân viên)
+    if (query.search && query.search.trim()) {
       const q = query.search.toLowerCase().trim();
       list = list.filter(
         (o) =>
-          o.orderCode.toLowerCase().includes(q) ||
-          o.customerName.toLowerCase().includes(q) ||
-          o.customerCode.toLowerCase().includes(q) ||
-          o.deliveryPoint?.receiverName.toLowerCase().includes(q) ||
-          o.deliveryPoint?.phone.includes(q),
+          (o.orderCode && o.orderCode.toLowerCase().includes(q)) ||
+          (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+          (o.customerCode && o.customerCode.toLowerCase().includes(q)) ||
+          (o.salesRepName && o.salesRepName.toLowerCase().includes(q)) ||
+          (o.deliveryPoint?.receiverName &&
+            o.deliveryPoint.receiverName.toLowerCase().includes(q)) ||
+          (o.deliveryPoint?.phone && o.deliveryPoint.phone.includes(q)),
       );
     }
 
-    const page = Math.max(1, query.page || 1);
-    const limit = Math.max(1, query.limit || 10);
+    // 8. Tính tổng tiền của tập kết quả đang lọc (Yêu cầu cốt lõi SN-46)
+    const totalAmount = list.reduce((sum, o) => sum + (o.grandTotal || 0), 0);
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 10);
     const total = list.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const start = (page - 1) * limit;
@@ -968,6 +1234,7 @@ export class OrdersService implements OnModuleInit {
     return {
       data,
       total,
+      totalAmount,
       page,
       limit,
       totalPages,
@@ -975,13 +1242,245 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
+   * Bổ sung cảnh báo nếu đại lý của đơn hàng dở đang bị khóa giao dịch (SN-36)
+   */
+  private async checkAndAttachLockWarning(order: OrderEntity): Promise<OrderEntity> {
+    try {
+      const customer = await this.customersService.getCustomerById(order.customerId);
+      if (customer.status === CustomerStatus.LOCKED) {
+        order.isCustomerLocked = true;
+        order.warningMessage = `CẢNH BÁO (SN-36): Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không xác định'}). Đơn đang dở vẫn xử lý tiếp được nhưng cần cảnh báo trước khi duyệt/xuất kho.`;
+      } else {
+        order.isCustomerLocked = false;
+        order.warningMessage = undefined;
+      }
+    } catch {
+      // Bỏ qua nếu không tìm thấy đại lý
+    }
+    return order;
+  }
+
+  /**
    * Lấy chi tiết đơn hàng theo ID
    */
   async findOrderById(id: string): Promise<OrderEntity> {
-    const order = this.orders.get(id);
+    const rows = this.databaseService?.isConnected()
+      ? await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
+          'SELECT payload FROM app_order_records WHERE id = $1 OR order_code = $1 LIMIT 1',
+          [id],
+        )
+      : [];
+    const order = this.databaseService?.isConnected()
+      ? (rows[0] ? this.restoreOrder(rows[0].payload) : undefined)
+      : this.orders.get(id);
     if (!order) {
       throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
     }
+    return this.checkAndAttachLockWarning(order);
+  }
+
+  async getApprovalHistory(orderId: string): Promise<OrderApprovalHistoryEntity[]> {
+    const order = await this.findOrderById(orderId);
+    if (!this.databaseService || !this.databaseService.isConnected()) return this.memoryApprovalHistory.get(orderId) ?? [];
+    const rows = await this.databaseService.query<{
+      [key: string]: unknown;
+      id: number;
+      order_id: string;
+      action: OrderApprovalAction;
+      comment: string | null;
+      approver_id: string;
+      approver_name: string;
+      approver_roles: string[];
+      created_at: Date;
+    }>(
+      `SELECT id, order_id, action, comment, approver_id, approver_name,
+              approver_roles, created_at
+       FROM app_order_approval_history
+       WHERE order_id = $1
+       ORDER BY created_at DESC, id DESC`,
+      [order.id],
+    );
+    return rows.map((row) => this.toApprovalHistoryEntity(row));
+  }
+
+  private toApprovalHistoryEntity(row: {
+    id: number;
+    order_id: string;
+    action: OrderApprovalAction;
+    comment: string | null;
+    approver_id: string;
+    approver_name: string;
+    approver_roles: string[];
+    created_at: Date;
+  }): OrderApprovalHistoryEntity {
+    return new OrderApprovalHistoryEntity({
+      id: row.id,
+      orderId: row.order_id,
+      action: row.action,
+      comment: row.comment,
+      approverId: row.approver_id,
+      approverName: row.approver_name,
+      approverRoles: row.approver_roles,
+      createdAt: new Date(row.created_at),
+    });
+  }
+
+  async decideOrder(
+    orderId: string,
+    dto: DecideOrderDto,
+    reviewer: ICurrentUser,
+  ): Promise<OrderEntity> {
+    if (dto.action !== OrderApprovalAction.APPROVE && !dto.comment?.trim()) {
+      throw new BadRequestException('Từ chối hoặc trả lại đơn cần có ý kiến.');
+    }
+    if (!this.databaseService || !this.databaseService.isConnected()) {
+      return this.decideOrderInMemory(orderId, dto, reviewer);
+    }
+
+    if (dto.action === OrderApprovalAction.APPROVE) {
+      if (!this.inventoryService) {
+        throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
+      }
+      await this.inventoryService.ensureStockBalanceTable();
+    }
+
+    const client = await this.databaseService.getClient();
+    try {
+      await client.query('BEGIN');
+      const order = await this.loadLockedOrder(client, orderId);
+      this.ensureOrderCanBeDecided(order, dto.action);
+      if (dto.action === OrderApprovalAction.APPROVE) {
+        await this.reserveOrderInventory(client, order);
+      }
+      this.applyApprovalDecision(order, dto.action);
+      await this.saveDecision(client, order, dto, reviewer);
+      await client.query('COMMIT');
+      return order;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async loadLockedOrder(client: PoolClient, orderId: string): Promise<OrderEntity> {
+    const result = await client.query<{ payload: unknown }>(
+      'SELECT payload FROM app_order_records WHERE id = $1 OR order_code = $1 LIMIT 1 FOR UPDATE',
+      [orderId],
+    );
+    if (!result.rows[0]) throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);
+    return this.restoreOrder(result.rows[0].payload);
+  }
+
+  private ensureOrderCanBeDecided(order: OrderEntity, action: OrderApprovalAction): void {
+    const canApprove = [OrderStatus.PENDING, OrderStatus.PENDING_APPROVAL].includes(order.status);
+    const canRejectOrReturn = canApprove;
+    if (!canApprove || (action !== OrderApprovalAction.APPROVE && !canRejectOrReturn)) {
+      throw new BadRequestException('Đơn hàng không còn ở trạng thái có thể xét duyệt.');
+    }
+  }
+
+  private applyApprovalDecision(order: OrderEntity, action: OrderApprovalAction): void {
+    const statusByAction: Record<OrderApprovalAction, OrderStatus> = {
+      [OrderApprovalAction.APPROVE]: OrderStatus.APPROVED,
+      [OrderApprovalAction.REJECT]: OrderStatus.REJECTED,
+      [OrderApprovalAction.RETURN_FOR_UPDATE]: OrderStatus.RETURNED_FOR_UPDATE,
+    };
+    order.status = statusByAction[action];
+    order.updatedAt = new Date();
+  }
+
+  private async saveDecision(
+    client: PoolClient,
+    order: OrderEntity,
+    dto: DecideOrderDto,
+    reviewer: ICurrentUser,
+  ): Promise<void> {
+    await client.query(
+      `UPDATE app_order_records SET payload = $2::jsonb, updated_at = $3 WHERE id = $1`,
+      [order.id, JSON.stringify(order), order.updatedAt],
+    );
+    await client.query(
+      `INSERT INTO app_order_approval_history
+       (order_id, action, comment, approver_id, approver_name, approver_roles)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        order.id,
+        dto.action,
+        dto.comment?.trim() || null,
+        reviewer.userId,
+        reviewer.username || reviewer.email || reviewer.userId,
+        reviewer.roles,
+      ],
+    );
+  }
+
+  private async reserveOrderInventory(client: PoolClient, order: OrderEntity): Promise<void> {
+    if (!this.productsService || !this.inventoryService) {
+      throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
+    }
+    const linesBySku = this.groupOrderLinesBySku(order.lines);
+    for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
+      const product = await this.productsService.findById(sku);
+      const physicalQuantity = await this.inventoryService.getStockBalanceForUpdate(client, product);
+      const reservationResult = await client.query<{ reserved: string }>(
+        `SELECT COALESCE(SUM(base_quantity), 0)::text AS reserved
+         FROM app_order_inventory_reservations
+         WHERE product_sku = $1 AND status = 'RESERVED'`,
+        [sku],
+      );
+      const required = lines.reduce((sum, line) => sum + line.baseQuantity, 0);
+      const available = physicalQuantity - Number(reservationResult.rows[0]?.reserved ?? 0);
+      if (required > available) {
+        throw new BadRequestException(
+          `Không đủ tồn khả dụng cho SKU ${sku}: còn ${available}, cần giữ ${required}.`,
+        );
+      }
+    }
+    for (const line of order.lines) {
+      await client.query(
+        `INSERT INTO app_order_inventory_reservations
+         (order_id, order_line_id, product_sku, base_quantity)
+         VALUES ($1, $2, $3, $4)`,
+        [order.id, line.id, line.productSku.trim().toUpperCase(), line.baseQuantity],
+      );
+    }
+  }
+
+  private groupOrderLinesBySku(lines: OrderLineEntity[]): Map<string, OrderLineEntity[]> {
+    const grouped = new Map<string, OrderLineEntity[]>();
+    for (const line of lines) {
+      const sku = line.productSku.trim().toUpperCase();
+      const skuLines = grouped.get(sku) ?? [];
+      skuLines.push(line);
+      grouped.set(sku, skuLines);
+    }
+    return grouped;
+  }
+
+  private async decideOrderInMemory(
+    orderId: string,
+    dto: DecideOrderDto,
+    reviewer: ICurrentUser,
+  ): Promise<OrderEntity> {
+    const order = await this.findOrderById(orderId);
+    this.ensureOrderCanBeDecided(order, dto.action);
+    this.applyApprovalDecision(order, dto.action);
+    await this.saveOrder(order);
+    const history = this.memoryApprovalHistory.get(orderId) ?? [];
+    history.push(new OrderApprovalHistoryEntity({
+      id: Date.now(),
+      orderId,
+      action: dto.action,
+      comment: dto.comment?.trim() || null,
+      approverId: reviewer.userId,
+      approverName: reviewer.username || reviewer.email || reviewer.userId,
+      approverRoles: reviewer.roles,
+      createdAt: new Date(),
+    }));
+    this.memoryApprovalHistory.set(orderId, history);
     return order;
   }
 
@@ -989,64 +1488,98 @@ export class OrdersService implements OnModuleInit {
    * Cập nhật thông tin đơn hàng (đặc biệt là đơn nháp DRAFT để tiếp tục gõ)
    */
   async updateOrder(id: string, dto: UpdateOrderDto): Promise<OrderEntity> {
-    const order = await this.findOrderById(id);
+    return this.orderLock.acquire(async () => {
+      const order = await this.findOrderById(id);
 
-    if (dto.status !== undefined) {
-      throw new BadRequestException(
-        'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
-      );
-    }
+      if (dto.status !== undefined) {
+        const canUpdateDraft =
+          order.status === OrderStatus.DRAFT &&
+          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING);
+        const canResubmitReturnedOrder =
+          order.status === OrderStatus.RETURNED_FOR_UPDATE &&
+          (dto.status === OrderStatus.DRAFT || dto.status === OrderStatus.PENDING);
+        if (canUpdateDraft) {
+          order.status = dto.status;
+        } else if (canResubmitReturnedOrder) {
+          // Keep returned orders pending until recalculated approval requirements are known.
+          if (dto.status === OrderStatus.DRAFT) order.status = OrderStatus.DRAFT;
+        } else {
+          throw new BadRequestException(
+            'Vui lòng cập nhật trạng thái qua chức năng duyệt đơn',
+          );
+        }
+      }
 
-    if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
-    }
+      if (
+        order.status !== OrderStatus.DRAFT &&
+        order.status !== OrderStatus.PENDING &&
+        order.status !== OrderStatus.RETURNED_FOR_UPDATE
+      ) {
+        throw new BadRequestException('Chỉ có thể chỉnh sửa đơn hàng ở trạng thái Nháp hoặc Chờ duyệt');
+      }
 
-    if (dto.customerId && dto.customerId !== order.customerId) {
-      const customer = await this.customersService.getCustomerById(dto.customerId);
-      order.customerId = customer.id;
-      order.customerCode = customer.code;
-      order.customerName = customer.name;
-      order.customerGroup = customer.customerGroup;
-    }
+      if (dto.customerId && dto.customerId !== order.customerId) {
+        const customer = await this.customersService.getCustomerById(dto.customerId);
 
-    if (dto.deliveryPoint) {
-      order.deliveryPoint = {
-        id: dto.deliveryPoint.id,
-        name: dto.deliveryPoint.name || order.deliveryPoint?.name || 'Điểm giao hàng',
-        address: dto.deliveryPoint.address,
-        receiverName: dto.deliveryPoint.receiverName || order.deliveryPoint?.receiverName || '',
-        phone: dto.deliveryPoint.phone || order.deliveryPoint?.phone || '',
-        roadNote: dto.deliveryPoint.roadNote,
-      };
-    }
+        if (customer.status === CustomerStatus.LOCKED) {
+          throw new BadRequestException(
+            `Đại lý "${customer.name}" đang bị KHÓA GIAO DỊCH (Lý do: ${customer.lockReason || 'Không có'}). Không thể đổi đơn hàng sang đại lý bị khóa!`,
+          );
+        }
 
-    if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
-    if (dto.note !== undefined) order.note = dto.note;
-    if (dto.lines && dto.lines.length > 0) {
-      const pricing = this.resolveOrderPricing(
-        dto.lines,
-        order.customerGroup || '',
-        dto.priceListId,
-      );
-      const {
-        lines,
-        subtotal,
-        totalDiscount,
-        grandTotal,
-        requiresApproval,
-        approvalReasons,
-      } = this.calculateOrderTotals(pricing.lines);
-      order.lines = lines;
-      order.subtotal = subtotal;
-      order.totalDiscount = totalDiscount;
-      order.grandTotal = grandTotal;
-      order.requiresApproval = requiresApproval;
-      order.approvalReasons = approvalReasons;
-      order.priceListId = pricing.priceListId || order.priceListId;
-    }
+        order.customerId = customer.id;
+        order.customerCode = customer.code;
+        order.customerName = customer.name;
+        order.customerGroup = customer.customerGroup;
+      }
 
-    order.updatedAt = new Date();
-    return order;
+      if (dto.deliveryPoint) {
+        order.deliveryPoint = {
+          id: dto.deliveryPoint.id,
+          name: dto.deliveryPoint.name || order.deliveryPoint?.name || 'Điểm giao hàng',
+          address: dto.deliveryPoint.address,
+          receiverName: dto.deliveryPoint.receiverName || order.deliveryPoint?.receiverName || '',
+          phone: dto.deliveryPoint.phone || order.deliveryPoint?.phone || '',
+          roadNote: dto.deliveryPoint.roadNote,
+        };
+      }
+
+      if (dto.deliveryDate !== undefined) order.deliveryDate = dto.deliveryDate;
+      if (dto.note !== undefined) order.note = dto.note;
+      if (dto.lines && dto.lines.length > 0) {
+        // API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng (trừ đi đơn hiện tại)
+        this.validateOrderLinesAvailableStock(dto.lines, id);
+
+        const pricing = this.resolveOrderPricing(
+          dto.lines,
+          order.customerGroup || '',
+          dto.priceListId,
+        );
+        const {
+          lines,
+          subtotal,
+          totalDiscount,
+          grandTotal,
+          requiresApproval,
+          approvalReasons,
+        } = this.calculateOrderTotals(pricing.lines);
+        order.lines = lines;
+        order.subtotal = subtotal;
+        order.totalDiscount = totalDiscount;
+        order.grandTotal = grandTotal;
+        order.requiresApproval = requiresApproval;
+        order.approvalReasons = approvalReasons;
+        order.priceListId = pricing.priceListId || order.priceListId;
+      }
+
+      await this.refreshApprovalState(order);
+      if (order.status === OrderStatus.RETURNED_FOR_UPDATE) {
+        order.status = order.requiresApproval ? OrderStatus.PENDING_APPROVAL : OrderStatus.PENDING;
+      }
+      order.updatedAt = new Date();
+      await this.saveOrder(order);
+      return this.checkAndAttachLockWarning(order);
+    });
   }
 
   /**
@@ -1078,7 +1611,6 @@ export class OrdersService implements OnModuleInit {
 
       order.cancelReason = dto.reason;
     }
-
     if (
       dto.status === OrderStatus.APPROVED ||
       dto.status === OrderStatus.REJECTED ||
@@ -1089,7 +1621,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Đơn chờ duyệt chỉ được xử lý qua chức năng xét duyệt.');
     }
-    if (this.databaseService && dto.status === OrderStatus.SHIPPED) {
+    if (this.databaseService?.isConnected() && dto.status === OrderStatus.SHIPPED) {
       const reservations = await this.databaseService.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM app_order_inventory_reservations
          WHERE order_id = $1 AND status = 'RESERVED'`,
@@ -1103,25 +1635,144 @@ export class OrdersService implements OnModuleInit {
     }
     order.status = dto.status;
     order.updatedAt = new Date();
+    if (this.databaseService?.isConnected() && dto.status === OrderStatus.CANCELLED) {
+      await this.databaseService.query(
+        `UPDATE app_order_inventory_reservations
+         SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
+         WHERE order_id = $1 AND status = 'RESERVED'`,
+        [order.id],
+      );
+    }
+    await this.saveOrder(order);
     return order;
+  }
+
+  private async refreshApprovalState(order: OrderEntity): Promise<void> {
+    const debtStatus = await this.customersService.getCustomerDebtStatus(order.customerId);
+    const projectedDebt = debtStatus.currentDebt + order.grandTotal;
+    const isCreditLimitExceeded =
+      debtStatus.creditLimit > 0 && projectedDebt > debtStatus.creditLimit;
+    const creditLimitExceededAmount = isCreditLimitExceeded
+      ? projectedDebt - debtStatus.creditLimit
+      : 0;
+    const priceFloorReasons = order.lines
+      .filter((line) => line.requiresApproval)
+      .map((line) =>
+        `SKU ${line.productSku}: giá bán ${line.unitPrice.toLocaleString('vi-VN')} đ thấp hơn giá sàn ${line.minPrice?.toLocaleString('vi-VN')} đ`,
+      );
+    if (isCreditLimitExceeded) {
+      priceFloorReasons.push(
+        `Vượt hạn mức công nợ ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ (công nợ dự kiến ${projectedDebt.toLocaleString('vi-VN')} đ / hạn mức ${debtStatus.creditLimit.toLocaleString('vi-VN')} đ)`,
+      );
+    }
+    order.isCreditLimitExceeded = isCreditLimitExceeded;
+    order.creditLimitExceededAmount = creditLimitExceededAmount;
+    order.approvalReasons = priceFloorReasons;
+    order.requiresApproval = priceFloorReasons.length > 0;
   }
 
   /**
    * Xóa đơn hàng (chỉ cho phép xóa đơn Nháp hoặc Đã hủy)
    */
+
+  /**
+   * Hủy đơn hàng ở trạng thái Chờ duyệt (SN-49 / SN-46)
+   */
+  async cancelOrder(id: string, reason?: string): Promise<OrderEntity> {
+    return this.orderLock.acquire(async () => {
+      const order = await this.findOrderById(id);
+      const cancellableStatuses = [
+        OrderStatus.PENDING,
+        OrderStatus.PENDING_APPROVAL,
+        OrderStatus.PENDING_INVENTORY_APPROVAL,
+        OrderStatus.DRAFT,
+      ];
+      if (!cancellableStatuses.includes(order.status)) {
+        throw new BadRequestException('Chỉ có thể hủy đơn hàng đang ở trạng thái Chờ duyệt hoặc Nháp');
+      }
+
+      order.status = OrderStatus.CANCELLED;
+      order.updatedAt = new Date();
+      if (reason) {
+        order.note = order.note ? `${order.note} [Lý do hủy: ${reason}]` : `[Lý do hủy: ${reason}]`;
+      }
+
+      if (this.databaseService?.isConnected()) {
+        await this.databaseService.query(
+          `UPDATE app_order_records SET payload = $1::jsonb, updated_at = $2 WHERE id = $3`,
+          [JSON.stringify(order), order.updatedAt, order.id],
+        );
+      }
+      this.orders.set(order.id, order);
+      return order;
+    });
+  }
+
   async deleteOrder(id: string): Promise<{ success: boolean; message: string }> {
     const order = await this.findOrderById(id);
     if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.CANCELLED) {
       throw new BadRequestException('Chỉ có thể xóa đơn hàng ở trạng thái Nháp hoặc Đã hủy');
     }
-    this.orders.delete(id);
+    if (this.databaseService?.isConnected()) {
+      await this.databaseService.query('DELETE FROM app_order_records WHERE id = $1', [id]);
+    } else {
+      this.orders.delete(id);
+    }
     return { success: true, message: 'Đã xóa đơn hàng thành công' };
   }
 
   /**
-   * Lấy danh sách đơn hàng của riêng một Đại lý (SN-170: Chỉ thấy đơn của chính mình)
+   * Sao chép một đơn cũ thành đơn mới (SN-48)
+   * - Sao chép toàn bộ dòng hàng của đơn đã chọn
+   * - Giá và chiết khấu được áp lại theo bảng giá hiện hành, không kế thừa giá cũ
+   * - Bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT)
    */
-  async findOrdersByCustomer(
+  async cloneOrder(
+    id: string,
+    salesRep?: { id?: string; name?: string },
+  ): Promise<OrderEntity> {
+    const sourceOrder = await this.findOrderById(id);
+
+    // Sao chép toàn bộ dòng hàng, nhưng KHÔNG truyền unitPrice / listPrice / discountPercent
+    // để createOrder tự động tính lại theo bảng giá và chính sách chiết khấu hiện hành
+    const linesDto: CreateOrderLineDto[] = sourceOrder.lines.map((line) => ({
+      productId: line.productId,
+      productSku: line.productSku,
+      productName: line.productName,
+      unit: line.unit,
+      baseUnit: line.baseUnit || line.unit,
+      conversionRate: line.conversionRate,
+      quantity: line.quantity,
+    }));
+
+    const createDto: CreateOrderDto = {
+      customerId: sourceOrder.customerId,
+      deliveryPoint: sourceOrder.deliveryPoint
+        ? {
+            id: sourceOrder.deliveryPoint.id,
+            address: sourceOrder.deliveryPoint.address,
+            name: sourceOrder.deliveryPoint.name,
+            receiverName: sourceOrder.deliveryPoint.receiverName,
+            phone: sourceOrder.deliveryPoint.phone,
+            roadNote: sourceOrder.deliveryPoint.roadNote,
+          }
+        : undefined,
+      deliveryDate: sourceOrder.deliveryDate,
+      lines: linesDto,
+      note: sourceOrder.note
+        ? `[Bản sao từ ${sourceOrder.orderCode}] ${sourceOrder.note}`
+        : `Bản sao từ ${sourceOrder.orderCode}`,
+      status: OrderStatus.DRAFT,
+    };
+
+    return this.createOrder(
+      createDto,
+      salesRep || { id: sourceOrder.salesRepId, name: sourceOrder.salesRepName },
+    );
+  }
+
+
+async findOrdersByCustomer(
     customerId: string,
     query: QueryOrdersDto,
   ): Promise<{
@@ -1361,7 +2012,7 @@ export class OrdersService implements OnModuleInit {
     const deliveryPointInput: DeliveryPointInputDto | undefined = dto.deliveryPoint
       ? dto.deliveryPoint
       : preview.deliveryPoint
-        ? {
+      ? {
           id: preview.deliveryPoint.id,
           name: preview.deliveryPoint.name,
           address: preview.deliveryPoint.address,
@@ -1369,7 +2020,7 @@ export class OrdersService implements OnModuleInit {
           phone: preview.deliveryPoint.phone,
           roadNote: preview.deliveryPoint.roadNote,
         }
-        : undefined;
+      : undefined;
 
     const createPayload: CreateOrderDto = {
       customerId: preview.customerId,
@@ -1377,13 +2028,15 @@ export class OrdersService implements OnModuleInit {
       deliveryDate: dto.deliveryDate,
       lines: orderLinesDto,
       note: dto.note
-        ? `${dto.note} ${preview.discontinuedItems.length > 0
-            ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
-            : ''
+        ? `${dto.note} ${
+            preview.discontinuedItems.length > 0
+              ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
+              : ''
           }`.trim()
-        : `[Đặt lại từ đơn ${preview.orderCode}] ${preview.discontinuedItems.length > 0
-            ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
-            : ''
+        : `[Đặt lại từ đơn ${preview.orderCode}] ${
+            preview.discontinuedItems.length > 0
+              ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
+              : ''
           }`.trim(),
       status: OrderStatus.PENDING,
     };
@@ -1393,10 +2046,11 @@ export class OrdersService implements OnModuleInit {
     return {
       newOrder,
       discontinuedItems: preview.discontinuedItems,
-      message: `Đã đặt lại thành công đơn hàng mới ${newOrder.orderCode}.${preview.discontinuedItems.length > 0
+      message: `Đã đặt lại thành công đơn hàng mới ${newOrder.orderCode}.${
+        preview.discontinuedItems.length > 0
           ? ` Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh.`
           : ''
-        }`,
+      }`,
     };
   }
 
@@ -1634,4 +2288,3 @@ export class OrdersService implements OnModuleInit {
     };
   }
 }
-
