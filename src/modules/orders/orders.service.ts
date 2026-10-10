@@ -16,15 +16,17 @@ import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
 import { CustomerEntity, CustomerStatus } from '../customers/entities/customer.entity';
-import {
-  LOOKBACK_MONTHS,
-  SuggestedProductItem,
-  LatestOrderItem,
-  LatestOrderSummary,
-  CustomerPurchaseHistoryResponse,
-} from './dto/customer-purchase-history.dto';
 import { ProductsService } from '../products/products.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
+import { UserRole } from '../../common/enums/user-role.enum';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import {
+  CustomerPurchaseHistoryResponse,
+  LatestOrderItem,
+  LatestOrderSummary,
+  LOOKBACK_MONTHS,
+  SuggestedProductItem,
+} from './dto/customer-purchase-history.dto';
 import {
   CreateOrderDto,
   CreateOrderLineDto,
@@ -42,8 +44,6 @@ import { DatabaseService } from '../../database/database.service';
 import { DecideOrderDto } from './dto/decide-order.dto';
 import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
-import { ICurrentUser } from '../auth/interfaces/current-user.interface';
-import { UserRole } from '../../common/enums/user-role.enum';
 import { InventoryService } from '../inventory/inventory.service';
 import {
   StockReservationEntity,
