@@ -307,19 +307,38 @@ export class InventoryService implements OnModuleInit {
           order_code?: string;
         }>(
           `SELECT r.id, r.order_id, r.product_id, r.quantity::text,
-                  r.expired_at::text, r.created_at::text, o.order_code
+                  r.expired_at::text, r.created_at::text, COALESCE(o.order_code, o.id, r.order_id) as order_code
            FROM stock_reservations r
-           LEFT JOIN app_order_records o ON o.id = r.order_id
+           LEFT JOIN app_order_records o ON (o.id = r.order_id OR o.order_code = r.order_id)
            WHERE r.status IN ('ACTIVE', 'RESERVED') AND r.expired_at > CURRENT_TIMESTAMP`,
         );
 
-        for (const row of resRows) {
-          const skuKey = row.product_id.toUpperCase();
-          const qty = Number(row.quantity) || 0;
-          reservations.set(skuKey, (reservations.get(skuKey) || 0) + qty);
+        const addReservationToSku = (key: string, item: {
+          id: string;
+          orderId: string;
+          orderCode?: string;
+          quantity: number;
+          expiredAt: string;
+          createdAt: string;
+        }) => {
+          const upper = key.toUpperCase();
+          const targetKeys = [upper];
+          if (upper === 'LH-MILK-900G') targetKeys.push('LH-MILK-POWDER-900G');
+          if (upper === 'LH-MILK-POWDER-900G') targetKeys.push('LH-MILK-900G');
 
-          const list = reservationsListBySku.get(skuKey) || [];
-          list.push({
+          for (const k of targetKeys) {
+            reservations.set(k, (reservations.get(k) || 0) + item.quantity);
+            const list = reservationsListBySku.get(k) || [];
+            if (!list.some((existing) => existing.id === item.id)) {
+              list.push(item);
+            }
+            reservationsListBySku.set(k, list);
+          }
+        };
+
+        for (const row of resRows) {
+          const qty = Number(row.quantity) || 0;
+          addReservationToSku(row.product_id, {
             id: row.id,
             orderId: row.order_id,
             orderCode: row.order_code || row.order_id,
@@ -327,17 +346,35 @@ export class InventoryService implements OnModuleInit {
             expiredAt: row.expired_at,
             createdAt: row.created_at,
           });
-          reservationsListBySku.set(skuKey, list);
         }
       } catch {
         // Fallback to app_order_inventory_reservations if needed
         try {
-          const legacyRows = await this.databaseService.query<{ product_sku: string; reserved: string }>(
-            `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
+          const legacyRows = await this.databaseService.query<{ product_sku: string; reserved: string; order_id?: string }>(
+            `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved, MAX(order_id) as order_id
              FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
           );
           for (const row of legacyRows) {
-            reservations.set(row.product_sku.toUpperCase(), Number(row.reserved));
+            const qty = Number(row.reserved) || 0;
+            const targetKeys = [row.product_sku.toUpperCase()];
+            if (row.product_sku.toUpperCase() === 'LH-MILK-900G') targetKeys.push('LH-MILK-POWDER-900G');
+            if (row.product_sku.toUpperCase() === 'LH-MILK-POWDER-900G') targetKeys.push('LH-MILK-900G');
+
+            for (const k of targetKeys) {
+              reservations.set(k, (reservations.get(k) || 0) + qty);
+              if (row.order_id) {
+                const list = reservationsListBySku.get(k) || [];
+                list.push({
+                  id: `res-leg-${row.order_id}-${k}`,
+                  orderId: row.order_id,
+                  orderCode: row.order_id,
+                  quantity: qty,
+                  expiredAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+                  createdAt: new Date().toISOString(),
+                });
+                reservationsListBySku.set(k, list);
+              }
+            }
           }
         } catch {
           // Ignore
@@ -348,27 +385,38 @@ export class InventoryService implements OnModuleInit {
       for (const res of this.memoryStockReservations.values()) {
         if (res.status === StockReservationStatus.ACTIVE && new Date(res.expiredAt) > new Date()) {
           const skuKey = res.productId.toUpperCase();
-          reservations.set(skuKey, (reservations.get(skuKey) || 0) + res.quantity);
-          const list = reservationsListBySku.get(skuKey) || [];
-          list.push({
-            id: res.id,
-            orderId: res.orderId,
-            orderCode: res.orderCode || res.orderId,
-            quantity: res.quantity,
-            expiredAt: res.expiredAt instanceof Date ? res.expiredAt.toISOString() : String(res.expiredAt),
-            createdAt: res.createdAt instanceof Date ? res.createdAt.toISOString() : String(res.createdAt),
-          });
-          reservationsListBySku.set(skuKey, list);
+          const targetKeys = [skuKey];
+          if (skuKey === 'LH-MILK-900G') targetKeys.push('LH-MILK-POWDER-900G');
+          if (skuKey === 'LH-MILK-POWDER-900G') targetKeys.push('LH-MILK-900G');
+
+          for (const k of targetKeys) {
+            reservations.set(k, (reservations.get(k) || 0) + res.quantity);
+            const list = reservationsListBySku.get(k) || [];
+            if (!list.some((existing) => existing.id === res.id)) {
+              list.push({
+                id: res.id,
+                orderId: res.orderId,
+                orderCode: res.orderCode || res.orderId,
+                quantity: res.quantity,
+                expiredAt: res.expiredAt instanceof Date ? res.expiredAt.toISOString() : String(res.expiredAt),
+                createdAt: res.createdAt instanceof Date ? res.createdAt.toISOString() : String(res.createdAt),
+              });
+            }
+            reservationsListBySku.set(k, list);
+          }
         }
       }
     }
 
     return products.map((p) => {
-      const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity ?? 0;
-      const dbReserved = reservations.get(p.sku.toUpperCase()) ?? 0;
+      const pSkuUpper = p.sku.toUpperCase();
+      const aliasSku = pSkuUpper === 'LH-MILK-POWDER-900G' ? 'LH-MILK-900G' : pSkuUpper === 'LH-MILK-900G' ? 'LH-MILK-POWDER-900G' : '';
+      const physicalStockQuantity = physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0;
+      const dbReserved = reservations.get(pSkuUpper) ?? (aliasSku ? reservations.get(aliasSku) : undefined) ?? 0;
       const orderReserved = p.reservedStock ?? 0;
       const reservedQuantity = Math.max(dbReserved, orderReserved);
       const available = Math.max(0, physicalStockQuantity - reservedQuantity);
+      const matchedReservations = reservationsListBySku.get(pSkuUpper) || (aliasSku ? reservationsListBySku.get(aliasSku) : []) || [];
 
       return {
         sku: p.sku,
@@ -387,7 +435,7 @@ export class InventoryService implements OnModuleInit {
           isBaseUnit: u.isBaseUnit,
         })),
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-        activeReservations: reservationsListBySku.get(p.sku.toUpperCase()) || [],
+        activeReservations: matchedReservations,
       };
     });
   }
