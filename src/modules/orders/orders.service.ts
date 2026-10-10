@@ -87,13 +87,11 @@ export class OrdersService implements OnModuleInit {
     private readonly productsService?: ProductsService,
     @Optional() private readonly inventoryService?: InventoryService,
   ) {
-    if (!this.databaseService) {
-      for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
-    }
+    for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
   }
 
   async onModuleInit(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService?.isConnected()) return;
 
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_records (
@@ -151,7 +149,7 @@ export class OrdersService implements OnModuleInit {
       client.release();
     }
 
-    if (this.databaseService) {
+    if (this.databaseService?.isConnected()) {
       try {
         const rows = await this.databaseService.query<{ payload: unknown }>(
           'SELECT payload FROM app_order_records',
@@ -171,14 +169,14 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureApprovalTables(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService?.isConnected()) return;
     await this.ensureApprovalHistoryTable();
     await this.ensureInventoryReservationTable();
     await this.ensureApprovalHistoryImmutability();
   }
 
   private async ensureApprovalHistoryTable(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService?.isConnected()) return;
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_approval_history (
         id BIGSERIAL PRIMARY KEY,
@@ -198,7 +196,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureInventoryReservationTable(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService?.isConnected()) return;
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
         id BIGSERIAL PRIMARY KEY,
@@ -224,7 +222,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureApprovalHistoryImmutability(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService?.isConnected()) return;
     await this.databaseService.query(`
       CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
       RETURNS TRIGGER AS $$
@@ -258,7 +256,7 @@ export class OrdersService implements OnModuleInit {
 
   private async saveOrder(order: OrderEntity): Promise<void> {
     this.orders.set(order.id, order);
-    if (!this.databaseService) {
+    if (!this.databaseService?.isConnected()) {
       return;
     }
     await this.databaseService.query(
@@ -1011,7 +1009,7 @@ export class OrdersService implements OnModuleInit {
     limit: number;
     totalPages: number;
   }> {
-    let list = this.databaseService
+    let list = this.databaseService?.isConnected()
       ? (await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
           'SELECT payload FROM app_order_records ORDER BY created_at DESC',
         )).map((row) => this.restoreOrder(row.payload))
@@ -1141,13 +1139,13 @@ export class OrdersService implements OnModuleInit {
    * Lấy chi tiết đơn hàng theo ID
    */
   async findOrderById(id: string): Promise<OrderEntity> {
-    const rows = this.databaseService
+    const rows = this.databaseService?.isConnected()
       ? await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
           'SELECT payload FROM app_order_records WHERE id = $1 OR order_code = $1 LIMIT 1',
           [id],
         )
       : [];
-    const order = this.databaseService
+    const order = this.databaseService?.isConnected()
       ? (rows[0] ? this.restoreOrder(rows[0].payload) : undefined)
       : this.orders.get(id);
     if (!order) {
@@ -1158,7 +1156,7 @@ export class OrdersService implements OnModuleInit {
 
   async getApprovalHistory(orderId: string): Promise<OrderApprovalHistoryEntity[]> {
     const order = await this.findOrderById(orderId);
-    if (!this.databaseService) return this.memoryApprovalHistory.get(orderId) ?? [];
+    if (!this.databaseService?.isConnected()) return this.memoryApprovalHistory.get(orderId) ?? [];
     const rows = await this.databaseService.query<{
       [key: string]: unknown;
       id: number;
@@ -1210,7 +1208,7 @@ export class OrdersService implements OnModuleInit {
     if (dto.action !== OrderApprovalAction.APPROVE && !dto.comment?.trim()) {
       throw new BadRequestException('Từ chối hoặc trả lại đơn cần có ý kiến.');
     }
-    if (!this.databaseService) {
+    if (!this.databaseService?.isConnected()) {
       return this.decideOrderInMemory(orderId, dto, reviewer);
     }
 
@@ -1477,7 +1475,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Đơn chờ duyệt chỉ được xử lý qua chức năng xét duyệt.');
     }
-    if (this.databaseService && dto.status === OrderStatus.SHIPPED) {
+    if (this.databaseService?.isConnected() && dto.status === OrderStatus.SHIPPED) {
       const reservations = await this.databaseService.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM app_order_inventory_reservations
          WHERE order_id = $1 AND status = 'RESERVED'`,
@@ -1491,7 +1489,7 @@ export class OrdersService implements OnModuleInit {
     }
     order.status = dto.status;
     order.updatedAt = new Date();
-    if (this.databaseService && dto.status === OrderStatus.CANCELLED) {
+    if (this.databaseService?.isConnected() && dto.status === OrderStatus.CANCELLED) {
       await this.databaseService.query(
         `UPDATE app_order_inventory_reservations
          SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
@@ -1535,7 +1533,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.CANCELLED) {
       throw new BadRequestException('Chỉ có thể xóa đơn hàng ở trạng thái Nháp hoặc Đã hủy');
     }
-    if (this.databaseService) {
+    if (this.databaseService?.isConnected()) {
       await this.databaseService.query('DELETE FROM app_order_records WHERE id = $1', [id]);
     } else {
       this.orders.delete(id);
