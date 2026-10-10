@@ -41,12 +41,4 @@ export class QueryOrdersDto {
   @IsOptional()
   @IsString()
   toDate?: string;
-
-  @IsOptional()
-  @IsString()
-  region?: string;
-
-  @IsOptional()
-  @IsString()
-  assignedUser?: string;
 }

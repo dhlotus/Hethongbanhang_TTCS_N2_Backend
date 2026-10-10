@@ -87,9 +87,29 @@ export class ProductsService implements OnModuleInit {
 
     product.physicalStock = product.stockQuantity ?? 0;
     product.reservedStock = reserved;
-    product.availableStock = Math.max(0, product.physicalStock - reserved);
+    const computedAvailable = Math.max(0, product.physicalStock - reserved);
+    product.availableStock = typeof product.availableStock === 'number'
+      ? Math.min(product.availableStock, computedAvailable)
+      : computedAvailable;
     product.availableQuantity = product.availableStock;
     return product;
+  }
+
+  /**
+   * Trừ tồn khả dụng của sản phẩm khi đặt hàng thành công (SN-42):
+   * product.availableStock = product.availableStock - quantity
+   */
+  public deductAvailableStock(productIdOrSku: string, quantity: number): number {
+    const product = this.findProductInternal(productIdOrSku);
+    if (!product) return 0;
+
+    const currentStock = typeof product.availableStock === 'number'
+      ? product.availableStock
+      : Math.max(0, (product.stockQuantity ?? 0) - (this.ordersService?.getReservedStock(product.id || product.sku) ?? 0));
+
+    product.availableStock = Math.max(0, currentStock - quantity);
+    product.availableQuantity = product.availableStock;
+    return product.availableStock;
   }
 
   async onModuleInit(): Promise<void> {

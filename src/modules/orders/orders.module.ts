@@ -9,7 +9,7 @@ import { OrdersService } from './orders.service';
 
 @Module({
   imports: [
-    CustomersModule,
+    forwardRef(() => CustomersModule),
     PriceListsModule,
     DiscountPoliciesModule,
     forwardRef(() => ProductsModule),
