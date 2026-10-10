@@ -150,6 +150,24 @@ export class OrdersService implements OnModuleInit {
     } finally {
       client.release();
     }
+
+    if (this.databaseService) {
+      try {
+        const rows = await this.databaseService.query<{ payload: unknown }>(
+          'SELECT payload FROM app_order_records',
+        );
+        for (const row of rows) {
+          try {
+            const order = this.restoreOrder(row.payload);
+            this.orders.set(order.id, order);
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
   }
 
   private async ensureApprovalTables(): Promise<void> {
@@ -239,8 +257,8 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async saveOrder(order: OrderEntity): Promise<void> {
+    this.orders.set(order.id, order);
     if (!this.databaseService) {
-      this.orders.set(order.id, order);
       return;
     }
     await this.databaseService.query(
@@ -262,6 +280,9 @@ export class OrdersService implements OnModuleInit {
   getReservedStockMap(excludeOrderId?: string): Map<string, number> {
     const map = new Map<string, number>();
     const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
     ]);
@@ -301,10 +322,10 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Validation Guard kiểm tra số lượng đặt với tồn khả dụng (SN-39):
+   * Validation Guard kiểm tra số lượng đặt với tồn khả dụng (SN-39 & SN-42):
    * availableStock = physicalStock - reservedStock
-   * Nếu orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
-   * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Còn tối đa [availableStock] [Đơn vị])"
+   * Nếu availableStock <= 0 hoặc orderQuantity > availableStock: Chặn không cho lưu vào DB, trả về lỗi HTTP 400 Bad Request:
+   * "Sản phẩm [Tên SKU] vượt quá tồn khả dụng (Hàng trong kho đã hết / Vượt quá tồn khả dụng...)"
    */
   validateOrderLinesAvailableStock(
     lines: CreateOrderLineDto[],
@@ -323,20 +344,30 @@ export class OrdersService implements OnModuleInit {
         product.id || product.sku,
         excludeOrderId,
       );
-      const availableStock = Math.max(0, physicalStock - reservedStock);
+      const computedAvailableStock = Math.max(0, physicalStock - reservedStock);
+      const availableStock = typeof product.availableStock === 'number'
+        ? Math.min(product.availableStock, computedAvailableStock)
+        : computedAvailableStock;
 
       const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
       const orderBaseQuantity = Math.round(line.quantity * conversionRate);
+
+      const unitName = line.unit || product.baseUnit || 'sản phẩm';
+      const skuName = product.name || line.productName || line.productSku;
+
+      if (availableStock <= 0) {
+        throw new BadRequestException(
+          `Sản phẩm ${skuName}: Hàng trong kho đã hết / Vượt quá tồn khả dụng (Còn lại 0 ${unitName})`,
+        );
+      }
 
       if (orderBaseQuantity > availableStock) {
         const maxAllowedInUnit =
           conversionRate > 1
             ? Math.floor(availableStock / conversionRate)
             : availableStock;
-        const unitName = line.unit || product.baseUnit;
-        const skuName = product.name || line.productName || line.productSku;
         throw new BadRequestException(
-          `Sản phẩm ${skuName} vượt quá tồn khả dụng (Còn tối đa ${maxAllowedInUnit} ${unitName})`,
+          `Sản phẩm ${skuName} vượt quá tồn khả dụng (Hàng trong kho đã hết / Vượt quá tồn khả dụng: Còn tối đa ${maxAllowedInUnit} ${unitName})`,
         );
       }
     }
@@ -935,6 +966,30 @@ export class OrdersService implements OnModuleInit {
     });
 
     await this.saveOrder(newOrder);
+
+    // 3. THÊM LOGIC GIỮ CHỖ TỒN KHẢ DỤNG (RESERVE STOCK - Bug Fix SN-42)
+    // Khi tạo đơn hàng mới thành công, lặp qua danh sách items trong đơn hàng.
+    // Tìm sản phẩm tương ứng trong Inventory/Products Service và TRỪ trực tiếp số lượng đặt vào trường availableStock
+    // Công thức: product.availableStock = product.availableStock - item.quantity (quy đổi)
+    if (this.productsService && newOrder.lines) {
+      for (const line of newOrder.lines) {
+        const product = this.productsService.findProductInternal(
+          line.productId || line.productSku,
+        );
+        if (product) {
+          const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
+          const deductQuantity = line.baseQuantity || Math.round((line.quantity || 0) * conversionRate);
+
+          const currentStock = typeof product.availableStock === 'number'
+            ? product.availableStock
+            : Math.max(0, (product.stockQuantity ?? 0) - this.getReservedStock(product.id || product.sku));
+
+          product.availableStock = Math.max(0, currentStock - deductQuantity);
+          product.availableQuantity = product.availableStock;
+        }
+      }
+    }
+
     return newOrder;
     });
   }

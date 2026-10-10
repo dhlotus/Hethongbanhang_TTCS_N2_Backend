@@ -245,11 +245,16 @@ export class InventoryService implements OnModuleInit {
     );
     return products.map((p) => {
       const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity;
-      const reservedQuantity = reservations.get(p.sku.toUpperCase()) ?? 0;
+      const dbReserved = reservations.get(p.sku.toUpperCase()) ?? 0;
+      const orderReserved = p.reservedStock ?? 0;
+      const reservedQuantity = Math.max(dbReserved, orderReserved);
+      const available = typeof p.availableStock === 'number'
+        ? p.availableStock
+        : Math.max(0, physicalStockQuantity - reservedQuantity);
       return {
         sku: p.sku,
         name: p.name,
-        stockQuantity: Math.max(0, physicalStockQuantity - reservedQuantity),
+        stockQuantity: available,
         physicalStockQuantity,
         reservedQuantity,
         baseUnit: p.baseUnit,
