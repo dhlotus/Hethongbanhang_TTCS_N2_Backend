@@ -780,26 +780,27 @@ Time:        1.783 s
 
 
 
-### [Sprint 2] - [SN-28]: BE: X�y d?ng Module Chi?t kh?u theo S?n l�?ng (DiscountPolicy) & C?nh b�o T?n kho
-- **Th?i gian ho�n th�nh:** 2026-10-08
-- **M? Jira / Task:** SN-28
-- **Danh s�ch file t?o m?i / thay �?i:**
-  - src/modules/discount-policies/* (T?o m?i: DiscountPolicyEntity, DiscountTier, DTOs, Service, Controller)
-  - src/app.module.ts (��ng k? DiscountPoliciesModule)
-  - src/common/enums/order-status.enum.ts (Th�m PENDING_INVENTORY_APPROVAL)
-  - src/modules/orders/orders.controller.ts (Th�m API POST /api/v1/orders)
-  - src/modules/orders/orders.service.ts (Th�m logic ki?m tra t?n kho v� chuy?n tr?ng th�i PENDING_INVENTORY_APPROVAL)
-- **Chi ti?t k? thu?t:**
-  - Qu?n l? ch�nh s�ch chi?t kh?u theo s?n l�?ng (Tier).
-  - API t�nh to�n m?c chi?t kh?u t?t nh?t (Best-Offer).
-  - N?u t?ng s? l�?ng �?t > kh? d?ng, ��n h�ng ��?c t?o v?i tr?ng th�i PENDING_INVENTORY_APPROVAL thay v? b�o l?i.
-- **L�u ?:**
-  - Kh�ng d�ng Git commit theo y�u c?u.
-
+### [Sprint 2] - [SN-28]: BE: Xây dựng Module Chiết khấu theo Sản lượng (DiscountPolicy) & Cảnh báo Tồn kho
+- **Thời gian hoàn thành:** 2026-10-08
+- **Mã Jira / Task:** SN-28 (Sprint 2)
+- **Tiêu đề:** "Áp dụng chính sách chiết khấu theo sản lượng và xử lý cảnh báo tồn kho khi đặt hàng"
+- **Danh sách file tạo mới / thay đổi:**
+  - `src/modules/discount-policies/*` (Tạo mới: DiscountPolicyEntity, DiscountTier, DTOs, Service, Controller)
+  - `src/app.module.ts` (Đăng ký DiscountPoliciesModule)
+  - `src/common/enums/order-status.enum.ts` (Thêm trạng thái `PENDING_INVENTORY_APPROVAL`)
+  - `src/modules/orders/orders.controller.ts` (Thêm API `POST /api/v1/orders`)
+  - `src/modules/orders/orders.service.ts` (Thêm logic kiểm tra tồn kho và chuyển trạng thái `PENDING_INVENTORY_APPROVAL`)
+- **Chi tiết kỹ thuật:**
+  - **Quản lý chính sách chiết khấu theo sản lượng (Tier):** Cấu hình các hạn mức chiết khấu theo bậc số lượng cho từng sản phẩm hoặc nhóm hàng.
+  - **API tính toán mức chiết khấu tốt nhất (Best-Offer):** Tự động so khớp và chọn mức ưu đãi cao nhất cho khách hàng.
+  - **Xử lý tồn kho vượt ngưỡng khả dụng:** Nếu tổng số lượng đặt vượt quá tồn kho khả dụng, đơn hàng được tạo với trạng thái `PENDING_INVENTORY_APPROVAL` (Chờ duyệt tồn kho) thay vì trả về lỗi và chặn người dùng.
 - **Frontend Integration (SN-28):**
-  - T?o th� m?c v� component DiscountPoliciesTab �? qu?n l? c�c ch�nh s�ch chi?t kh?u s?n l�?ng.
-  - T�ch h?p t�nh n�ng t? �?ng t�nh chi?t kh?u trong trang t?o ��n h�ng (orders-page.tsx).
-  - C?p nh?t c?nh b�o khi ��n �?t h�ng v�?t t?n kho kh? d?ng v� chuy?n sang tr?ng th�i PENDING_INVENTORY_APPROVAL ��ng chu?n giao di?n UI_GUIDELINES.md.
+  - Tạo thư mục và component `DiscountPoliciesTab` để quản lý các chính sách chiết khấu sản lượng.
+  - Tích hợp tính năng tự động tính chiết khấu trong trang tạo đơn hàng (`orders-page.tsx`).
+  - Cập nhật cảnh báo khi đơn đặt hàng vượt tồn kho khả dụng và chuyển sang trạng thái `PENDING_INVENTORY_APPROVAL` đúng chuẩn giao diện `UI_GUIDELINES.md`.
+- **Trạng thái kiểm thử:**
+  - Backend Build: `nest build` -> 0 lỗi, hoàn thành 100%.
+  - Frontend Build: `tsc -b && vite build` -> 0 lỗi, build production thành công.
 
 ### [Sprint 3] - [SN-37]: BE & FE: Tìm kiếm và Lọc Danh sách Đại lý theo Tuyến Bán hàng
 - **Thời gian hoàn thành:** 2026-10-08
@@ -807,45 +808,41 @@ Time:        1.783 s
 - **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn tìm kiếm và lọc danh sách đại lý, để tìm nhanh khách trong tuyến khi đang đứng ngoài đường."
 - **Danh sách file tạo mới / thay đổi:**
   - **Backend (HTBH_Backend):**
-    - src/modules/customers/dto/filter-customers.dto.ts (Tạo mới: FilterCustomersDto hỗ trợ search, region, customerGroup, salesRepId, status, page, limit)
-    - src/modules/customers/interfaces/paginated-customers.interface.ts (Tạo mới: PaginatedCustomersResult interface)
-    - src/modules/customers/entities/customer.entity.ts (Cập nhật: Bổ sung trường salesRep quan hệ { id, name })
-    - src/modules/customers/customers.service.ts (Cập nhật: filterCustomers xử lý RBAC tuyến bán hàng SALES_REP vs ADMIN/SALES_MANAGER, tìm kiếm ILIKE không phân biệt hoa thường theo code/name/phone, bộ lọc đa tiêu chí & phân trang)
-    - src/modules/customers/customers.controller.ts (Cập nhật: GET /api/customers áp dụng JwtAuthGuard, @Query() query: FilterCustomersDto, @CurrentUser() currentUser)
-    - 	est/customers-filter-sn37.spec.ts (Tạo mới: 30 test cases bao phủ toàn bộ AC của SN-37)
+    - `src/modules/customers/dto/filter-customers.dto.ts` (Tạo mới: FilterCustomersDto hỗ trợ search, region, customerGroup, salesRepId, status, page, limit)
+    - `src/modules/customers/interfaces/paginated-customers.interface.ts` (Tạo mới: PaginatedCustomersResult interface)
+    - `src/modules/customers/entities/customer.entity.ts` (Cập nhật: Bổ sung trường salesRep quan hệ { id, name })
+    - `src/modules/customers/customers.service.ts` (Cập nhật: filterCustomers xử lý RBAC tuyến bán hàng SALES_REP vs ADMIN/SALES_MANAGER, tìm kiếm không phân biệt hoa thường theo code/name/phone, bộ lọc đa tiêu chí & phân trang)
+    - `src/modules/customers/customers.controller.ts` (Cập nhật: GET /api/customers áp dụng JwtAuthGuard, @Query() query: FilterCustomersDto, @CurrentUser() currentUser)
+    - `test/customers-filter-sn37.spec.ts` (Tạo mới: 31 test cases bao phủ toàn bộ AC của SN-37)
   - **Frontend (HTBH_Frontend):**
-    - src/types/customer.types.ts (Tạo mới: Customer, CustomerStatus enum, CustomerFilterParams, PaginatedCustomersResponse)
-    - src/types/customer.ts (Cập nhật: Re-export đồng bộ với customer.types.ts)
-    - src/services/customer.service.ts (Tạo mới: getCustomers hỗ trợ tham số lọc, phân trang, demo/offline fallback an toàn)
-    - src/services/customers.service.ts (Cập nhật: Re-export customerService)
-    - src/hooks/use-customers.ts (Tạo mới: Custom hook quản lý state, 300ms debounce tìm kiếm, reset filter, pagination)
-    - src/pages/customers-page.tsx (Tạo mới: Màn hình tra cứu đại lý tối ưu di động với Card View, nút gọi điện thoại nhanh tel:, bộ lọc filter chips, Skeleton loading, Table View cho Desktop, tích hợp DeliveryPointModal)
-    - src/routes/index.tsx (Cập nhật: Tích hợp CustomersPage vào route /sales/customers và alias /customers)
-    - src/services/orders.service.ts (Cập nhật: Hỗ trợ response đại lý dạng phân trang PaginatedCustomersResponse)
+    - `src/types/customer.types.ts` (Tạo mới: Customer, CustomerStatus enum, CustomerFilterParams, PaginatedCustomersResponse)
+    - `src/types/customer.ts` (Cập nhật: Re-export đồng bộ với customer.types.ts)
+    - `src/services/customer.service.ts` (Tạo mới: getCustomers hỗ trợ tham số lọc, phân trang, demo/offline fallback an toàn)
+    - `src/services/customers.service.ts` (Cập nhật: Re-export customerService)
+    - `src/hooks/use-customers.ts` (Tạo mới: Custom hook quản lý state, 300ms debounce tìm kiếm, reset filter, pagination)
+    - `src/pages/customers-page.tsx` (Tạo mới: Màn hình tra cứu đại lý tối ưu di động với Card View, nút gọi điện thoại nhanh tel:, bộ lọc filter chips, Skeleton loading, Table View cho Desktop, tích hợp DeliveryPointModal)
+    - `src/routes/index.tsx` (Cập nhật: Tích hợp CustomersPage vào route /sales/customers và alias /customers)
+    - `src/services/orders.service.ts` (Cập nhật: Hỗ trợ response đại lý dạng phân trang PaginatedCustomersResponse)
 - **Chi tiết kỹ thuật:**
-  - **Phân quyền tuyến bán hàng (RBAC Scope):** Nhân viên vai trò SALES_REP tự động bị giới hạn chỉ xem đại lý do chính mình phụ trách (salesRepId === currentUser.userId). Quản trị viên ADMIN và Quản lý kinh doanh SALES_MANAGER được xem toàn bộ đại lý công ty và có thể lọc theo nhân viên kinh doanh cụ thể.
-  - **Tìm kiếm nhanh Full-text / Partial:** Tìm kiếm không phân biệt hoa thường theo Mã đại lý (code), Tên đại lý (
-ame), hoặc Số điện thoại (phone).
-  - **Bộ lọc đa tiêu chí:** Kết hợp linh hoạt Khu vực (egion: Miền Bắc, Miền Trung, Miền Nam), Nhóm khách hàng (customerGroup: AGENT_LEVEL_1, AGENT_LEVEL_2, RETAIL), Trạng thái (status: ACTIVE, LOCKED, INACTIVE).
-  - **Trải nghiệm di động thực địa (Field-ready UX):** Giao diện thiết kế theo UI_GUIDELINES.md với thẻ Card trực quan, nhãn trạng thái nổi bật, thanh tiến trình tỷ lệ nợ / hạn mức, nút bấm gọi nhanh qua giao thức 	el:, thao tác chạm tối thiểu 40-44px.
+  - **Phân quyền tuyến bán hàng (RBAC Scope):** Nhân viên vai trò SALES_REP tự động bị giới hạn chỉ xem đại lý do chính mình phụ trách (`salesRepId === currentUser.userId`). Quản trị viên ADMIN và Quản lý kinh doanh SALES_MANAGER được xem toàn bộ đại lý công ty và có thể lọc theo nhân viên kinh doanh cụ thể.
+  - **Tìm kiếm nhanh Full-text / Partial:** Tìm kiếm không phân biệt hoa thường theo Mã đại lý (`code`), Tên đại lý (`name`), hoặc Số điện thoại (`phone`).
+  - **Bộ lọc đa tiêu chí:** Kết hợp linh hoạt Khu vực (`region`: Miền Bắc, Miền Trung, Miền Nam), Nhóm khách hàng (`customerGroup`: AGENT_LEVEL_1, AGENT_LEVEL_2, RETAIL), Trạng thái (`status`: ACTIVE, LOCKED, INACTIVE).
+  - **Trải nghiệm di động thực địa (Field-ready UX):** Giao diện thiết kế theo `UI_GUIDELINES.md` với thẻ Card trực quan, nhãn trạng thái nổi bật, thanh tiến trình tỷ lệ nợ / hạn mức, nút bấm gọi nhanh qua giao thức `tel:`, thao tác chạm tối thiểu 40-44px.
 - **Trạng thái kiểm thử:**
-  - Backend Spec Test: 
-px ts-node test/customers-filter-sn37.spec.ts -> 30/30 tests passed (100%).
-  - Backend Build: 
-est build -> 0 lỗi.
-  - Frontend ESLint: 
-px eslint -> 0 lỗi, 0 warnings.
-  - Frontend Build: 
-pm run build (	sc -b && vite build) -> 0 lỗi, build production thành công.
+  - Backend Spec Test: `npx ts-node test/customers-filter-sn37.spec.ts` -> 31/31 tests passed (100%).
+  - Backend Build: `nest build` -> 0 lỗi.
+  - Frontend ESLint: `npx eslint` -> 0 lỗi, 0 warnings.
+  - Frontend Build: `npm run build` (`tsc -b && vite build`) -> 0 lỗi, build production thành công.
+
 ### [Sprint 4] - [SN-48]: Sao Chép Đơn Hàng Cũ Thành Đơn Mới (Clone Order)
 - **Thời gian hoàn thành:** 2026-10-09
 - **Mã Jira / Task:** SN-48 (Epic EP-04 / SN-39)
 - **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn sao chép một đơn cũ thành đơn mới, để tạo đơn định kỳ cho khách quen trong vài giây."
 - **Danh sách file tạo mới / thay đổi:**
   - **Backend (HTBH_Backend):**
-    - src/modules/orders/orders.service.ts: Thêm method cloneOrder(id, salesRep) - sao chép toàn bộ dòng hàng (sản phẩm, quy cách, đơn vị, số lượng), áp lại giá và chiết khấu theo bảng giá hiện hành, đặt trạng thái luôn là DRAFT. Cập nhật updateOrder cho phép chuyển trạng thái từ DRAFT sang PENDING khi hoàn tất đơn.
-    - src/modules/orders/orders.controller.ts: Thêm endpoint POST /api/orders/:id/clone gọi ordersService.cloneOrder(id).
-    - 	est/orders-clone-sn48.spec.ts: Bộ kiểm thử tự động 3 test cases cho tính năng sao chép đơn hàng.
+    - `src/modules/orders/orders.service.ts`: Thêm method `cloneOrder(id, salesRep)` - sao chép toàn bộ dòng hàng (sản phẩm, quy cách, đơn vị, số lượng), áp lại giá và chiết khấu theo bảng giá hiện hành, đặt trạng thái luôn là DRAFT. Cập nhật `updateOrder` cho phép chuyển trạng thái từ DRAFT sang PENDING khi hoàn tất đơn.
+    - `src/modules/orders/orders.controller.ts`: Thêm endpoint `POST /api/orders/:id/clone` gọi `ordersService.cloneOrder(id)`.
+    - `test/orders-clone-sn48.spec.ts`: Bộ kiểm thử tự động 3 test cases cho tính năng sao chép đơn hàng.
 - **Chi tiết kỹ thuật:**
   - **Sao chép toàn bộ dòng hàng:** Giữ nguyên toàn bộ SKU, đơn vị tính, hệ số quy đổi và số lượng từ đơn gốc.
   - **Tái áp giá & chiết khấu hiện hành:** Không kế thừa đơn giá và chiết khấu cũ; tự động định giá theo bảng giá hiệu lực và tính lại chiết khấu bậc sản lượng hiện hành.
@@ -877,3 +874,32 @@ est build -> 0 lỗi.
   - src/modules/orders/orders.service.ts: Chuẩn hóa dữ liệu đầu vào từ Portal, bổ sung logic trừ tồn kho real-time DB & Memory và guard từ chối khi vượt tồn.
 - **Trạng thái kiểm thử:**
   - Backend Type Check: npx tsc --noEmit -> 0 lỗi (Exit Code 0).
+  - Backend Test: `npx jest test/orders-clone-sn48.spec.ts` -> 3/3 tests passed (100%).
+  - Backend Build: `nest build` -> 0 lỗi.
+
+### [Sprint 4] - [SN-43]: API Lịch Sử Mua Hàng 3 Tháng & Gợi Ý Mặt Hàng Khi Lên Đơn (Order Suggestions & 1-Click Reorder)
+- **Thời gian hoàn thành:** 2026-10-09
+- **Mã Jira / Task:** SN-43 (Parent Story: SN-39 / S4-04 - Sprint 4)
+- **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn xem lịch sử mua hàng của đại lý ngay khi gõ đơn, để gợi ý đúng mặt hàng khách vẫn lấy đều thay vì phải hỏi lại."
+- **Tiêu chí chấp nhận (AC) đã đạt 100%:**
+  1. **AC1 - Gợi ý mặt hàng 3 tháng gần nhất:** Tự động truy vấn tất cả đơn hàng hợp lệ của đại lý trong phạm vi 3 tháng qua (`createdAt >= now() - 3 months`), gom nhóm theo từng SKU / sản phẩm: `productId`, `sku`, `productName`, `unit`, `baseUnit`, `price`, `totalQuantity`, `orderCount`, `averageQuantity` (số lượng bình quân mỗi đơn), `lastPurchasedAt` (ngày mua gần nhất), `lastPurchasedQuantity` (số lượng mua ở lần gần nhất).
+  2. **AC2 - 1-Click Reorder / Sao chép đơn gần nhất:** Cung cấp endpoint lấy chi tiết các dòng hàng của đơn hàng thành công gần nhất của đại lý để phục vụ thêm nhanh nguyên nhóm hàng cũ vào đơn mới.
+  3. **AC3 - Ràng buộc bảo mật & phân quyền (RBAC Scope):** Nếu người dùng có vai trò `SALES_REP`, kiểm tra nghiêm ngặt xem đại lý có thuộc quyền phụ trách của nhân viên hay không (`customer.salesRepId === user.id`). Nếu không thuộc quyền phụ trách, lập tức ném lỗi `ForbiddenException("Bạn không có quyền xem thông tin của đại lý này")`. Vai trò `ADMIN` và `SALES_MANAGER` có toàn quyền truy cập mọi đại lý.
+- **Danh sách file tạo mới / thay đổi:**
+  - **Backend (`HTBH_Backend`):**
+    - `src/modules/orders/dto/customer-purchase-history.dto.ts` (Tạo mới: `LOOKBACK_MONTHS = 3`, `SuggestedProductItem`, `LatestOrderItem`, `LatestOrderSummary`, `CustomerPurchaseHistoryResponse`).
+    - `src/modules/orders/orders.service.ts` (Cập nhật: Bổ sung logic `getPurchaseHistorySuggestions()`, `getLatestCustomerOrder()`, `verifyCustomerAccess()`, làm giàu dữ liệu đơn hàng mẫu trong 3 tháng cho đại lý).
+    - `src/modules/orders/orders.module.ts` (Cập nhật: Sử dụng `forwardRef(() => CustomersModule)` đồng bộ vòng lặp dependency).
+    - `src/modules/customers/customers.module.ts` (Cập nhật: Import `forwardRef(() => OrdersModule)`).
+    - `src/modules/customers/customers.controller.ts` (Cập nhật: Thêm 2 endpoints chuẩn RESTful `GET /api/customers/:customerId/purchase-history/suggestions` và `GET /api/customers/:customerId/orders/latest` được bảo vệ bởi `JwtAuthGuard`, `RolesGuard`, `@Roles(ADMIN, SALES_MANAGER, SALES_REP)`).
+  - **Frontend (`HTBH_Frontend`):**
+    - `src/types/order-suggestion.types.ts` (Tạo mới: `SuggestedProductItem`, `LatestOrderItem`, `LatestOrderSummary`, `CustomerPurchaseHistoryResponse` khớp 100% với Backend).
+    - `src/services/order-suggestions.service.ts` (Tạo mới: `orderSuggestionsService` gọi API tập trung qua `apiClient` kèm fallback demo an toàn).
+    - `src/components/order-suggestions-panel.tsx` (Tạo mới: Component widget hiển thị lịch sử gợi ý 3 tháng và nút 1-click reorder).
+    - `src/pages/orders-page.tsx` (Cập nhật: Tích hợp `OrderSuggestionsPanel` vào Bước 2 tạo đơn hàng, các handler `handleAddSuggestedItem` và `handleReorderPreviousOrder`).
+- **Trạng thái kiểm thử:**
+  - Backend Spec Test: `npx ts-node test/customers-filter-sn37.spec.ts` -> 31/31 tests passed (100%).
+  - Backend Spec Test: `npx ts-node test/products-sku-management-sn138.spec.ts` -> 62/62 tests passed (100%).
+  - Backend Build: `nest build` -> 0 lỗi, 100% type-safe, không dùng `any`.
+  - Frontend ESLint: `npx eslint` -> 0 lỗi, 0 warnings.
+  - Frontend Build: `npm run build` (`tsc -b && vite build`) -> 0 lỗi, build production hoàn tất.

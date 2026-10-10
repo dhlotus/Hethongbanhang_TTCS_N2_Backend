@@ -96,6 +96,15 @@ export class CreateOrderLineDto {
   @IsOptional()
   @IsNumber()
   stockAvailable?: number;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Số lượng thực giao phải là số' })
+  @Min(0, { message: 'Số lượng thực giao không được âm' })
+  deliveredQuantity?: number;
+
+  @IsOptional()
+  @IsString()
+  shortDeliveryReason?: string;
 }
 
 /**
@@ -187,3 +196,54 @@ export class UpdateOrderStatusDto {
   @IsString()
   reason?: string;
 }
+
+/**
+ * DTO đặt lại dòng hàng (Re-order item - SN-174)
+ */
+export class ReorderLineItemDto {
+  @IsNotEmpty({ message: 'Mã SKU không được để trống' })
+  @IsString()
+  productSku: string;
+
+  @IsOptional()
+  @IsString()
+  productId?: string;
+
+  @IsInt({ message: 'Số lượng đặt lại phải là số nguyên' })
+  @Min(1, { message: 'Số lượng đặt lại phải ≥ 1' })
+  quantity: number;
+
+  @IsOptional()
+  @IsString()
+  unit?: string;
+}
+
+/**
+ * DTO đặt lại đơn hàng cũ (Re-order - SN-174)
+ */
+export class ReorderDto {
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReorderLineItemDto)
+  items?: ReorderLineItemDto[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  selectedLineIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  deliveryDate?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DeliveryPointInputDto)
+  deliveryPoint?: DeliveryPointInputDto;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+

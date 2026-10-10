@@ -1,4 +1,4 @@
-import { BadRequestException, forwardRef, Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, forwardRef, Inject, Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
@@ -46,12 +46,16 @@ export class InventoryService implements OnModuleInit {
    */
   private locks = new Map<string, Promise<void>>();
   private stockBalanceSchemaPromise: Promise<void> | null = null;
+  private readonly databaseService: DatabaseService;
 
   constructor(
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
-    private readonly databaseService: DatabaseService,
-  ) {}
+    @Optional()
+    databaseService?: DatabaseService,
+  ) {
+    this.databaseService = databaseService || new DatabaseService();
+  }
 
   async onModuleInit(): Promise<void> {
     if (this.ledger.size === 0) {
@@ -235,6 +239,22 @@ export class InventoryService implements OnModuleInit {
     }>
   > {
     const products = await this.productsService.findAll();
+    if (!this.databaseService.isConnected()) {
+      return products.map((p) => ({
+        sku: p.sku,
+        name: p.name,
+        stockQuantity: p.stockQuantity ?? 0,
+        physicalStockQuantity: p.stockQuantity ?? 0,
+        reservedQuantity: 0,
+        baseUnit: p.baseUnit,
+        units: (p.units || []).map((u) => ({
+          unitName: u.unitName,
+          conversionRate: u.conversionRate,
+          isBaseUnit: u.isBaseUnit,
+        })),
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+      }));
+    }
     const physicalBalances = await this.getStockBalances(products);
     const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
       `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
@@ -302,6 +322,20 @@ export class InventoryService implements OnModuleInit {
     const baseQuantityChange = Math.round(dto.quantityChange * conversion.conversionRate);
     if (baseQuantityChange === 0) {
       throw new BadRequestException('Số lượng điều chỉnh sau quy đổi phải khác 0.');
+    }
+    if (!this.databaseService.isConnected()) {
+      const previousQuantity = product.stockQuantity ?? 0;
+      if (baseQuantityChange < 0 && previousQuantity + baseQuantityChange < 0) {
+        throw new BadRequestException(`Tồn kho không đủ để xuất trừ (hiện có: ${previousQuantity}).`);
+      }
+      const newQuantity = previousQuantity + baseQuantityChange;
+      await this.productsService.setStockQuantity(product.id, newQuantity);
+      const transaction = this.createInventoryTransaction(
+        product, dto, userId, conversion.unitName, conversion.conversionRate,
+        baseQuantityChange, previousQuantity, newQuantity,
+      );
+      this.writeLedger(transaction);
+      return this.createAdjustmentResult(transaction, dto, userId, previousQuantity, newQuantity);
     }
     const client = await this.databaseService.getClient();
     let transaction: InventoryTransactionEntity;

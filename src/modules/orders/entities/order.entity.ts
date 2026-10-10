@@ -43,6 +43,7 @@ export class OrderEntity {
   approvalReasons: string[];
   isCreditLimitExceeded?: boolean;
   creditLimitExceededAmount?: number;
+  isShortDelivery?: boolean; // Cờ báo đơn hàng bị giao thiếu (SN-170)
   createdSource?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -61,6 +62,7 @@ export class OrderEntity {
     this.paymentStatus = partial.paymentStatus ?? PaymentStatus.UNPAID;
     this.isCreditLimitExceeded = partial.isCreditLimitExceeded ?? false;
     this.creditLimitExceededAmount = partial.creditLimitExceededAmount ?? 0;
+    this.isShortDelivery = partial.isShortDelivery ?? false;
     this.createdSource = partial.createdSource ?? 'AGENCY_PORTAL';
     this.createdAt = partial.createdAt ?? new Date();
     this.updatedAt = partial.updatedAt ?? new Date();

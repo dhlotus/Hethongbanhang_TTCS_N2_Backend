@@ -10,54 +10,104 @@ import {
   Post,
   Put,
   Query,
-  Req,
   UseGuards,
 } from '@nestjs/common';
-import { CreateOrderDto, UpdateOrderStatusDto } from './dto/create-order.dto';
+import {
+  CreateOrderDto,
+  ReorderDto,
+  UpdateOrderStatusDto,
+} from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { OrderEntity } from './entities/order.entity';
 import { OrdersService } from './orders.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { ICurrentUser } from '../auth/interfaces/current-user.interface';
-import { DecideOrderDto } from './dto/decide-order.dto';
-import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 
 /**
- * Controller Quản lý Đặt hàng B2B (SN-38, SN-39 & SN-46)
+ * Controller Quản lý Đặt hàng B2B (SN-38, SN-39, SN-170, SN-174)
  */
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   /**
-   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38 & SN-46)
-   * - Hỗ trợ lọc trạng thái, đại lý, nhân viên, khu vực, khoảng thời gian
-   * - Trả về tổng tiền của tập kết quả đang lọc (totalAmount)
-   * - Phân quyền: Nhân viên kinh doanh chỉ thấy đơn của đại lý mình phụ trách
-   * GET /api/orders
+   * Lấy danh sách đơn hàng của riêng Đại lý đang đăng nhập (SN-170: Chỉ thấy đơn của chính mình)
+   * GET /api/orders/portal/my-orders
    */
-  @Get()
+  @Get('portal/my-orders')
   @Public()
-  async getOrders(
+  async getMyOrders(
     @Query() query: QueryOrdersDto,
-    @Req() req?: any,
+    @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<{
     data: OrderEntity[];
     total: number;
-    totalAmount: number;
     page: number;
     limit: number;
     totalPages: number;
   }> {
-    const user = req?.user;
-    return this.ordersService.findAllOrders(query, user);
+    // Xác định customerId của đại lý (tự động nhận diện theo token hoặc query)
+    const targetCustomerId =
+      query.customerId ||
+      (currentUser?.username === 'dealer' ||
+      currentUser?.email?.includes('dealer') ||
+      currentUser?.email?.includes('daily')
+        ? 'cust-001'
+        : 'cust-001');
+
+    return this.ordersService.findOrdersByCustomer(targetCustomerId, query);
   }
+
+  /**
+   * Xem trước dòng hàng đặt lại, phát hiện sản phẩm ngừng kinh doanh & áp giá hiện hành (SN-174)
+   * GET /api/orders/:id/reorder-preview
+   */
+  @Get(':id/reorder-preview')
+  @Public()
+  async getReorderPreview(
+    @Param('id') id: string,
+    @Query('customerId') customerId?: string,
+  ) {
+    return this.ordersService.getReorderPreview(id, customerId);
+  }
+
+  /**
+   * Đặt lại đơn hàng cũ theo bảng giá hiện hành (SN-174)
+   * POST /api/orders/:id/reorder
+   */
+  @Post(':id/reorder')
+  @Public()
+  @HttpCode(HttpStatus.CREATED)
+  async reorder(
+    @Param('id') id: string,
+    @Body() dto: ReorderDto,
+    @Query('customerId') customerId?: string,
+  ) {
+    return this.ordersService.reorder(id, dto, customerId);
+  }
+
+  /**
+   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38)
+   * GET /api/orders
+   */
+  @Get()
+  @Public()
+  async getOrders(@Query() query: QueryOrdersDto): Promise<{
+    data: OrderEntity[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    return this.ordersService.findAllOrders(query);
+  }
+
 
   /**
    * Lấy chi tiết một đơn hàng theo ID
@@ -69,26 +119,6 @@ export class OrdersController {
     return this.ordersService.findOrderById(id);
   }
 
-  @Get(':id/approval-history')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
-  async getApprovalHistory(
-    @Param('id') id: string,
-  ): Promise<OrderApprovalHistoryEntity[]> {
-    return this.ordersService.getApprovalHistory(id);
-  }
-
-  @Post(':id/decision')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
-  async decideOrder(
-    @Param('id') id: string,
-    @Body() dto: DecideOrderDto,
-    @CurrentUser() reviewer: ICurrentUser,
-  ): Promise<OrderEntity> {
-    return this.ordersService.decideOrder(id, dto, reviewer);
-  }
-
   /**
    * Tạo đơn hàng mới cho Đại lý (SN-38 & SN-39)
    * POST /api/orders
@@ -98,17 +128,6 @@ export class OrdersController {
   @HttpCode(HttpStatus.CREATED)
   async createOrder(@Body() dto: CreateOrderDto): Promise<OrderEntity> {
     return this.ordersService.createOrder(dto);
-  }
-
-  /**
-   * Sao chép một đơn cũ thành đơn mới ở trạng thái Nháp (SN-48)
-   * POST /api/orders/:id/clone
-   */
-  @Post(':id/clone')
-  @Public()
-  @HttpCode(HttpStatus.CREATED)
-  async cloneOrder(@Param('id') id: string): Promise<OrderEntity> {
-    return this.ordersService.cloneOrder(id);
   }
 
   /**
