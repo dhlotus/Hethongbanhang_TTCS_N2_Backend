@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   OnModuleInit,
   Optional,
@@ -88,6 +89,7 @@ class AsyncLock {
  */
 @Injectable()
 export class OrdersService implements OnModuleInit {
+  private readonly logger = new Logger(OrdersService.name);
   private readonly orders = new Map<string, OrderEntity>();
   private readonly memoryApprovalHistory = new Map<string, OrderApprovalHistoryEntity[]>();
   private readonly orderLock = new AsyncLock();
@@ -102,98 +104,110 @@ export class OrdersService implements OnModuleInit {
     @Optional() private readonly databaseService?: DatabaseService,
     @Optional() private readonly inventoryService?: InventoryService,
   ) {
-    if (!this.databaseService) {
+    if (!this.databaseService || !this.databaseService.isConnected()) {
       for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
     }
   }
 
   async onModuleInit(): Promise<void> {
-    if (!this.databaseService) return;
-
-    await this.databaseService.query(`
-      CREATE TABLE IF NOT EXISTS app_order_records (
-        id TEXT PRIMARY KEY,
-        order_code TEXT NOT NULL UNIQUE,
-        payload JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL
-      )
-    `);
-    await this.databaseService.query(
-      'CREATE INDEX IF NOT EXISTS idx_app_order_records_created_at ON app_order_records(created_at DESC)',
-    );
-
-    await this.databaseService.query(`
-      CREATE TABLE IF NOT EXISTS app_order_storage_state (
-        state_key TEXT PRIMARY KEY,
-        seeded BOOLEAN NOT NULL DEFAULT FALSE
-      )
-    `);
-    await this.ensureApprovalTables();
-    const client = await this.databaseService.getClient();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `INSERT INTO app_order_storage_state (state_key, seeded)
-         VALUES ('orders', FALSE) ON CONFLICT (state_key) DO NOTHING`,
-      );
-      const stateResult = await client.query(
-        `SELECT seeded FROM app_order_storage_state WHERE state_key = 'orders' FOR UPDATE`,
-      );
-      if (!stateResult.rows[0]?.seeded) {
-        const countResult = await client.query(
-          'SELECT COUNT(*)::int AS count FROM app_order_records',
-        );
-        if (Number(countResult.rows[0]?.count ?? 0) === 0) {
-          for (const order of this.seedInitialOrders()) {
-            await client.query(
-              `INSERT INTO app_order_records (id, order_code, payload, created_at, updated_at)
-               VALUES ($1, $2, $3::jsonb, $4, $5)
-               ON CONFLICT (id) DO NOTHING`,
-              [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
-            );
-          }
-        }
-        await client.query(
-          `UPDATE app_order_storage_state SET seeded = TRUE WHERE state_key = 'orders'`,
-        );
+    if (!this.databaseService || !this.databaseService.isConnected()) {
+      if (this.orders.size === 0) {
+        for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
       }
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+      return;
     }
 
-    if (this.databaseService) {
+    try {
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS app_order_records (
+          id TEXT PRIMARY KEY,
+          order_code TEXT NOT NULL UNIQUE,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+      await this.databaseService.query(
+        'CREATE INDEX IF NOT EXISTS idx_app_order_records_created_at ON app_order_records(created_at DESC)',
+      );
+
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS app_order_storage_state (
+          state_key TEXT PRIMARY KEY,
+          seeded BOOLEAN NOT NULL DEFAULT FALSE
+        )
+      `);
+      await this.ensureApprovalTables();
+      const client = await this.databaseService.getClient();
       try {
-        const rows = await this.databaseService.query<{ payload: unknown }>(
-          'SELECT payload FROM app_order_records',
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO app_order_storage_state (state_key, seeded)
+           VALUES ('orders', FALSE) ON CONFLICT (state_key) DO NOTHING`,
         );
-        for (const row of rows) {
-          try {
-            const order = this.restoreOrder(row.payload);
-            this.orders.set(order.id, order);
-          } catch {
-            // ignore
+        const stateResult = await client.query(
+          `SELECT seeded FROM app_order_storage_state WHERE state_key = 'orders' FOR UPDATE`,
+        );
+        if (!stateResult.rows[0]?.seeded) {
+          const countResult = await client.query(
+            'SELECT COUNT(*)::int AS count FROM app_order_records',
+          );
+          if (Number(countResult.rows[0]?.count ?? 0) === 0) {
+            for (const order of this.seedInitialOrders()) {
+              await client.query(
+                `INSERT INTO app_order_records (id, order_code, payload, created_at, updated_at)
+                 VALUES ($1, $2, $3::jsonb, $4, $5)
+                 ON CONFLICT (id) DO NOTHING`,
+                [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
+              );
+            }
           }
+          await client.query(
+            `UPDATE app_order_storage_state SET seeded = TRUE WHERE state_key = 'orders'`,
+          );
         }
-      } catch {
-        // ignore
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+
+      if (this.databaseService.isConnected()) {
+        try {
+          const rows = await this.databaseService.query<{ payload: unknown }>(
+            'SELECT payload FROM app_order_records',
+          );
+          for (const row of rows) {
+            try {
+              const order = this.restoreOrder(row.payload);
+              this.orders.set(order.id, order);
+            } catch {
+              // ignore
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`[PostgreSQL] Lỗi khởi tạo bảng đơn hàng, chuyển sang bộ nhớ tạm: ${(error as Error).message}`);
+      if (this.orders.size === 0) {
+        for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
       }
     }
   }
 
   private async ensureApprovalTables(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.ensureApprovalHistoryTable();
     await this.ensureInventoryReservationTable();
     await this.ensureApprovalHistoryImmutability();
   }
 
   private async ensureApprovalHistoryTable(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_approval_history (
         id BIGSERIAL PRIMARY KEY,
@@ -213,7 +227,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureInventoryReservationTable(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.databaseService.query(`
       CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
         id BIGSERIAL PRIMARY KEY,
@@ -239,7 +253,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async ensureApprovalHistoryImmutability(): Promise<void> {
-    if (!this.databaseService) return;
+    if (!this.databaseService || !this.databaseService.isConnected()) return;
     await this.databaseService.query(`
       CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
       RETURNS TRIGGER AS $$
@@ -273,7 +287,7 @@ export class OrdersService implements OnModuleInit {
 
   private async saveOrder(order: OrderEntity): Promise<void> {
     this.orders.set(order.id, order);
-    if (!this.databaseService) {
+    if (!this.databaseService || !this.databaseService.isConnected()) {
       return;
     }
     await this.databaseService.query(
@@ -1083,7 +1097,7 @@ export class OrdersService implements OnModuleInit {
           product.availableQuantity = product.availableStock;
           this.productsService.deductAvailableStock(product.id || product.sku, deductQuantity);
 
-          if (this.databaseService) {
+          if (this.databaseService?.isConnected()) {
             try {
               this.databaseService.query(
                 'UPDATE app_inventory_stock_balances SET physical_quantity = GREATEST(0, physical_quantity - $1), updated_at = CURRENT_TIMESTAMP WHERE product_sku = $2',
@@ -1118,7 +1132,7 @@ export class OrdersService implements OnModuleInit {
     limit: number;
     totalPages: number;
   }> {
-    let list = this.databaseService
+    let list = this.databaseService?.isConnected()
       ? (await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
           'SELECT payload FROM app_order_records ORDER BY created_at DESC',
         )).map((row) => this.restoreOrder(row.payload))
@@ -1250,13 +1264,13 @@ export class OrdersService implements OnModuleInit {
    * Lấy chi tiết đơn hàng theo ID
    */
   async findOrderById(id: string): Promise<OrderEntity> {
-    const rows = this.databaseService
+    const rows = this.databaseService?.isConnected()
       ? await this.databaseService.query<{ [key: string]: unknown; payload: unknown }>(
           'SELECT payload FROM app_order_records WHERE id = $1 OR order_code = $1 LIMIT 1',
           [id],
         )
       : [];
-    const order = this.databaseService
+    const order = this.databaseService?.isConnected()
       ? (rows[0] ? this.restoreOrder(rows[0].payload) : undefined)
       : this.orders.get(id);
     if (!order) {
@@ -1267,7 +1281,7 @@ export class OrdersService implements OnModuleInit {
 
   async getApprovalHistory(orderId: string): Promise<OrderApprovalHistoryEntity[]> {
     const order = await this.findOrderById(orderId);
-    if (!this.databaseService) return this.memoryApprovalHistory.get(orderId) ?? [];
+    if (!this.databaseService || !this.databaseService.isConnected()) return this.memoryApprovalHistory.get(orderId) ?? [];
     const rows = await this.databaseService.query<{
       [key: string]: unknown;
       id: number;
@@ -1319,7 +1333,7 @@ export class OrdersService implements OnModuleInit {
     if (dto.action !== OrderApprovalAction.APPROVE && !dto.comment?.trim()) {
       throw new BadRequestException('Từ chối hoặc trả lại đơn cần có ý kiến.');
     }
-    if (!this.databaseService) {
+    if (!this.databaseService || !this.databaseService.isConnected()) {
       return this.decideOrderInMemory(orderId, dto, reviewer);
     }
 
@@ -1586,7 +1600,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Đơn chờ duyệt chỉ được xử lý qua chức năng xét duyệt.');
     }
-    if (this.databaseService && dto.status === OrderStatus.SHIPPED) {
+    if (this.databaseService?.isConnected() && dto.status === OrderStatus.SHIPPED) {
       const reservations = await this.databaseService.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM app_order_inventory_reservations
          WHERE order_id = $1 AND status = 'RESERVED'`,
@@ -1600,7 +1614,7 @@ export class OrdersService implements OnModuleInit {
     }
     order.status = dto.status;
     order.updatedAt = new Date();
-    if (this.databaseService && dto.status === OrderStatus.CANCELLED) {
+    if (this.databaseService?.isConnected() && dto.status === OrderStatus.CANCELLED) {
       await this.databaseService.query(
         `UPDATE app_order_inventory_reservations
          SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
@@ -1662,7 +1676,7 @@ export class OrdersService implements OnModuleInit {
         order.note = order.note ? `${order.note} [Lý do hủy: ${reason}]` : `[Lý do hủy: ${reason}]`;
       }
 
-      if (this.databaseService) {
+      if (this.databaseService?.isConnected()) {
         await this.databaseService.query(
           `UPDATE app_order_records SET payload = $1::jsonb, updated_at = $2 WHERE id = $3`,
           [JSON.stringify(order), order.updatedAt, order.id],
@@ -1678,7 +1692,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.CANCELLED) {
       throw new BadRequestException('Chỉ có thể xóa đơn hàng ở trạng thái Nháp hoặc Đã hủy');
     }
-    if (this.databaseService) {
+    if (this.databaseService?.isConnected()) {
       await this.databaseService.query('DELETE FROM app_order_records WHERE id = $1', [id]);
     } else {
       this.orders.delete(id);
