@@ -271,6 +271,8 @@ export class InventoryService implements OnModuleInit {
         id: string;
         orderId: string;
         orderCode?: string;
+        customerName?: string;
+        orderStatus?: string;
         quantity: number;
         expiredAt: string;
         createdAt: string;
@@ -286,6 +288,8 @@ export class InventoryService implements OnModuleInit {
         id: string;
         orderId: string;
         orderCode?: string;
+        customerName?: string;
+        orderStatus?: string;
         quantity: number;
         expiredAt: string;
         createdAt: string;
@@ -305,9 +309,14 @@ export class InventoryService implements OnModuleInit {
           expired_at: string;
           created_at: string;
           order_code?: string;
+          customer_name?: string;
+          order_status?: string;
         }>(
           `SELECT r.id, r.order_id, r.product_id, r.quantity::text,
-                  r.expired_at::text, r.created_at::text, COALESCE(o.order_code, o.id, r.order_id) as order_code
+                  r.expired_at::text, r.created_at::text,
+                  COALESCE(o.order_code, o.id, r.order_id) as order_code,
+                  COALESCE(o.payload->>'customerName', '') as customer_name,
+                  COALESCE(o.payload->>'status', 'APPROVED') as order_status
            FROM stock_reservations r
            LEFT JOIN app_order_records o ON (o.id = r.order_id OR o.order_code = r.order_id)
            WHERE r.status IN ('ACTIVE', 'RESERVED') AND r.expired_at > CURRENT_TIMESTAMP`,
@@ -317,6 +326,8 @@ export class InventoryService implements OnModuleInit {
           id: string;
           orderId: string;
           orderCode?: string;
+          customerName?: string;
+          orderStatus?: string;
           quantity: number;
           expiredAt: string;
           createdAt: string;
@@ -342,10 +353,63 @@ export class InventoryService implements OnModuleInit {
             id: row.id,
             orderId: row.order_id,
             orderCode: row.order_code || row.order_id,
+            customerName: row.customer_name,
+            orderStatus: row.order_status || 'APPROVED',
             quantity: qty,
             expiredAt: row.expired_at,
             createdAt: row.created_at,
           });
+        }
+
+        // Bổ sung các đơn hàng APPROVED/PROCESSING từ app_order_records nếu chưa có trong stock_reservations
+        const activeOrderRows = await this.databaseService.query<{
+          id: string;
+          order_code: string;
+          order_status: string;
+          customer_name: string;
+          lines: Array<{
+            id?: string;
+            productId?: string;
+            productSku?: string;
+            quantity?: number;
+            baseQuantity?: number;
+          }>;
+          reserved_until?: string;
+          created_at: string;
+        }>(
+          `SELECT id, order_code,
+                  COALESCE(payload->>'status', 'APPROVED') as order_status,
+                  COALESCE(payload->>'customerName', '') as customer_name,
+                  COALESCE(payload->'lines', '[]'::jsonb) as lines,
+                  payload->>'reservedUntil' as reserved_until,
+                  created_at::text
+           FROM app_order_records
+           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING')`,
+        );
+
+        const reservedOrderIds = new Set(resRows.map((r) => r.order_id));
+        for (const order of activeOrderRows) {
+          if (reservedOrderIds.has(order.id) || reservedOrderIds.has(order.order_code)) {
+            continue;
+          }
+          const lines = Array.isArray(order.lines) ? order.lines : [];
+          for (const line of lines) {
+            const lineSku = line.productSku || line.productId;
+            if (!lineSku) continue;
+            const lineQty = Number(line.baseQuantity ?? line.quantity) || 0;
+            if (lineQty <= 0) continue;
+
+            addReservationToSku(lineSku, {
+              id: `res-ord-${order.id}-${line.id || lineSku}`,
+              orderId: order.id,
+              orderCode: order.order_code || order.id,
+              customerName: order.customer_name,
+              orderStatus: order.order_status,
+              quantity: lineQty,
+              expiredAt: order.reserved_until || new Date(new Date(order.created_at).getTime() + 24 * 3600 * 1000).toISOString(),
+              createdAt: order.created_at,
+            });
+          }
         }
       } catch {
         // Fallback to app_order_inventory_reservations if needed
