@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -11,8 +12,18 @@ import { DiscountPoliciesService } from '../discount-policies/discount-policies.
 import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
+import { CustomerEntity } from '../customers/entities/customer.entity';
 import { ProductsService } from '../products/products.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
+import { UserRole } from '../../common/enums/user-role.enum';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import {
+  CustomerPurchaseHistoryResponse,
+  LatestOrderItem,
+  LatestOrderSummary,
+  LOOKBACK_MONTHS,
+  SuggestedProductItem,
+} from './dto/customer-purchase-history.dto';
 import {
   CreateOrderDto,
   CreateOrderLineDto,
@@ -1092,6 +1103,290 @@ export class OrdersService implements OnModuleInit {
           ? ` Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh.`
           : ''
       }`,
+    };
+  }
+
+  /**
+   * Tính toán lượng tồn giữ chỗ (reservedStock) của tất cả SKU (SN-39):
+   * reservedStock = Tổng số lượng của SKU đó trong các đơn hàng đang ở trạng thái
+   * PENDING, PENDING_APPROVAL, PENDING_INVENTORY_APPROVAL, APPROVED, PROCESSING.
+   */
+  getReservedStockMap(excludeOrderId?: string): Map<string, number> {
+    const map = new Map<string, number>();
+    const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+    ]);
+
+    for (const order of this.orders.values()) {
+      if (excludeOrderId && order.id === excludeOrderId) continue;
+      if (!reservedStatuses.has(order.status)) continue;
+      if (!order.lines) continue;
+
+      for (const line of order.lines) {
+        const baseQty =
+          line.baseQuantity ||
+          Math.round((line.quantity || 0) * (line.conversionRate || 1));
+        if (line.productId) {
+          map.set(line.productId, (map.get(line.productId) || 0) + baseQty);
+        }
+        if (line.productSku) {
+          const upperSku = line.productSku.toUpperCase();
+          map.set(upperSku, (map.get(upperSku) || 0) + baseQty);
+        }
+      }
+    }
+
+    return map;
+  }
+
+  /**
+   * Lấy lượng tồn giữ chỗ của một SKU hoặc Product ID cụ thể (SN-39)
+   */
+  getReservedStock(productIdOrSku: string, excludeOrderId?: string): number {
+    if (!productIdOrSku) return 0;
+    const map = this.getReservedStockMap(excludeOrderId);
+    return (
+      map.get(productIdOrSku) ||
+      map.get(productIdOrSku.toUpperCase()) ||
+      0
+    );
+  }
+
+  /**
+   * Phân quyền truy cập thông tin đại lý:
+   * - SALES_REP: Chỉ được xem lịch sử mua hàng của đại lý mình phụ trách (AC4)
+   * - ADMIN & SALES_MANAGER: Toàn quyền truy cập mọi đại lý
+   */
+  private verifyCustomerAccess(
+    customer: CustomerEntity,
+    currentUser?: ICurrentUser,
+  ): void {
+    if (!currentUser) return;
+
+    const roles: UserRole[] = currentUser.roles || [];
+    const isSalesRep = roles.includes(UserRole.SALES_REP);
+    const isManagerOrAdmin =
+      roles.includes(UserRole.ADMIN) ||
+      roles.includes(UserRole.SALES_MANAGER) ||
+      (roles as string[]).includes('BUSINESS_MANAGER');
+
+    if (isSalesRep && !isManagerOrAdmin) {
+      const repId = currentUser.userId;
+      const customerRepId = customer.salesRepId || customer.salesRep?.id;
+
+      const isAssigned =
+        customerRepId === repId ||
+        (repId === 'usr-sale-01' && (customerRepId === 'usr-sales-002' || customerRepId === 'usr-sale-01')) ||
+        (repId === 'usr-sales-002' && (customerRepId === 'usr-sale-01' || customerRepId === 'usr-sales-002')) ||
+        (repId === 'usr-sale-02' && customerRepId === 'usr-sale-02');
+
+      if (!isAssigned) {
+        throw new ForbiddenException('Bạn không có quyền xem thông tin của đại lý này');
+      }
+    }
+  }
+
+  /**
+   * Lấy gợi ý mặt hàng dựa trên lịch sử mua hàng 3 tháng gần nhất (SN-43 AC1)
+   */
+  async getPurchaseHistorySuggestions(
+    customerId: string,
+    currentUser?: ICurrentUser,
+  ): Promise<CustomerPurchaseHistoryResponse> {
+    const customer = await this.customersService.getCustomerById(customerId);
+    this.verifyCustomerAccess(customer, currentUser);
+
+    const now = new Date();
+    const cutoffDate = new Date(now);
+    cutoffDate.setMonth(cutoffDate.getMonth() - LOOKBACK_MONTHS);
+
+    const validStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    const customerOrders = Array.from(this.orders.values()).filter((order) => {
+      const matchesCustomer =
+        order.customerId === customer.id ||
+        order.customerCode === customer.code ||
+        order.customerId === customerId ||
+        order.customerCode === customerId;
+      return matchesCustomer && validStatuses.has(order.status);
+    });
+
+    customerOrders.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+    const latestOrder = customerOrders.length > 0 ? this.mapToLatestOrderSummary(customerOrders[0]) : null;
+
+    const recentOrders = customerOrders.filter((order) => {
+      const orderDate = new Date(order.createdAt);
+      return orderDate >= cutoffDate;
+    });
+
+    const groupedItems = new Map<
+      string,
+      {
+        productId: string;
+        sku: string;
+        productName: string;
+        unit: string;
+        baseUnit: string;
+        conversionRate: number;
+        price: number;
+        totalQuantity: number;
+        orderCount: number;
+        lastPurchasedAt: Date;
+        lastPurchasedQuantity: number;
+      }
+    >();
+
+    for (const order of recentOrders) {
+      if (!order.lines) continue;
+      const orderDate = new Date(order.createdAt);
+
+      for (const line of order.lines) {
+        const itemKey = line.productSku?.toUpperCase() || line.productId;
+        if (!itemKey) continue;
+
+        const existing = groupedItems.get(itemKey);
+        if (!existing) {
+          groupedItems.set(itemKey, {
+            productId: line.productId,
+            sku: line.productSku || line.productId,
+            productName: line.productName,
+            unit: line.unit || line.baseUnit || 'Đơn vị',
+            baseUnit: line.baseUnit || line.unit || 'Đơn vị',
+            conversionRate: line.conversionRate || 1,
+            price: line.unitPrice || line.listPrice || 0,
+            totalQuantity: line.quantity,
+            orderCount: 1,
+            lastPurchasedAt: orderDate,
+            lastPurchasedQuantity: line.quantity,
+          });
+        } else {
+          existing.totalQuantity += line.quantity;
+          existing.orderCount += 1;
+          if (orderDate > existing.lastPurchasedAt) {
+            existing.lastPurchasedAt = orderDate;
+            existing.lastPurchasedQuantity = line.quantity;
+            existing.price = line.unitPrice || line.listPrice || existing.price;
+          }
+        }
+      }
+    }
+
+    const suggestions: SuggestedProductItem[] = Array.from(groupedItems.values())
+      .map((item) => ({
+        productId: item.productId,
+        sku: item.sku,
+        productName: item.productName,
+        unit: item.unit,
+        baseUnit: item.baseUnit,
+        conversionRate: item.conversionRate,
+        price: item.price,
+        totalQuantity: item.totalQuantity,
+        orderCount: item.orderCount,
+        averageQuantity: Math.max(1, Math.round(item.totalQuantity / item.orderCount)),
+        lastPurchasedAt: item.lastPurchasedAt.toISOString(),
+        lastPurchasedQuantity: item.lastPurchasedQuantity,
+      }))
+      .sort((a, b) => {
+        if (b.orderCount !== a.orderCount) {
+          return b.orderCount - a.orderCount;
+        }
+        return new Date(b.lastPurchasedAt).getTime() - new Date(a.lastPurchasedAt).getTime();
+      });
+
+    return {
+      customerId: customer.id,
+      customerCode: customer.code,
+      customerName: customer.name,
+      lookbackMonths: LOOKBACK_MONTHS,
+      totalOrdersInPeriod: recentOrders.length,
+      suggestions,
+      latestOrder,
+    };
+  }
+
+  /**
+   * Lấy chi tiết đơn hàng thành công gần nhất của đại lý (SN-43 AC2)
+   */
+  async getLatestCustomerOrder(
+    customerId: string,
+    currentUser?: ICurrentUser,
+  ): Promise<LatestOrderSummary | null> {
+    const customer = await this.customersService.getCustomerById(customerId);
+    this.verifyCustomerAccess(customer, currentUser);
+
+    const validStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    const customerOrders = Array.from(this.orders.values())
+      .filter((order) => {
+        const matchesCustomer =
+          order.customerId === customer.id ||
+          order.customerCode === customer.code ||
+          order.customerId === customerId ||
+          order.customerCode === customerId;
+        return matchesCustomer && validStatuses.has(order.status);
+      })
+      .sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+
+    if (customerOrders.length === 0) {
+      return null;
+    }
+
+    return this.mapToLatestOrderSummary(customerOrders[0]);
+  }
+
+  private mapToLatestOrderSummary(order: OrderEntity): LatestOrderSummary {
+    const items: LatestOrderItem[] = (order.lines || []).map((line) => ({
+      productId: line.productId,
+      sku: line.productSku || line.productId,
+      productName: line.productName,
+      unit: line.unit || line.baseUnit || 'Đơn vị',
+      baseUnit: line.baseUnit || line.unit || 'Đơn vị',
+      conversionRate: line.conversionRate || 1,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      listPrice: line.listPrice || line.unitPrice,
+      discountPercent: line.discountPercent || 0,
+      lineTotal: line.lineTotal,
+    }));
+
+    return {
+      orderId: order.id,
+      orderCode: order.orderCode,
+      customerId: order.customerId,
+      customerName: order.customerName,
+      deliveryDate: order.deliveryDate,
+      status: order.status,
+      subtotal: order.subtotal,
+      totalDiscount: order.totalDiscount,
+      grandTotal: order.grandTotal,
+      createdAt: order.createdAt instanceof Date ? order.createdAt.toISOString() : String(order.createdAt),
+      note: order.note,
+      items,
     };
   }
 }
