@@ -1311,6 +1311,16 @@ export class OrdersService implements OnModuleInit {
         ],
       );
 
+      // Cập nhật hồi phục tồn khả dụng trong productsService
+      if (this.productsService && order.lines) {
+        for (const line of order.lines) {
+          this.productsService.restoreAvailableStock(
+            line.productId || line.productSku,
+            line.baseQuantity || line.quantity,
+          );
+        }
+      }
+
       await client.query('COMMIT');
       return order;
     } catch (error) {
@@ -1339,6 +1349,16 @@ export class OrdersService implements OnModuleInit {
     order.cancelReason = reason.trim();
     order.updatedAt = new Date();
     await this.saveOrder(order);
+
+    // Hồi phục tồn khả dụng trong productsService
+    if (this.productsService && order.lines) {
+      for (const line of order.lines) {
+        this.productsService.restoreAvailableStock(
+          line.productId || line.productSku,
+          line.baseQuantity || line.quantity,
+        );
+      }
+    }
 
     const history = this.memoryApprovalHistory.get(orderId) ?? [];
     history.push(
