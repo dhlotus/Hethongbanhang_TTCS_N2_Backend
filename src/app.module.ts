@@ -21,6 +21,7 @@ import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
 import { AgencyModule } from './modules/agencies/agency.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { GoodsReceiptsModule } from './modules/inventory-receipts/goods-receipts.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     CreditLimitModule,
     OrdersModule,
     InventoryModule,
+    GoodsReceiptsModule,
     SuppliersModule,
     DiscountPoliciesModule,
     ShipmentsModule,
