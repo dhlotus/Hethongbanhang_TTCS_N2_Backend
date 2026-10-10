@@ -151,7 +151,8 @@ export class OrdersController {
    * PATCH /api/orders/:id/status
    */
   @Patch(':id/status')
-  @Public()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
   async updateOrderStatus(
     @Param('id') id: string,
     @Body() dto: UpdateOrderStatusDto,

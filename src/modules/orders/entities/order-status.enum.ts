@@ -12,6 +12,7 @@ export enum OrderStatus {
   PROCESSING = 'PROCESSING', // Đang soạn hàng
   SHIPPED = 'SHIPPED', // Đã xuất kho / giao vận
   DELIVERED = 'DELIVERED', // Giao thành công
+  CLOSED = 'CLOSED', // Đã đóng
   CANCELLED = 'CANCELLED', // Đã hủy
   RETURNED = 'RETURNED', // Hoàn hàng
 }
