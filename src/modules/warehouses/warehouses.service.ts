@@ -4,6 +4,13 @@ import { CustomersService } from '../customers/customers.service';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 import { CreateLocationDto } from './dto/create-location.dto';
+import {
+  AgencyWarehouseAssignmentEntity,
+  AgencyWarehouseUpdateEntity,
+  WarehouseEntity,
+  WarehouseLocationEntity,
+  WarehouseManagerEntity,
+} from './entities/warehouse.entity';
 
 @Injectable()
 export class WarehousesService {
@@ -12,8 +19,8 @@ export class WarehousesService {
     private readonly customersService: CustomersService,
   ) {}
 
-  async findAll(): Promise<Record<string, unknown>[]> {
-    return this.databaseService.query(`
+  async findAll(): Promise<WarehouseEntity[]> {
+    return this.databaseService.query<WarehouseEntity>(`
       SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
              w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
              COUNT(l.id)::int AS "locationCount"
@@ -22,8 +29,8 @@ export class WarehousesService {
     `);
   }
 
-  async listManagers(): Promise<Array<{ id: string; name: string }>> {
-    return this.databaseService.query<{ id: string; name: string }>(
+  async listManagers(): Promise<WarehouseManagerEntity[]> {
+    return this.databaseService.query<WarehouseManagerEntity>(
       `SELECT u.id, u.full_name AS name FROM users u
        JOIN roles r ON r.id = u.role_id
        WHERE r.code IN ('WAREHOUSE_MANAGER', 'WH_MANAGER') AND u.status = 'ACTIVE'
@@ -31,57 +38,85 @@ export class WarehousesService {
     );
   }
 
-  async create(dto: CreateWarehouseDto): Promise<Record<string, unknown>> {
-    const rows = await this.databaseService.query(
+  async create(dto: CreateWarehouseDto): Promise<WarehouseEntity> {
+    const rows = await this.databaseService.query<WarehouseEntity>(
       `INSERT INTO warehouses (code, name, address, phone, manager_id)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, code, name, address, phone, manager_id AS "managerId", status`,
-      [dto.code.trim(), dto.name.trim(), dto.address.trim(), dto.phone?.trim() || null, dto.managerId || null],
+      [
+        dto.code.trim(),
+        dto.name.trim(),
+        dto.address.trim(),
+        dto.phone?.trim() || null,
+        dto.managerId || null,
+      ],
     );
     return rows[0];
   }
 
-  async update(id: string, dto: UpdateWarehouseDto): Promise<Record<string, unknown>> {
-    const rows = await this.databaseService.query(
+  async update(id: string, dto: UpdateWarehouseDto): Promise<WarehouseEntity> {
+    const rows = await this.databaseService.query<WarehouseEntity>(
       `UPDATE warehouses SET name = COALESCE($2, name), address = COALESCE($3, address),
        phone = COALESCE($4, phone), manager_id = COALESCE($5, manager_id),
        status = COALESCE($6, status), updated_at = CURRENT_TIMESTAMP WHERE id = $1
        RETURNING id, code, name, address, phone, manager_id AS "managerId", status`,
-      [id, dto.name?.trim() || null, dto.address?.trim() || null, dto.phone?.trim() || null, dto.managerId || null, dto.status || null],
+      [
+        id,
+        dto.name?.trim() || null,
+        dto.address?.trim() || null,
+        dto.phone?.trim() || null,
+        dto.managerId || null,
+        dto.status || null,
+      ],
     );
     if (!rows[0]) throw new NotFoundException('Không tìm thấy kho hàng');
     return rows[0];
   }
 
-  async listLocations(warehouseId: string): Promise<Record<string, unknown>[]> {
+  async listLocations(warehouseId: string): Promise<WarehouseLocationEntity[]> {
     await this.requireWarehouse(warehouseId);
-    return this.databaseService.query(
+    return this.databaseService.query<WarehouseLocationEntity>(
       `SELECT id, warehouse_id AS "warehouseId", code, zone, aisle, rack, shelf, bin, status
        FROM warehouse_locations WHERE warehouse_id = $1 ORDER BY zone, aisle, rack, shelf, bin, code`,
       [warehouseId],
     );
   }
 
-  async createLocation(warehouseId: string, dto: CreateLocationDto): Promise<Record<string, unknown>> {
+  async createLocation(
+    warehouseId: string,
+    dto: CreateLocationDto,
+  ): Promise<WarehouseLocationEntity> {
     await this.requireWarehouse(warehouseId);
-    const rows = await this.databaseService.query(
+    const rows = await this.databaseService.query<WarehouseLocationEntity>(
       `INSERT INTO warehouse_locations (warehouse_id, code, zone, aisle, rack, shelf, bin, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, warehouse_id AS "warehouseId", code, zone, aisle, rack, shelf, bin, status`,
-      [warehouseId, dto.code.trim(), dto.zone?.trim() || 'DEFAULT', dto.aisle || null, dto.rack || null, dto.shelf || null, dto.bin || null, dto.status || 'ACTIVE'],
+      [
+        warehouseId,
+        dto.code.trim(),
+        dto.zone?.trim() || 'DEFAULT',
+        dto.aisle || null,
+        dto.rack || null,
+        dto.shelf || null,
+        dto.bin || null,
+        dto.status || 'ACTIVE',
+      ],
     );
     return rows[0];
   }
 
-  async listAgencyDefaults(): Promise<Array<{ agencyId: string; warehouseId: string }>> {
-    const rows = await this.databaseService.query<{ agencyId: string; warehouseId: string }>(
+  async listAgencyDefaults(): Promise<AgencyWarehouseAssignmentEntity[]> {
+    const rows = await this.databaseService.query<AgencyWarehouseAssignmentEntity>(
       `SELECT agency_key AS "agencyId", warehouse_id AS "warehouseId"
        FROM app_agency_default_warehouses ORDER BY agency_key`,
     );
     return rows;
   }
 
-  async setAgencyDefaultWarehouse(agencyId: string, warehouseId: string | null): Promise<Record<string, unknown>> {
+  async setAgencyDefaultWarehouse(
+    agencyId: string,
+    warehouseId: string | null,
+  ): Promise<AgencyWarehouseUpdateEntity> {
     await this.customersService.getCustomerById(agencyId);
     if (warehouseId) await this.requireWarehouse(warehouseId);
     if (warehouseId) {
@@ -101,7 +136,10 @@ export class WarehousesService {
   }
 
   private async requireWarehouse(id: string): Promise<void> {
-    const rows = await this.databaseService.query('SELECT id FROM warehouses WHERE id = $1', [id]);
+    const rows = await this.databaseService.query<{ id: string }>(
+      'SELECT id FROM warehouses WHERE id = $1',
+      [id],
+    );
     if (!rows[0]) throw new NotFoundException('Không tìm thấy kho hàng');
   }
 }

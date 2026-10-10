@@ -37,6 +37,7 @@ import { OrderApprovalHistoryEntity } from './entities/order-approval-history.en
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { InventoryService } from '../inventory/inventory.service';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 import { ProductStatus } from '../../common/enums/product-status.enum';
 import {
   CustomerPurchaseHistoryResponse,
@@ -234,7 +235,7 @@ export class OrdersService implements OnModuleInit {
         order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
         order_line_id TEXT NOT NULL,
         product_sku TEXT NOT NULL,
-        warehouse_id UUID NOT NULL DEFAULT '11111111-0000-0000-0000-000000000001',
+        warehouse_id UUID NOT NULL DEFAULT '${DEFAULT_WAREHOUSE_ID}',
         base_quantity NUMERIC(15, 2) NOT NULL CHECK (base_quantity > 0),
         status VARCHAR(20) NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1081,7 +1082,7 @@ export class OrdersService implements OnModuleInit {
           [customer.id],
         )
       : [];
-    const agencyWarehouseId = agencyWarehouseRows[0]?.warehouse_id || '11111111-0000-0000-0000-000000000001';
+    const agencyWarehouseId = agencyWarehouseRows[0]?.warehouse_id || DEFAULT_WAREHOUSE_ID;
     if (this.productsService && newOrder.lines) {
       for (const line of newOrder.lines) {
         const product = this.productsService.findProductInternal(
@@ -1433,7 +1434,7 @@ export class OrdersService implements OnModuleInit {
       'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
       [order.customerId],
     );
-    const warehouseId = warehouseRows.rows[0]?.warehouse_id || '11111111-0000-0000-0000-000000000001';
+    const warehouseId = warehouseRows.rows[0]?.warehouse_id || DEFAULT_WAREHOUSE_ID;
     for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
       const product = await this.productsService.findById(sku);

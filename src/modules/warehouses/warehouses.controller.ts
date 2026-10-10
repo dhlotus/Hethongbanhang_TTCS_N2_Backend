@@ -6,9 +6,16 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 import { CreateLocationDto } from './dto/create-location.dto';
+import {
+  AgencyWarehouseAssignmentEntity,
+  AgencyWarehouseUpdateEntity,
+  WarehouseEntity,
+  WarehouseLocationEntity,
+  WarehouseManagerEntity,
+} from './entities/warehouse.entity';
 import { WarehousesService } from './warehouses.service';
 
-const MANAGERS = [UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER];
+const WAREHOUSE_MANAGER_ROLES = [UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER];
 
 @Controller('warehouses')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -16,40 +23,56 @@ export class WarehousesController {
   constructor(private readonly warehousesService: WarehousesService) {}
 
   @Get()
-  @Roles(...MANAGERS, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
-  findAll(): Promise<Record<string, unknown>[]> { return this.warehousesService.findAll(); }
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
+  findAll(): Promise<WarehouseEntity[]> {
+    return this.warehousesService.findAll();
+  }
 
   @Get('managers')
-  @Roles(...MANAGERS)
-  listManagers(): Promise<Array<{ id: string; name: string }>> {
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  listManagers(): Promise<WarehouseManagerEntity[]> {
     return this.warehousesService.listManagers();
   }
 
   @Post()
-  @Roles(...MANAGERS)
-  create(@Body() dto: CreateWarehouseDto): Promise<Record<string, unknown>> { return this.warehousesService.create(dto); }
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  create(@Body() dto: CreateWarehouseDto): Promise<WarehouseEntity> {
+    return this.warehousesService.create(dto);
+  }
 
   @Patch(':id')
-  @Roles(...MANAGERS)
-  update(@Param('id') id: string, @Body() dto: UpdateWarehouseDto): Promise<Record<string, unknown>> { return this.warehousesService.update(id, dto); }
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  update(@Param('id') id: string, @Body() dto: UpdateWarehouseDto): Promise<WarehouseEntity> {
+    return this.warehousesService.update(id, dto);
+  }
 
   @Get(':id/locations')
-  @Roles(...MANAGERS, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
-  listLocations(@Param('id') id: string): Promise<Record<string, unknown>[]> { return this.warehousesService.listLocations(id); }
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
+  listLocations(@Param('id') id: string): Promise<WarehouseLocationEntity[]> {
+    return this.warehousesService.listLocations(id);
+  }
 
   @Post(':id/locations')
-  @Roles(...MANAGERS, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
-  createLocation(@Param('id') id: string, @Body() dto: CreateLocationDto): Promise<Record<string, unknown>> { return this.warehousesService.createLocation(id, dto); }
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
+  createLocation(
+    @Param('id') id: string,
+    @Body() dto: CreateLocationDto,
+  ): Promise<WarehouseLocationEntity> {
+    return this.warehousesService.createLocation(id, dto);
+  }
 
   @Get('agencies/defaults')
-  @Roles(...MANAGERS)
-  listAgencyDefaults(): Promise<Array<{ agencyId: string; warehouseId: string }>> {
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  listAgencyDefaults(): Promise<AgencyWarehouseAssignmentEntity[]> {
     return this.warehousesService.listAgencyDefaults();
   }
 
   @Put('agencies/:agencyId/default')
-  @Roles(...MANAGERS)
-  setAgencyDefault(@Param('agencyId') agencyId: string, @Body() body: { warehouseId: string | null }): Promise<Record<string, unknown>> {
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  setAgencyDefault(
+    @Param('agencyId') agencyId: string,
+    @Body() body: { warehouseId: string | null },
+  ): Promise<AgencyWarehouseUpdateEntity> {
     return this.warehousesService.setAgencyDefaultWarehouse(agencyId, body.warehouseId);
   }
 }

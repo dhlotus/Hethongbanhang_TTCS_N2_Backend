@@ -11,8 +11,8 @@ import { InventoryAuditStatus } from './entities/inventory-audit-status.enum';
 import { CreateInventoryAuditDto, UpdateAuditItemsDto, CompleteAuditDto, QueryAuditsDto } from './dto';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 
-const DEFAULT_WAREHOUSE_ID = '11111111-0000-0000-0000-000000000001';
 const DEFAULT_WAREHOUSE_NAME = 'Kho Tổng Miền Nam';
 
 export interface StockAdjustmentResult {
