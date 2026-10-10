@@ -12,6 +12,7 @@ import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
 import { ProductsService } from '../products/products.service';
+import { DatabaseService } from '../../database/database.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
 import {
   CreateOrderDto,
@@ -22,6 +23,7 @@ import {
 } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
+import { CustomerPurchaseHistoryResponse, LatestOrderSummary } from './dto/customer-purchase-history.dto';
 
 import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
@@ -57,12 +59,13 @@ export class OrdersService implements OnModuleInit {
     @Optional()
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService?: ProductsService,
+    @Optional() private readonly databaseService?: DatabaseService,
   ) {
     this.seedInitialOrders();
   }
 
   async onModuleInit(): Promise<void> {
-<<<<<<< HEAD
+
     if (this.databaseService && !this.databaseService.isConnected()) {
       (this as any).databaseService = undefined;
       for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
@@ -313,10 +316,7 @@ export class OrdersService implements OnModuleInit {
           `Sản phẩm ${skuName} vượt quá tồn khả dụng (Còn tối đa ${maxAllowedInUnit} ${unitName})`,
         );
       }
-=======
-    if (this.orders.size === 0) {
-      this.seedInitialOrders();
->>>>>>> b64bda3f5dddcea43fad18d950037e35bb747ed0
+
     }
   }
 
@@ -516,7 +516,7 @@ export class OrdersService implements OnModuleInit {
   /**
    * Khởi tạo dữ liệu mẫu thực tế cho đơn hàng
    */
-  private seedInitialOrders(): void {
+  private seedInitialOrders(): OrderEntity[] {
     const initialOrders: OrderEntity[] = [
       new OrderEntity({
         id: 'ord-001',
@@ -799,6 +799,7 @@ export class OrdersService implements OnModuleInit {
     for (const ord of initialOrders) {
       this.orders.set(ord.id, ord);
     }
+    return initialOrders;
   }
 
   /**
@@ -1350,7 +1351,7 @@ export class OrdersService implements OnModuleInit {
     const deliveryPointInput: DeliveryPointInputDto | undefined = dto.deliveryPoint
       ? dto.deliveryPoint
       : preview.deliveryPoint
-      ? {
+        ? {
           id: preview.deliveryPoint.id,
           name: preview.deliveryPoint.name,
           address: preview.deliveryPoint.address,
@@ -1358,7 +1359,7 @@ export class OrdersService implements OnModuleInit {
           phone: preview.deliveryPoint.phone,
           roadNote: preview.deliveryPoint.roadNote,
         }
-      : undefined;
+        : undefined;
 
     const createPayload: CreateOrderDto = {
       customerId: preview.customerId,
@@ -1366,15 +1367,13 @@ export class OrdersService implements OnModuleInit {
       deliveryDate: dto.deliveryDate,
       lines: orderLinesDto,
       note: dto.note
-        ? `${dto.note} ${
-            preview.discontinuedItems.length > 0
-              ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
-              : ''
+        ? `${dto.note} ${preview.discontinuedItems.length > 0
+            ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
+            : ''
           }`.trim()
-        : `[Đặt lại từ đơn ${preview.orderCode}] ${
-            preview.discontinuedItems.length > 0
-              ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
-              : ''
+        : `[Đặt lại từ đơn ${preview.orderCode}] ${preview.discontinuedItems.length > 0
+            ? `(Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh)`
+            : ''
           }`.trim(),
       status: OrderStatus.PENDING,
     };
@@ -1384,12 +1383,39 @@ export class OrdersService implements OnModuleInit {
     return {
       newOrder,
       discontinuedItems: preview.discontinuedItems,
-      message: `Đã đặt lại thành công đơn hàng mới ${newOrder.orderCode}.${
-        preview.discontinuedItems.length > 0
+      message: `Đã đặt lại thành công đơn hàng mới ${newOrder.orderCode}.${preview.discontinuedItems.length > 0
           ? ` Đã loại bỏ ${preview.discontinuedItems.length} mặt hàng ngừng kinh doanh.`
           : ''
-      }`,
+        }`,
     };
+  }
+
+  /**
+   * Đề xuất sản phẩm dựa trên lịch sử mua hàng
+   */
+  async getPurchaseHistorySuggestions(
+    customerId: string,
+    currentUser?: unknown,
+  ): Promise<CustomerPurchaseHistoryResponse> {
+    return {
+      customerId,
+      customerCode: '',
+      customerName: '',
+      lookbackMonths: 3,
+      totalOrdersInPeriod: 0,
+      suggestions: [],
+      latestOrder: null,
+    };
+  }
+
+  /**
+   * Lấy đơn hàng gần nhất của đại lý
+   */
+  async getLatestCustomerOrder(
+    customerId: string,
+    currentUser?: unknown,
+  ): Promise<LatestOrderSummary | null> {
+    return null;
   }
 }
 
