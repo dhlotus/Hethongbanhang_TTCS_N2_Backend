@@ -583,39 +583,50 @@ export class CustomersService implements OnModuleInit {
       });
     }
 
-    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone
-    if (query?.search) {
+    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode
+    if (query?.search && query.search.trim()) {
       const q = query.search.toLowerCase().trim();
       list = list.filter(
         (c) =>
-          c.code.toLowerCase().includes(q) ||
-          c.name.toLowerCase().includes(q) ||
-          c.phone.includes(q) ||
-          (c.address && c.address.toLowerCase().includes(q)),
+          (c.code && c.code.toLowerCase().includes(q)) ||
+          (c.name && c.name.toLowerCase().includes(q)) ||
+          (c.phone && c.phone.includes(q)) ||
+          (c.address && c.address.toLowerCase().includes(q)) ||
+          (c.taxCode && c.taxCode.toLowerCase().includes(q)),
       );
     }
 
-    // 4. Lọc theo Khu vực / Địa bàn kinh doanh
+    // 4. Lọc theo Khu vực / Địa bàn kinh doanh (hỗ trợ cả tiếng Việt và alias)
     if (query?.region && query.region !== 'ALL') {
       const reg = query.region.toLowerCase().trim();
-      list = list.filter((c) => c.region && c.region.toLowerCase() === reg);
+      list = list.filter((c) => {
+        if (!c.region) return false;
+        const cReg = c.region.toLowerCase().trim();
+        if (cReg === reg) return true;
+        if (reg === 'south' && (cReg.includes('nam') || cReg === 'miền nam')) return true;
+        if (reg === 'central' && (cReg.includes('trung') || cReg === 'miền trung')) return true;
+        if (reg === 'north' && (cReg.includes('bắc') || cReg === 'miền bắc')) return true;
+        return false;
+      });
     }
 
     // 5. Lọc theo Phân nhóm khách hàng
     if (query?.customerGroup && query.customerGroup !== 'ALL') {
-      list = list.filter((c) => c.customerGroup === query.customerGroup);
+      const grp = query.customerGroup.toUpperCase().trim();
+      list = list.filter((c) => c.customerGroup && c.customerGroup.toUpperCase().trim() === grp);
     }
 
     // 6. Lọc theo Trạng thái hoạt động
     if (query?.status && (query.status as string) !== 'ALL') {
-      list = list.filter((c) => c.status === query.status);
+      const st = (query.status as string).toUpperCase().trim();
+      list = list.filter((c) => c.status && c.status.toUpperCase().trim() === st);
     }
 
     // 7. Phân trang kết quả
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const total = list.length;
-    const totalPages = Math.ceil(total / limit) || 1;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
     const startIndex = (page - 1) * limit;
     const data = list.slice(startIndex, startIndex + limit);
 

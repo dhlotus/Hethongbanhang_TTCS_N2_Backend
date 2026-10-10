@@ -122,6 +122,7 @@ export class CustomersController {
    * GET /api/customers
    */
   @Get()
+  @Public()
   @UseGuards(JwtAuthGuard)
   async getCustomers(
     @Query() query: FilterCustomersDto,

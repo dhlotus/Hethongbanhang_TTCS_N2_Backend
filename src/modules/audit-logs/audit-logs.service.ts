@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, OnModuleInit, Optional, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { AuditAction, AuditEntity } from '../../common/enums';
 import { UsersService } from '../users/users.service';
@@ -571,5 +571,84 @@ export class AuditLogsService implements OnModuleInit {
       limit,
       totalPages,
     };
+  }
+
+  /**
+   * Lấy chi tiết một bản ghi Audit Log theo ID (GET /api/audit-logs/:id)
+   */
+  async findById(id: string): Promise<AuditLogEntity> {
+    if (this.dbService?.isConnected()) {
+      try {
+        const rows = await this.dbService.query<{
+          id: string;
+          user_id: string;
+          action: AuditAction;
+          entity_name: AuditEntity;
+          entity_id: string;
+          old_values: Record<string, unknown> | null;
+          new_values: Record<string, unknown> | null;
+          ip_address: string;
+          created_at: Date;
+          user_full_name?: string;
+          user_email?: string;
+          user_role?: string;
+        }>(
+          `SELECT 
+             a.id,
+             a.user_id,
+             a.action,
+             a.entity_name,
+             a.entity_id,
+             a.old_values,
+             a.new_values,
+             a.ip_address,
+             a.created_at,
+             u.full_name AS user_full_name,
+             u.email AS user_email,
+             COALESCE(r.code, 'ADMIN') AS user_role
+           FROM audit_logs a
+           LEFT JOIN users u ON a.user_id = u.id
+           LEFT JOIN roles r ON u.role_id = r.id
+           WHERE a.id = $1
+           LIMIT 1;`,
+          [id],
+        );
+
+        if (rows && rows.length > 0) {
+          const r = rows[0];
+          return new AuditLogEntity({
+            id: r.id,
+            user_id: r.user_id,
+            action: r.action,
+            entity_name: r.entity_name,
+            entity_id: r.entity_id,
+            old_values: r.old_values,
+            new_values: r.new_values,
+            ip_address: r.ip_address,
+            created_at: r.created_at,
+            user: {
+              id: r.user_id,
+              full_name: r.user_full_name || 'Người dùng hệ thống',
+              email: r.user_email || '',
+              role: r.user_role || 'ADMIN',
+              ip_address: r.ip_address,
+            },
+          });
+        }
+      } catch {
+        // Fallback sang in-memory
+      }
+    }
+
+    const found = this.auditLogs.find((l) => l.id === id);
+    if (!found) {
+      throw new NotFoundException(`Không tìm thấy bản ghi nhật ký với mã: ${id}`);
+    }
+
+    const userInfo = await this.joinUserInfo(found);
+    return new AuditLogEntity({
+      ...found,
+      user: userInfo,
+    });
   }
 }

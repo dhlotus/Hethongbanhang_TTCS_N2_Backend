@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -14,11 +15,16 @@ import { DiscountPoliciesService } from '../discount-policies/discount-policies.
 import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
-import { CustomerStatus } from '../customers/entities/customer.entity';
-import { CreateOrderDto, CreateOrderLineDto } from './dto/create-order.dto';
+import { CustomerEntity, CustomerStatus } from '../customers/entities/customer.entity';
+import {
+  CreateOrderDto,
+  CreateOrderLineDto,
+  DeliveryPointInputDto,
+  ReorderDto,
+  UpdateOrderStatusDto,
+} from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
-import { UpdateOrderStatusDto } from './dto/create-order.dto';
 import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
 import { OrderStatus, PaymentStatus } from './entities/order-status.enum';
@@ -29,21 +35,15 @@ import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { InventoryService } from '../inventory/inventory.service';
-
-
-import { ForbiddenException } from '@nestjs/common';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { ProductStatus } from '../../common/enums/product-status.enum';
 import {
   CustomerPurchaseHistoryResponse,
   LatestOrderItem,
   LatestOrderSummary,
+  LOOKBACK_MONTHS,
   SuggestedProductItem,
 } from './dto/customer-purchase-history.dto';
-import { ReorderDto, DeliveryPointInputDto } from './dto/create-order.dto';
-import { ProductStatus } from '../../common/enums/product-status.enum';
-import { CustomerEntity } from '../customers/entities/customer.entity';
-
-const LOOKBACK_MONTHS = 3;
 
 interface PricedOrderLineDto extends CreateOrderLineDto {
   minPrice?: number;
@@ -2016,7 +2016,6 @@ async findOrdersByCustomer(
       }`,
     };
   }
-
 
   /**
    * Phân quyền truy cập thông tin đại lý:
