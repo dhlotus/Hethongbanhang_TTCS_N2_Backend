@@ -214,11 +214,11 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async update(
-    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
+    @Req() req?: any,
   ): Promise<ProductEntity> {
-    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    const userName = req?.user?.fullName || req?.user?.username || 'Hệ thống';
     return this.productsService.update(id, updateDto, userName);
   }
 
@@ -229,11 +229,11 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async updatePut(
-    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
+    @Req() req?: any,
   ): Promise<ProductEntity> {
-    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    const userName = req?.user?.fullName || req?.user?.username || 'Hệ thống';
     return this.productsService.update(id, updateDto, userName);
   }
 

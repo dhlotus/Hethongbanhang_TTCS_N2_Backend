@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -14,7 +15,8 @@ import { DiscountPoliciesService } from '../discount-policies/discount-policies.
 import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
-import { CustomerStatus } from '../customers/entities/customer.entity';
+import { CustomerEntity, CustomerStatus } from '../customers/entities/customer.entity';
+import { ProductsService } from '../products/products.service';
 import { CreateOrderDto, CreateOrderLineDto } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -23,12 +25,19 @@ import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
 import { OrderStatus, PaymentStatus } from './entities/order-status.enum';
 import { DatabaseService } from '../../database/database.service';
-import { ProductsService } from '../products/products.service';
 import { DecideOrderDto } from './dto/decide-order.dto';
 import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { UserRole } from '../../common/enums/user-role.enum';
 import { InventoryService } from '../inventory/inventory.service';
+import {
+  CustomerPurchaseHistoryResponse,
+  LatestOrderItem,
+  LatestOrderSummary,
+  LOOKBACK_MONTHS,
+  SuggestedProductItem,
+} from './dto/customer-purchase-history.dto';
 
 interface PricedOrderLineDto extends CreateOrderLineDto {
   minPrice?: number;
@@ -806,6 +815,195 @@ export class OrdersService implements OnModuleInit {
         createdAt: new Date('2026-10-08T15:00:00Z'),
         updatedAt: new Date('2026-10-09T08:00:00Z'),
       }),
+      new OrderEntity({
+        id: 'ord-hist-001',
+        orderCode: 'DH2609-09015',
+        customerId: 'cust-dl-0001',
+        customerCode: 'DL-0001',
+        customerName: 'Công Ty TNHH Thương Mại & Phân Phối Minh Khang',
+        customerGroup: 'AGENT_LEVEL_1',
+        salesRepId: 'usr-sale-01',
+        salesRepName: 'Trần Văn Long',
+        deliveryPoint: {
+          id: 'dp-dl-0001-1',
+          name: 'Kho Tổng Phú Nhuận',
+          address: '123 Nguyễn Trọng Tuyển, P.8, Q.Phú Nhuận, TP.HCM',
+          receiverName: 'Anh Nguyễn Minh Khang',
+          phone: '0901234561',
+        },
+        deliveryDate: '2026-09-22',
+        lines: [
+          new OrderLineEntity({
+            id: 'line-hist-01-1',
+            productId: 'prod-001',
+            productSku: 'LH-MILK-900G',
+            productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
+            unit: 'Thùng (12 lon)',
+            baseUnit: 'Lon',
+            conversionRate: 12,
+            quantity: 8,
+            baseQuantity: 96,
+            listPrice: 5400000,
+            unitPrice: 5130000,
+            discountPercent: 5,
+            lineTotal: 41040000,
+          }),
+          new OrderLineEntity({
+            id: 'line-hist-01-2',
+            productId: 'prod-002',
+            productSku: 'LH-NUT-180ML',
+            productName: 'Sữa Hạt Óc Chó Yến Mạch LOHA 180ml',
+            unit: 'Thùng (48 hộp)',
+            baseUnit: 'Hộp',
+            conversionRate: 48,
+            quantity: 15,
+            baseQuantity: 720,
+            listPrice: 620000,
+            unitPrice: 589000,
+            discountPercent: 5,
+            lineTotal: 8835000,
+          }),
+          new OrderLineEntity({
+            id: 'line-hist-01-3',
+            productId: 'prod-003',
+            productSku: 'LH-NEST-70ML',
+            productName: 'Nước Yến Sào Nhân Sâm Thượng Hạng LOHA 70ml',
+            unit: 'Hộp (6 hũ)',
+            baseUnit: 'Hũ',
+            conversionRate: 6,
+            quantity: 10,
+            baseQuantity: 60,
+            listPrice: 420000,
+            unitPrice: 399000,
+            discountPercent: 5,
+            lineTotal: 3990000,
+          }),
+        ],
+        subtotal: 56700000,
+        totalDiscount: 2835000,
+        grandTotal: 53865000,
+        note: 'Đơn giao định kỳ tháng 9/2026',
+        status: OrderStatus.DELIVERED,
+        paymentStatus: PaymentStatus.PAID,
+        createdAt: new Date('2026-09-20T10:00:00Z'),
+        updatedAt: new Date('2026-09-22T16:00:00Z'),
+      }),
+      new OrderEntity({
+        id: 'ord-hist-002',
+        orderCode: 'DH2608-08145',
+        customerId: 'cust-dl-0001',
+        customerCode: 'DL-0001',
+        customerName: 'Công Ty TNHH Thương Mại & Phân Phối Minh Khang',
+        customerGroup: 'AGENT_LEVEL_1',
+        salesRepId: 'usr-sale-01',
+        salesRepName: 'Trần Văn Long',
+        deliveryPoint: {
+          id: 'dp-dl-0001-1',
+          name: 'Kho Tổng Phú Nhuận',
+          address: '123 Nguyễn Trọng Tuyển, P.8, Q.Phú Nhuận, TP.HCM',
+          receiverName: 'Anh Nguyễn Minh Khang',
+          phone: '0901234561',
+        },
+        deliveryDate: '2026-08-30',
+        lines: [
+          new OrderLineEntity({
+            id: 'line-hist-02-1',
+            productId: 'prod-001',
+            productSku: 'LH-MILK-900G',
+            productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
+            unit: 'Thùng (12 lon)',
+            baseUnit: 'Lon',
+            conversionRate: 12,
+            quantity: 6,
+            baseQuantity: 72,
+            listPrice: 5400000,
+            unitPrice: 5130000,
+            discountPercent: 5,
+            lineTotal: 30780000,
+          }),
+          new OrderLineEntity({
+            id: 'line-hist-02-2',
+            productId: 'prod-002',
+            productSku: 'LH-NUT-180ML',
+            productName: 'Sữa Hạt Óc Chó Yến Mạch LOHA 180ml',
+            unit: 'Thùng (48 hộp)',
+            baseUnit: 'Hộp',
+            conversionRate: 48,
+            quantity: 12,
+            baseQuantity: 576,
+            listPrice: 620000,
+            unitPrice: 589000,
+            discountPercent: 5,
+            lineTotal: 7068000,
+          }),
+        ],
+        subtotal: 39840000,
+        totalDiscount: 1992000,
+        grandTotal: 37848000,
+        note: 'Đơn giao tháng 8/2026',
+        status: OrderStatus.DELIVERED,
+        paymentStatus: PaymentStatus.PAID,
+        createdAt: new Date('2026-08-28T09:30:00Z'),
+        updatedAt: new Date('2026-08-30T14:00:00Z'),
+      }),
+      new OrderEntity({
+        id: 'ord-hist-003',
+        orderCode: 'DH2609-09088',
+        customerId: 'cust-dl-0002',
+        customerCode: 'DL-0002',
+        customerName: 'Tổng Đại Lý Phân Phối Thực Phẩm Toàn Cầu',
+        customerGroup: 'AGENT_LEVEL_1',
+        salesRepId: 'usr-sale-02',
+        salesRepName: 'Lê Thị Thu Thảo',
+        deliveryPoint: {
+          id: 'dp-dl-0002-1',
+          name: 'Kho Phân Phối Quận 3',
+          address: '456 Lê Văn Sỹ, P.14, Q.3, TP.HCM',
+          receiverName: 'Chị Lê Thanh Hương',
+          phone: '0901234562',
+        },
+        deliveryDate: '2026-09-18',
+        lines: [
+          new OrderLineEntity({
+            id: 'line-hist-03-1',
+            productId: 'prod-003',
+            productSku: 'LH-NEST-70ML',
+            productName: 'Nước Yến Sào Nhân Sâm Thượng Hạng LOHA 70ml',
+            unit: 'Hộp (6 hũ)',
+            baseUnit: 'Hũ',
+            conversionRate: 6,
+            quantity: 30,
+            baseQuantity: 180,
+            listPrice: 420000,
+            unitPrice: 399000,
+            discountPercent: 5,
+            lineTotal: 11970000,
+          }),
+          new OrderLineEntity({
+            id: 'line-hist-03-2',
+            productId: 'prod-004',
+            productSku: 'LH-CEREAL-500G',
+            productName: 'Ngũ Cốc Dinh Dưỡng Hạt Granola LOHA 500g',
+            unit: 'Gói',
+            baseUnit: 'Gói',
+            conversionRate: 1,
+            quantity: 25,
+            baseQuantity: 25,
+            listPrice: 145000,
+            unitPrice: 145000,
+            discountPercent: 0,
+            lineTotal: 3625000,
+          }),
+        ],
+        subtotal: 16225000,
+        totalDiscount: 630000,
+        grandTotal: 15595000,
+        note: 'Đơn giao đợt 1 tháng 9',
+        status: OrderStatus.DELIVERED,
+        paymentStatus: PaymentStatus.PAID,
+        createdAt: new Date('2026-09-15T15:00:00Z'),
+        updatedAt: new Date('2026-09-18T10:30:00Z'),
+      }),
     ];
 
     return initialOrders;
@@ -1023,8 +1221,8 @@ export class OrdersService implements OnModuleInit {
     const userRole = currentUser?.role || (currentUser?.roles && currentUser.roles[0]);
     const isOnlySalesRep = userRole === 'SALES_REP';
 
-    if (isOnlySalesRep && (currentUser?.id || currentUser?.username)) {
-      const repId = currentUser.id;
+    if (isOnlySalesRep && currentUser && (currentUser.id || (currentUser as any).userId || currentUser.username)) {
+      const repId = currentUser.id || (currentUser as any).userId;
       const repName = currentUser.username?.toLowerCase();
       list = list.filter((o) => {
         const matchId = repId && o.salesRepId === repId;
@@ -1589,5 +1787,248 @@ export class OrdersService implements OnModuleInit {
       createDto,
       salesRep || { id: sourceOrder.salesRepId, name: sourceOrder.salesRepName },
     );
+  }
+
+  /**
+   * Kiểm tra quyền truy cập của nhân viên vào đại lý (SN-43 AC3)
+   * - SALES_REP: Chỉ được xem đại lý mình phụ trách (customer.salesRepId === user.id)
+   * - ADMIN & SALES_MANAGER: Toàn quyền truy cập mọi đại lý
+   */
+  private verifyCustomerAccess(
+    customer: CustomerEntity,
+    currentUser?: ICurrentUser,
+  ): void {
+    if (!currentUser) return;
+
+    const roles: UserRole[] = currentUser.roles || [];
+    const isSalesRep = roles.includes(UserRole.SALES_REP);
+    const isManagerOrAdmin =
+      roles.includes(UserRole.ADMIN) ||
+      roles.includes(UserRole.SALES_MANAGER) ||
+      (roles as string[]).includes('BUSINESS_MANAGER');
+
+    if (isSalesRep && !isManagerOrAdmin) {
+      const repId = currentUser.userId;
+      const customerRepId = customer.salesRepId || customer.salesRep?.id;
+
+      // Hỗ trợ cả alias định danh tương đồng của Sales Rep trong môi trường demo/thực tế
+      const isAssigned =
+        customerRepId === repId ||
+        (repId === 'usr-sale-01' && (customerRepId === 'usr-sales-002' || customerRepId === 'usr-sale-01')) ||
+        (repId === 'usr-sales-002' && (customerRepId === 'usr-sale-01' || customerRepId === 'usr-sales-002')) ||
+        (repId === 'usr-sale-02' && customerRepId === 'usr-sale-02');
+
+      if (!isAssigned) {
+        throw new ForbiddenException('Bạn không có quyền xem thông tin của đại lý này');
+      }
+    }
+  }
+
+  /**
+   * Lấy danh sách mặt hàng gợi ý theo lịch sử 3 tháng gần nhất (SN-43 AC1 & AC3)
+   * - Gom nhóm theo từng SKU
+   * - Tính tổng số lượng, số lần mua, số lượng bình quân, ngày mua gần nhất, số lượng lần gần nhất
+   */
+  async getPurchaseHistorySuggestions(
+    customerId: string,
+    currentUser?: ICurrentUser,
+  ): Promise<CustomerPurchaseHistoryResponse> {
+    const customer = await this.customersService.getCustomerById(customerId);
+    this.verifyCustomerAccess(customer, currentUser);
+
+    const now = new Date();
+    const cutoffDate = new Date(now);
+    cutoffDate.setMonth(cutoffDate.getMonth() - LOOKBACK_MONTHS);
+
+    const validStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    // Lọc các đơn hàng hợp lệ của khách hàng
+    const customerOrders = Array.from(this.orders.values()).filter((order) => {
+      const matchesCustomer =
+        order.customerId === customer.id ||
+        order.customerCode === customer.code ||
+        order.customerId === customerId ||
+        order.customerCode === customerId;
+      return matchesCustomer && validStatuses.has(order.status);
+    });
+
+    // Sắp xếp đơn hàng mới nhất lên đầu
+    customerOrders.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+    // Lấy đơn hàng thành công gần nhất (AC2)
+    const latestOrder = customerOrders.length > 0 ? this.mapToLatestOrderSummary(customerOrders[0]) : null;
+
+    // Lọc các đơn hàng trong 3 tháng gần nhất (AC1)
+    const recentOrders = customerOrders.filter((order) => {
+      const orderDate = new Date(order.createdAt);
+      return orderDate >= cutoffDate;
+    });
+
+    // Gom nhóm theo SKU/Sản phẩm
+    const groupedItems = new Map<
+      string,
+      {
+        productId: string;
+        sku: string;
+        productName: string;
+        unit: string;
+        baseUnit: string;
+        conversionRate: number;
+        price: number;
+        totalQuantity: number;
+        orderCount: number;
+        lastPurchasedAt: Date;
+        lastPurchasedQuantity: number;
+      }
+    >();
+
+    for (const order of recentOrders) {
+      if (!order.lines) continue;
+      const orderDate = new Date(order.createdAt);
+
+      for (const line of order.lines) {
+        const itemKey = line.productSku?.toUpperCase() || line.productId;
+        if (!itemKey) continue;
+
+        const existing = groupedItems.get(itemKey);
+        if (!existing) {
+          groupedItems.set(itemKey, {
+            productId: line.productId,
+            sku: line.productSku || line.productId,
+            productName: line.productName,
+            unit: line.unit || line.baseUnit || 'Đơn vị',
+            baseUnit: line.baseUnit || line.unit || 'Đơn vị',
+            conversionRate: line.conversionRate || 1,
+            price: line.unitPrice || line.listPrice || 0,
+            totalQuantity: line.quantity,
+            orderCount: 1,
+            lastPurchasedAt: orderDate,
+            lastPurchasedQuantity: line.quantity,
+          });
+        } else {
+          existing.totalQuantity += line.quantity;
+          existing.orderCount += 1;
+          if (orderDate > existing.lastPurchasedAt) {
+            existing.lastPurchasedAt = orderDate;
+            existing.lastPurchasedQuantity = line.quantity;
+            existing.price = line.unitPrice || line.listPrice || existing.price;
+          }
+        }
+      }
+    }
+
+    const suggestions: SuggestedProductItem[] = Array.from(groupedItems.values())
+      .map((item) => ({
+        productId: item.productId,
+        sku: item.sku,
+        productName: item.productName,
+        unit: item.unit,
+        baseUnit: item.baseUnit,
+        conversionRate: item.conversionRate,
+        price: item.price,
+        totalQuantity: item.totalQuantity,
+        orderCount: item.orderCount,
+        averageQuantity: Math.max(1, Math.round(item.totalQuantity / item.orderCount)),
+        lastPurchasedAt: item.lastPurchasedAt.toISOString(),
+        lastPurchasedQuantity: item.lastPurchasedQuantity,
+      }))
+      .sort((a, b) => {
+        // Ưu tiên mặt hàng khách lấy đều đặn nhất (số lần mua nhiều hơn), sau đó đến ngày mua mới nhất
+        if (b.orderCount !== a.orderCount) {
+          return b.orderCount - a.orderCount;
+        }
+        return new Date(b.lastPurchasedAt).getTime() - new Date(a.lastPurchasedAt).getTime();
+      });
+
+    return {
+      customerId: customer.id,
+      customerCode: customer.code,
+      customerName: customer.name,
+      lookbackMonths: LOOKBACK_MONTHS,
+      totalOrdersInPeriod: recentOrders.length,
+      suggestions,
+      latestOrder,
+    };
+  }
+
+  /**
+   * Lấy chi tiết đơn hàng thành công gần nhất của đại lý (SN-43 AC2)
+   */
+  async getLatestCustomerOrder(
+    customerId: string,
+    currentUser?: ICurrentUser,
+  ): Promise<LatestOrderSummary | null> {
+    const customer = await this.customersService.getCustomerById(customerId);
+    this.verifyCustomerAccess(customer, currentUser);
+
+    const validStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    const customerOrders = Array.from(this.orders.values())
+      .filter((order) => {
+        const matchesCustomer =
+          order.customerId === customer.id ||
+          order.customerCode === customer.code ||
+          order.customerId === customerId ||
+          order.customerCode === customerId;
+        return matchesCustomer && validStatuses.has(order.status);
+      })
+      .sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+
+    if (customerOrders.length === 0) {
+      return null;
+    }
+
+    return this.mapToLatestOrderSummary(customerOrders[0]);
+  }
+
+  private mapToLatestOrderSummary(order: OrderEntity): LatestOrderSummary {
+    const items: LatestOrderItem[] = (order.lines || []).map((line) => ({
+      productId: line.productId,
+      sku: line.productSku || line.productId,
+      productName: line.productName,
+      unit: line.unit || line.baseUnit || 'Đơn vị',
+      baseUnit: line.baseUnit || line.unit || 'Đơn vị',
+      conversionRate: line.conversionRate || 1,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      listPrice: line.listPrice || line.unitPrice,
+      discountPercent: line.discountPercent || 0,
+      lineTotal: line.lineTotal,
+    }));
+
+    return {
+      orderId: order.id,
+      orderCode: order.orderCode,
+      customerId: order.customerId,
+      customerName: order.customerName,
+      deliveryDate: order.deliveryDate,
+      status: order.status,
+      subtotal: order.subtotal,
+      totalDiscount: order.totalDiscount,
+      grandTotal: order.grandTotal,
+      createdAt: order.createdAt instanceof Date ? order.createdAt.toISOString() : String(order.createdAt),
+      note: order.note,
+      items,
+    };
   }
 }

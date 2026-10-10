@@ -2,9 +2,12 @@ import {
   Body,
   Controller,
   Delete,
+  forwardRef,
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
+  Optional,
   Param,
   Patch,
   Post,
@@ -30,13 +33,26 @@ import { AssignSalesRepDto } from './dto/assign-sales-rep.dto';
 import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { UserRole } from '../../common/enums/user-role.enum';
+import { OrdersService } from '../orders/orders.service';
+import {
+  CustomerPurchaseHistoryResponse,
+  LatestOrderSummary,
+} from '../orders/dto/customer-purchase-history.dto';
 
 /**
- * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32, SN-35 & SN-37)
+ * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32, SN-35, SN-37 & SN-43)
  */
 @Controller('customers')
 export class CustomersController {
-  constructor(private readonly customersService: CustomersService) {}
+  constructor(
+    private readonly customersService: CustomersService,
+    @Optional()
+    @Inject(forwardRef(() => OrdersService))
+    private readonly ordersService?: OrdersService,
+  ) {}
 
   /**
    * Tạo đại lý mới (SN-35)
@@ -217,5 +233,39 @@ export class CustomersController {
   @Patch(':id/unlock')
   async unlockCustomer(@Param('id') id: string): Promise<CustomerEntity> {
     return this.customersService.unlockCustomer(id);
+  }
+
+  /**
+   * Lấy danh sách mặt hàng gợi ý theo lịch sử 3 tháng gần nhất (SN-43 AC1 & AC3)
+   * GET /api/customers/:customerId/purchase-history/suggestions
+   */
+  @Get(':customerId/purchase-history/suggestions')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  async getPurchaseHistorySuggestions(
+    @Param('customerId') customerId: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<CustomerPurchaseHistoryResponse> {
+    if (!this.ordersService) {
+      throw new Error('OrdersService chưa được khởi tạo');
+    }
+    return this.ordersService.getPurchaseHistorySuggestions(customerId, currentUser);
+  }
+
+  /**
+   * Lấy chi tiết đơn hàng thành công gần nhất của đại lý để thêm nhanh vào đơn mới (SN-43 AC2 & AC3)
+   * GET /api/customers/:customerId/orders/latest
+   */
+  @Get(':customerId/orders/latest')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  async getLatestOrder(
+    @Param('customerId') customerId: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<LatestOrderSummary | null> {
+    if (!this.ordersService) {
+      throw new Error('OrdersService chưa được khởi tạo');
+    }
+    return this.ordersService.getLatestCustomerOrder(customerId, currentUser);
   }
 }
