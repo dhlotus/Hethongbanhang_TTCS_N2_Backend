@@ -28,7 +28,14 @@ import { DecideOrderDto } from './dto/decide-order.dto';
 import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { UserRole } from '../../common/enums/user-role.enum';
 import { InventoryService } from '../inventory/inventory.service';
+import {
+  StockReservationEntity,
+  StockReservationStatus,
+} from '../inventory/entities/stock-reservation.entity';
+
+export const RESERVATION_EXPIRY_HOURS = 24;
 
 interface PricedOrderLineDto extends CreateOrderLineDto {
   minPrice?: number;
@@ -1202,6 +1209,277 @@ export class OrdersService implements OnModuleInit {
     });
   }
 
+  /**
+   * Duyệt đơn & kích hoạt giữ chỗ tồn kho (SN-180 AC1 & AC3)
+   */
+  async approveOrder(
+    orderId: string,
+    manager: ICurrentUser | string,
+  ): Promise<OrderEntity> {
+    const reviewer: ICurrentUser = typeof manager === 'string'
+      ? {
+          userId: manager,
+          username: manager,
+          email: `${manager}@loha.vn`,
+          roles: [UserRole.SALES_MANAGER],
+        }
+      : manager;
+
+    return this.decideOrder(
+      orderId,
+      {
+        action: OrderApprovalAction.APPROVE,
+        comment: 'Đã duyệt đơn và giữ chỗ tồn kho thành công',
+      },
+      reviewer,
+    );
+  }
+
+  /**
+   * Hủy đơn & tự động nhả tồn giữ chỗ (SN-180 AC2 & AC3)
+   */
+  async cancelOrder(
+    orderId: string,
+    reason: string,
+    user?: ICurrentUser | string,
+  ): Promise<OrderEntity> {
+    if (!reason || !reason.trim()) {
+      throw new BadRequestException('Bắt buộc phải nhập lý do hủy đơn hàng.');
+    }
+
+    const canceller: ICurrentUser = typeof user === 'string'
+      ? {
+          userId: user,
+          username: user,
+          email: `${user}@loha.vn`,
+          roles: [UserRole.SALES_MANAGER],
+        }
+      : user || {
+          userId: 'system',
+          username: 'Hệ thống',
+          email: 'system@loha.vn',
+          roles: [UserRole.ADMIN],
+        };
+
+    if (!this.databaseService?.isConnected()) {
+      return this.cancelOrderInMemory(orderId, reason, canceller);
+    }
+
+    const client = await this.databaseService.getClient();
+    try {
+      await client.query('BEGIN');
+      const order = await this.loadLockedOrder(client, orderId);
+
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new BadRequestException('Đơn hàng đã ở trạng thái Đã hủy.');
+      }
+
+      // Nhả toàn bộ giữ chỗ tồn kho của đơn hàng này
+      await client.query(
+        `UPDATE stock_reservations
+         SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
+         WHERE order_id = $1 AND status IN ('ACTIVE', 'RESERVED')`,
+        [order.id],
+      );
+      await client.query(
+        `UPDATE app_order_inventory_reservations
+         SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
+         WHERE order_id = $1 AND status = 'RESERVED'`,
+        [order.id],
+      );
+
+      order.status = OrderStatus.CANCELLED;
+      order.cancelReason = reason.trim();
+      order.updatedAt = new Date();
+
+      await client.query(
+        `UPDATE app_order_records SET payload = $2::jsonb, updated_at = $3 WHERE id = $1`,
+        [order.id, JSON.stringify(order), order.updatedAt],
+      );
+
+      await client.query(
+        `INSERT INTO app_order_approval_history
+         (order_id, action, comment, approver_id, approver_name, approver_roles)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          order.id,
+          OrderApprovalAction.REJECT,
+          `Hủy đơn hàng: ${reason.trim()}`,
+          canceller.userId,
+          canceller.username || canceller.email || canceller.userId,
+          canceller.roles || [UserRole.SALES_MANAGER],
+        ],
+      );
+
+      await client.query('COMMIT');
+      return order;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async cancelOrderInMemory(
+    orderId: string,
+    reason: string,
+    canceller: ICurrentUser,
+  ): Promise<OrderEntity> {
+    const order = await this.findOrderById(orderId);
+
+    if (order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException('Đơn hàng đã ở trạng thái Đã hủy.');
+    }
+
+    // Nhả tồn giữ chỗ in-memory
+    this.inventoryService?.releaseMemoryReservationsByOrderId(order.id);
+
+    order.status = OrderStatus.CANCELLED;
+    order.cancelReason = reason.trim();
+    order.updatedAt = new Date();
+    await this.saveOrder(order);
+
+    const history = this.memoryApprovalHistory.get(orderId) ?? [];
+    history.push(
+      new OrderApprovalHistoryEntity({
+        id: Date.now(),
+        orderId,
+        action: OrderApprovalAction.REJECT,
+        comment: `Hủy đơn hàng: ${reason.trim()}`,
+        approverId: canceller.userId,
+        approverName: canceller.username || canceller.email || canceller.userId,
+        approverRoles: canceller.roles || [UserRole.SALES_MANAGER],
+        createdAt: new Date(),
+      }),
+    );
+    this.memoryApprovalHistory.set(orderId, history);
+
+    return order;
+  }
+
+  /**
+   * Tự động quét và nhả tồn giữ chỗ cho các đơn hàng quá hạn 24h (SN-180 AC2)
+   */
+  async releaseExpiredReservations(): Promise<{
+    releasedReservations: number;
+    cancelledOrders: number;
+  }> {
+    if (!this.databaseService?.isConnected()) {
+      return this.releaseExpiredReservationsInMemory();
+    }
+
+    const client = await this.databaseService.getClient();
+    try {
+      await client.query('BEGIN');
+
+      const expiredRows = await client.query<{ order_id: string }>(
+        `SELECT DISTINCT order_id FROM stock_reservations
+         WHERE status IN ('ACTIVE', 'RESERVED') AND expired_at < CURRENT_TIMESTAMP`,
+      );
+
+      if (expiredRows.rows.length === 0) {
+        await client.query('COMMIT');
+        return { releasedReservations: 0, cancelledOrders: 0 };
+      }
+
+      const orderIds = expiredRows.rows.map((r) => r.order_id);
+
+      const updateRes = await client.query(
+        `UPDATE stock_reservations
+         SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
+         WHERE status IN ('ACTIVE', 'RESERVED') AND expired_at < CURRENT_TIMESTAMP`,
+      );
+      await client.query(
+        `UPDATE app_order_inventory_reservations
+         SET status = 'RELEASED', released_at = CURRENT_TIMESTAMP
+         WHERE order_id = ANY($1::text[]) AND status = 'RESERVED'`,
+        [orderIds],
+      );
+
+      let cancelledOrdersCount = 0;
+      for (const orderId of orderIds) {
+        try {
+          const order = await this.loadLockedOrder(client, orderId);
+          if (
+            order.status === OrderStatus.APPROVED ||
+            order.status === OrderStatus.PENDING ||
+            order.status === OrderStatus.PENDING_APPROVAL
+          ) {
+            order.status = OrderStatus.CANCELLED;
+            order.cancelReason = 'Đơn hàng quá hạn giữ chỗ 24h tự động hủy và nhả tồn kho';
+            order.updatedAt = new Date();
+
+            await client.query(
+              `UPDATE app_order_records SET payload = $2::jsonb, updated_at = $3 WHERE id = $1`,
+              [order.id, JSON.stringify(order), order.updatedAt],
+            );
+
+            await client.query(
+              `INSERT INTO app_order_approval_history
+               (order_id, action, comment, approver_id, approver_name, approver_roles)
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                order.id,
+                OrderApprovalAction.REJECT,
+                'Tự động hủy đơn do quá hạn giữ chỗ 24h',
+                'system-scheduler',
+                'Hệ thống tự động',
+                ['ADMIN'],
+              ],
+            );
+            cancelledOrdersCount++;
+          }
+        } catch {
+          // Bỏ qua lỗi từng đơn lẻ để hoàn tất các đơn khác
+        }
+      }
+
+      await client.query('COMMIT');
+      return {
+        releasedReservations: updateRes.rowCount || orderIds.length,
+        cancelledOrders: cancelledOrdersCount,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async releaseExpiredReservationsInMemory(): Promise<{
+    releasedReservations: number;
+    cancelledOrders: number;
+  }> {
+    const memoryResult = this.inventoryService?.releaseExpiredMemoryReservations() || {
+      releasedReservations: 0,
+      cancelledOrderIds: [],
+    };
+
+    let cancelledOrdersCount = 0;
+    for (const orderId of memoryResult.cancelledOrderIds) {
+      const order = this.orders.get(orderId);
+      if (
+        order &&
+        (order.status === OrderStatus.APPROVED ||
+          order.status === OrderStatus.PENDING ||
+          order.status === OrderStatus.PENDING_APPROVAL)
+      ) {
+        order.status = OrderStatus.CANCELLED;
+        order.cancelReason = 'Đơn hàng quá hạn giữ chỗ 24h tự động hủy và nhả tồn kho';
+        order.updatedAt = new Date();
+        this.orders.set(orderId, order);
+        cancelledOrdersCount++;
+      }
+    }
+
+    return {
+      releasedReservations: memoryResult.releasedReservations,
+      cancelledOrders: cancelledOrdersCount,
+    };
+  }
+
   async decideOrder(
     orderId: string,
     dto: DecideOrderDto,
@@ -1219,6 +1497,7 @@ export class OrdersService implements OnModuleInit {
         throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
       }
       await this.inventoryService.ensureStockBalanceTable();
+      await this.inventoryService.ensureStockReservationsTable();
     }
 
     const client = await this.databaseService.getClient();
@@ -1312,11 +1591,25 @@ export class OrdersService implements OnModuleInit {
       const available = physicalQuantity - Number(reservationResult.rows[0]?.reserved ?? 0);
       if (required > available) {
         throw new BadRequestException(
-          `Không đủ tồn khả dụng cho SKU ${sku}: còn ${available}, cần giữ ${required}.`,
+          `Sản phẩm ${product?.name || sku} không đủ tồn khả dụng để duyệt đơn: tồn khả dụng còn ${available}, đơn yêu cầu ${required}.`,
         );
       }
     }
+
+    const expiredAt = new Date(Date.now() + RESERVATION_EXPIRY_HOURS * 60 * 60 * 1000);
+    order.reservedUntil = expiredAt;
+    order.approvedAt = new Date();
+
     for (const line of order.lines) {
+      const resId = `res-${order.id}-${line.id}`;
+      await client.query(
+        `INSERT INTO stock_reservations
+         (id, order_id, product_id, warehouse_id, quantity, status, expired_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE SET quantity = EXCLUDED.quantity, status = 'ACTIVE', expired_at = EXCLUDED.expired_at`,
+        [resId, order.id, line.productSku.trim().toUpperCase(), 'wh-main', line.baseQuantity, expiredAt],
+      );
+
       await client.query(
         `INSERT INTO app_order_inventory_reservations
          (order_id, order_line_id, product_sku, base_quantity)
@@ -1344,19 +1637,61 @@ export class OrdersService implements OnModuleInit {
   ): Promise<OrderEntity> {
     const order = await this.findOrderById(orderId);
     this.ensureOrderCanBeDecided(order, dto.action);
+
+    if (dto.action === OrderApprovalAction.APPROVE) {
+      const linesBySku = this.groupOrderLinesBySku(order.lines);
+      for (const [sku, lines] of linesBySku.entries()) {
+        const product = this.productsService
+          ? await this.productsService.findById(sku).catch(() => null)
+          : null;
+        const physicalQuantity = product ? (product.stockQuantity ?? 0) : 1000;
+        const currentReserved = this.getReservedStock(sku, order.id);
+        const available = physicalQuantity - currentReserved;
+        const required = lines.reduce((sum, line) => sum + line.baseQuantity, 0);
+        if (required > available) {
+          throw new BadRequestException(
+            `Sản phẩm ${product?.name || sku} không đủ tồn khả dụng để duyệt đơn: tồn khả dụng còn ${available}, đơn yêu cầu ${required}.`,
+          );
+        }
+      }
+
+      const expiredAt = new Date(Date.now() + RESERVATION_EXPIRY_HOURS * 60 * 60 * 1000);
+      order.reservedUntil = expiredAt;
+      order.approvedAt = new Date();
+      order.approverId = reviewer.userId;
+
+      for (const line of order.lines) {
+        this.inventoryService?.addMemoryReservation(
+          new StockReservationEntity({
+            id: `res-${order.id}-${line.id}`,
+            orderId: order.id,
+            orderCode: order.orderCode,
+            productId: line.productSku.trim().toUpperCase(),
+            warehouseId: 'wh-main',
+            quantity: line.baseQuantity,
+            status: StockReservationStatus.ACTIVE,
+            expiredAt,
+            createdAt: new Date(),
+          }),
+        );
+      }
+    }
+
     this.applyApprovalDecision(order, dto.action);
     await this.saveOrder(order);
     const history = this.memoryApprovalHistory.get(orderId) ?? [];
-    history.push(new OrderApprovalHistoryEntity({
-      id: Date.now(),
-      orderId,
-      action: dto.action,
-      comment: dto.comment?.trim() || null,
-      approverId: reviewer.userId,
-      approverName: reviewer.username || reviewer.email || reviewer.userId,
-      approverRoles: reviewer.roles,
-      createdAt: new Date(),
-    }));
+    history.push(
+      new OrderApprovalHistoryEntity({
+        id: Date.now(),
+        orderId,
+        action: dto.action,
+        comment: dto.comment?.trim() || null,
+        approverId: reviewer.userId,
+        approverName: reviewer.username || reviewer.email || reviewer.userId,
+        approverRoles: reviewer.roles,
+        createdAt: new Date(),
+      }),
+    );
     this.memoryApprovalHistory.set(orderId, history);
     return order;
   }

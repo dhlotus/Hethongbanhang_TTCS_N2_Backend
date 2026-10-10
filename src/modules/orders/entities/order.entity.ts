@@ -43,6 +43,10 @@ export class OrderEntity {
   approvalReasons: string[];
   isCreditLimitExceeded?: boolean;
   creditLimitExceededAmount?: number;
+  approvedAt?: Date;
+  approverId?: string;
+  reservedUntil?: Date;
+  cancelReason?: string;
   createdAt: Date;
   updatedAt: Date;
 

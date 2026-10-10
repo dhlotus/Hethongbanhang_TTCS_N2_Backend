@@ -14,6 +14,7 @@ export enum OrderStatus {
   DELIVERED = 'DELIVERED', // Giao thành công
   CANCELLED = 'CANCELLED', // Đã hủy
   RETURNED = 'RETURNED', // Hoàn hàng
+  COMPLETED = 'COMPLETED', // Hoàn tất đơn hàng
 }
 
 /**

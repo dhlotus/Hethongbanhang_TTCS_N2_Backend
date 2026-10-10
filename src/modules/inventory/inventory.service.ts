@@ -2,6 +2,7 @@ import { BadRequestException, forwardRef, Inject, Injectable, OnModuleInit } fro
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
+import { StockReservationEntity, StockReservationStatus } from './entities/stock-reservation.entity';
 import { DatabaseService } from '../../database/database.service';
 import type { PoolClient } from 'pg';
 import type { ProductEntity } from '../products/entities/product.entity';
@@ -47,6 +48,9 @@ export class InventoryService implements OnModuleInit {
   private locks = new Map<string, Promise<void>>();
   private stockBalanceSchemaPromise: Promise<void> | null = null;
 
+  private memoryStockReservations = new Map<string, StockReservationEntity>();
+  private stockReservationSchemaPromise: Promise<void> | null = null;
+
   constructor(
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
@@ -57,10 +61,37 @@ export class InventoryService implements OnModuleInit {
     if (this.ledger.size === 0) {
       this.seedInitialTransactions();
     }
-    if (this.databaseService.isConnected()) {
+    if (this.databaseService?.isConnected()) {
       await this.ensureStockBalanceTable();
+      await this.ensureStockReservationsTable();
       await this.seedStockBalances();
     }
+  }
+
+  async ensureStockReservationsTable(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    if (!this.stockReservationSchemaPromise) {
+      this.stockReservationSchemaPromise = this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS stock_reservations (
+          id TEXT PRIMARY KEY,
+          order_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          warehouse_id TEXT NOT NULL DEFAULT 'wh-main',
+          quantity NUMERIC(15, 2) NOT NULL CHECK (quantity > 0),
+          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RELEASED', 'FULFILLED', 'RESERVED')),
+          expired_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          released_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_reservations_order ON stock_reservations(order_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_reservations_status_expired ON stock_reservations(status, expired_at) WHERE status = 'ACTIVE' OR status = 'RESERVED';
+        CREATE INDEX IF NOT EXISTS idx_stock_reservations_product ON stock_reservations(product_id) WHERE status = 'ACTIVE' OR status = 'RESERVED';
+      `).then(() => undefined).catch((error: unknown) => {
+        this.stockReservationSchemaPromise = null;
+        throw error;
+      });
+    }
+    await this.stockReservationSchemaPromise;
   }
 
   async ensureStockBalanceTable(): Promise<void> {
@@ -220,43 +251,135 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Xem tồn kho khả dụng của danh mục sản phẩm kèm đơn vị quy đổi
+   * Xem tồn kho khả dụng của danh mục sản phẩm kèm 3 cột (Thực tế, Đang giữ chỗ, Khả dụng) và đơn vị quy đổi (SN-180)
    */
   async getStockOverview(): Promise<
     Array<{
       sku: string;
+      productId: string;
       name: string;
+      productName: string;
       stockQuantity: number;
       physicalStockQuantity: number;
+      physicalQuantity: number;
       reservedQuantity: number;
+      availableQuantity: number;
       baseUnit: string;
       units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
       warehouse: string;
+      activeReservations: Array<{
+        id: string;
+        orderId: string;
+        orderCode?: string;
+        quantity: number;
+        expiredAt: string;
+        createdAt: string;
+      }>;
     }>
   > {
     const products = await this.productsService.findAll();
-    const physicalBalances = await this.getStockBalances(products);
-    const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
-      `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
-       FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
-    );
-    const reservations = new Map(
-      reservationResult.map((row) => [row.product_sku.toUpperCase(), Number(row.reserved)]),
-    );
+    let physicalBalances = new Map<string, number>();
+    const reservations = new Map<string, number>();
+    const reservationsListBySku = new Map<
+      string,
+      Array<{
+        id: string;
+        orderId: string;
+        orderCode?: string;
+        quantity: number;
+        expiredAt: string;
+        createdAt: string;
+      }>
+    >();
+
+    if (this.databaseService?.isConnected()) {
+      await this.ensureStockReservationsTable();
+      physicalBalances = await this.getStockBalances(products);
+
+      try {
+        const resRows = await this.databaseService.query<{
+          id: string;
+          order_id: string;
+          product_id: string;
+          quantity: string;
+          expired_at: string;
+          created_at: string;
+          order_code?: string;
+        }>(
+          `SELECT r.id, r.order_id, r.product_id, r.quantity::text,
+                  r.expired_at::text, r.created_at::text, o.order_code
+           FROM stock_reservations r
+           LEFT JOIN app_order_records o ON o.id = r.order_id
+           WHERE r.status IN ('ACTIVE', 'RESERVED') AND r.expired_at > CURRENT_TIMESTAMP`,
+        );
+
+        for (const row of resRows) {
+          const skuKey = row.product_id.toUpperCase();
+          const qty = Number(row.quantity) || 0;
+          reservations.set(skuKey, (reservations.get(skuKey) || 0) + qty);
+
+          const list = reservationsListBySku.get(skuKey) || [];
+          list.push({
+            id: row.id,
+            orderId: row.order_id,
+            orderCode: row.order_code || row.order_id,
+            quantity: qty,
+            expiredAt: row.expired_at,
+            createdAt: row.created_at,
+          });
+          reservationsListBySku.set(skuKey, list);
+        }
+      } catch {
+        // Fallback to app_order_inventory_reservations if needed
+        try {
+          const legacyRows = await this.databaseService.query<{ product_sku: string; reserved: string }>(
+            `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
+             FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
+          );
+          for (const row of legacyRows) {
+            reservations.set(row.product_sku.toUpperCase(), Number(row.reserved));
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    } else {
+      // In-memory fallback
+      for (const res of this.memoryStockReservations.values()) {
+        if (res.status === StockReservationStatus.ACTIVE && new Date(res.expiredAt) > new Date()) {
+          const skuKey = res.productId.toUpperCase();
+          reservations.set(skuKey, (reservations.get(skuKey) || 0) + res.quantity);
+          const list = reservationsListBySku.get(skuKey) || [];
+          list.push({
+            id: res.id,
+            orderId: res.orderId,
+            orderCode: res.orderCode || res.orderId,
+            quantity: res.quantity,
+            expiredAt: res.expiredAt instanceof Date ? res.expiredAt.toISOString() : String(res.expiredAt),
+            createdAt: res.createdAt instanceof Date ? res.createdAt.toISOString() : String(res.createdAt),
+          });
+          reservationsListBySku.set(skuKey, list);
+        }
+      }
+    }
+
     return products.map((p) => {
-      const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity;
+      const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity ?? 0;
       const dbReserved = reservations.get(p.sku.toUpperCase()) ?? 0;
       const orderReserved = p.reservedStock ?? 0;
       const reservedQuantity = Math.max(dbReserved, orderReserved);
-      const available = typeof p.availableStock === 'number'
-        ? p.availableStock
-        : Math.max(0, physicalStockQuantity - reservedQuantity);
+      const available = Math.max(0, physicalStockQuantity - reservedQuantity);
+
       return {
         sku: p.sku,
+        productId: p.id,
         name: p.name,
+        productName: p.name,
         stockQuantity: available,
         physicalStockQuantity,
+        physicalQuantity: physicalStockQuantity,
         reservedQuantity,
+        availableQuantity: available,
         baseUnit: p.baseUnit,
         units: (p.units || []).map((u) => ({
           unitName: u.unitName,
@@ -264,8 +387,106 @@ export class InventoryService implements OnModuleInit {
           isBaseUnit: u.isBaseUnit,
         })),
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        activeReservations: reservationsListBySku.get(p.sku.toUpperCase()) || [],
       };
     });
+  }
+
+  /**
+   * Lấy danh sách phiếu giữ chỗ kho đang hoạt động (SN-180)
+   */
+  async getActiveReservations(
+    sku?: string,
+    orderId?: string,
+  ): Promise<StockReservationEntity[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.ensureStockReservationsTable();
+      let query = `
+        SELECT r.id, r.order_id, r.product_id, r.warehouse_id, r.quantity::text,
+               r.status, r.expired_at, r.created_at, r.released_at, o.order_code
+        FROM stock_reservations r
+        LEFT JOIN app_order_records o ON o.id = r.order_id
+        WHERE r.status IN ('ACTIVE', 'RESERVED')
+      `;
+      const params: unknown[] = [];
+      if (sku) {
+        params.push(sku.toUpperCase());
+        query += ` AND UPPER(r.product_id) = $${params.length}`;
+      }
+      if (orderId) {
+        params.push(orderId);
+        query += ` AND r.order_id = $${params.length}`;
+      }
+      query += ` ORDER BY r.created_at DESC`;
+      const rows = await this.databaseService.query<{
+        id: string;
+        order_id: string;
+        product_id: string;
+        warehouse_id: string;
+        quantity: string;
+        status: string;
+        expired_at: Date;
+        created_at: Date;
+        released_at?: Date;
+        order_code?: string;
+      }>(query, params);
+
+      return rows.map(
+        (row) =>
+          new StockReservationEntity({
+            id: row.id,
+            orderId: row.order_id,
+            orderCode: row.order_code || row.order_id,
+            productId: row.product_id,
+            warehouseId: row.warehouse_id,
+            quantity: Number(row.quantity),
+            status: row.status as StockReservationStatus,
+            expiredAt: new Date(row.expired_at),
+            createdAt: new Date(row.created_at),
+            releasedAt: row.released_at ? new Date(row.released_at) : undefined,
+          }),
+      );
+    }
+
+    return Array.from(this.memoryStockReservations.values()).filter((res) => {
+      if (res.status !== StockReservationStatus.ACTIVE) return false;
+      if (sku && res.productId.toUpperCase() !== sku.toUpperCase()) return false;
+      if (orderId && res.orderId !== orderId) return false;
+      return true;
+    });
+  }
+
+  addMemoryReservation(res: StockReservationEntity): void {
+    this.memoryStockReservations.set(res.id, res);
+  }
+
+  releaseMemoryReservationsByOrderId(orderId: string): number {
+    let count = 0;
+    for (const [id, res] of this.memoryStockReservations.entries()) {
+      if (res.orderId === orderId && res.status === StockReservationStatus.ACTIVE) {
+        res.status = StockReservationStatus.RELEASED;
+        res.releasedAt = new Date();
+        this.memoryStockReservations.set(id, res);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  releaseExpiredMemoryReservations(): { releasedReservations: number; cancelledOrderIds: string[] } {
+    const now = new Date();
+    const cancelledOrderIds = new Set<string>();
+    let count = 0;
+    for (const [id, res] of this.memoryStockReservations.entries()) {
+      if (res.status === StockReservationStatus.ACTIVE && new Date(res.expiredAt) < now) {
+        res.status = StockReservationStatus.RELEASED;
+        res.releasedAt = now;
+        this.memoryStockReservations.set(id, res);
+        cancelledOrderIds.add(res.orderId);
+        count++;
+      }
+    }
+    return { releasedReservations: count, cancelledOrderIds: Array.from(cancelledOrderIds) };
   }
 
   /**

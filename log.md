@@ -855,3 +855,33 @@ pm run build (	sc -b && vite build) -> 0 lỗi, build production thành công.
 px jest test/orders-clone-sn48.spec.ts -> 3/3 tests passed (100%).
   - Backend Build: 
 est build -> 0 lỗi.
+
+### [Sprint 5] - [SN-180]: Giữ Chỗ Tồn Kho Khi Duyệt Đơn & Tự Động Nhả Tồn Kho (ACID Transaction)
+- **Thời gian hoàn thành:** 2026-10-10
+- **Mã Jira / Task:** SN-180 (Parent SN-229 / S5-06 - Sprint 5)
+- **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn có tồn được giữ chỗ ngay khi đơn được duyệt, để chắc chắn hàng đã chốt cho khách của mình không bị người khác bán mất."
+- **Tiêu chí chấp nhận (ACs):**
+  - **AC1:** Đơn chuyển sang "Đã duyệt" (APPROVED) thì tồn tương ứng được giữ chỗ (reserved_quantity), không ai đặt được số lượng này nữa. Giữ chỗ có thời hạn 24 giờ (expired_at = now() + 24 hours).
+  - **AC2:** Hủy đơn hoặc đơn quá hạn giữ chỗ 24h thì tồn được nhả tự động (reserved_quantity -= quantity, reservation chuyển RELEASED), đơn quá hạn chuyển CANCELLED kèm ghi log audit.
+  - **AC3:** Việc trừ tồn khả dụng và ghi giữ chỗ nằm trong cùng một giao dịch ACID (Database Transaction), khóa dòng tránh Race Condition, lỗi giữa chừng (thiếu hàng) thì hoàn lại toàn bộ (Rollback).
+- **Danh sách file tạo mới / thay đổi (Backend):**
+  - src/database/migrations/011_stock_reservations_sn180.sql (Tạo mới: Migration tạo bảng stock_reservations)
+  - src/modules/inventory/entities/stock-reservation.entity.ts (Tạo mới: StockReservationEntity và Enum StockReservationStatus)
+  - src/modules/orders/dto/cancel-order.dto.ts (Tạo mới: DTO CancelOrderDto bắt buộc có reason)
+  - src/modules/orders/entities/order-status.enum.ts (Cập nhật: Bổ sung COMPLETED vào enum OrderStatus)
+  - src/modules/orders/entities/order.entity.ts (Cập nhật: Thêm cancelReason, approvedAt, approverId, reservedUntil)
+  - src/modules/inventory/inventory.service.ts (Cập nhật: Bổ sung quản lý tồn kho 3 cột physicalQuantity, reservedQuantity, availableQuantity; các hàm giữ chỗ và nhả tồn)
+  - src/modules/inventory/inventory-reservation-scheduler.service.ts (Tạo mới: Background worker định kỳ quét nhả tồn giữ chỗ quá hạn 24h)
+  - src/modules/inventory/inventory.module.ts (Cập nhật: Đăng ký OrdersModule và Scheduler)
+  - src/modules/orders/orders.service.ts (Cập nhật: approveOrder transaction ACID khóa dòng kiểm tra tồn, cancelOrder hoàn lại tồn giữ chỗ, releaseExpiredReservations nhả tồn quá hạn)
+  - src/modules/orders/orders.controller.ts (Cập nhật: Endpoints POST /api/orders/:id/approve và POST /api/orders/:id/cancel)
+  - src/modules/inventory/inventory.controller.ts (Cập nhật: Endpoints GET /api/inventory/stocks và GET /api/inventory/reservations)
+  - test/inventory-reservation-sn180.spec.ts (Tạo mới: 6 test cases kiểm thử tự động toàn diện AC1, AC2, AC3)
+- **Chi tiết kỹ thuật:**
+  - **Công thức sổ tồn kho:** available_quantity = physical_quantity - reserved_quantity.
+  - **Giao dịch ACID & Khóa dòng:** Dùng Database Transaction QueryRunner, khóa dòng Pessimistic lock trên từng bản ghi tồn kho, ném BadRequestException và rollback toàn bộ nếu item.quantity > available_quantity.
+  - **Hạn giữ chỗ 24h:** Bản ghi giữ chỗ được sinh tự động với expired_at = now() + 24 hours. Scheduler quét tự động mỗi 60 giây để nhả tồn các reservation quá hạn và chuyển đơn sang CANCELLED.
+  - **Phân quyền RBAC:** Chỉ Quản lý kinh doanh (SALES_MANAGER) và Quản trị viên (ADMIN) mới có quyền duyệt đơn và kích hoạt giữ chỗ.
+- **Trạng thái kiểm thử:**
+  - Backend Test Suites: 6/6 test cases passed (100%) tại test/inventory-reservation-sn180.spec.ts.
+  - Backend Build: nest build -> 0 lỗi, compile thành công 100%.

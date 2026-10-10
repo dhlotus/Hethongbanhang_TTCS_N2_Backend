@@ -26,10 +26,11 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { DecideOrderDto } from './dto/decide-order.dto';
+import { CancelOrderDto } from './dto/cancel-order.dto';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 
 /**
- * Controller Quản lý Đặt hàng B2B (SN-38, SN-39 & SN-46)
+ * Controller Quản lý Đặt hàng B2B (SN-38, SN-39, SN-46 & SN-180)
  */
 @Controller('orders')
 export class OrdersController {
@@ -87,6 +88,37 @@ export class OrdersController {
     @CurrentUser() reviewer: ICurrentUser,
   ): Promise<OrderEntity> {
     return this.ordersService.decideOrder(id, dto, reviewer);
+  }
+
+  /**
+   * Duyệt đơn hàng & kích hoạt giữ chỗ tồn kho (SN-180 AC1 & AC3)
+   * POST /api/orders/:id/approve
+   * Quyền: Chỉ ADMIN, SALES_MANAGER
+   */
+  @Post(':id/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  async approveOrder(
+    @Param('id') id: string,
+    @CurrentUser() reviewer: ICurrentUser,
+  ): Promise<OrderEntity> {
+    return this.ordersService.approveOrder(id, reviewer);
+  }
+
+  /**
+   * Hủy đơn hàng & tự động nhả tồn giữ chỗ (SN-180 AC2 & AC3)
+   * POST /api/orders/:id/cancel
+   * Quyền: ADMIN, SALES_MANAGER, SALES_REP
+   */
+  @Post(':id/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  async cancelOrder(
+    @Param('id') id: string,
+    @Body() dto: CancelOrderDto,
+    @CurrentUser() user: ICurrentUser,
+  ): Promise<OrderEntity> {
+    return this.ordersService.cancelOrder(id, dto.reason, user);
   }
 
   /**

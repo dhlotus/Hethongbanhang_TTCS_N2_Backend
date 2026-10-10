@@ -32,22 +32,76 @@ export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
   /**
-   * Xem danh sách và số lượng tồn kho khả dụng kèm đơn vị quy đổi
-   * GET /inventory/stock
+   * Xem danh sách và số lượng tồn kho khả dụng kèm 3 cột tồn kho (SN-180)
+   * GET /inventory/stock và GET /inventory/stocks
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
   @Get('stock')
   async getStockOverview(): Promise<
     Array<{
       sku: string;
+      productId: string;
       name: string;
+      productName: string;
       stockQuantity: number;
+      physicalStockQuantity: number;
+      physicalQuantity: number;
+      reservedQuantity: number;
+      availableQuantity: number;
       baseUnit: string;
       units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
       warehouse: string;
+      activeReservations: Array<{
+        id: string;
+        orderId: string;
+        orderCode?: string;
+        quantity: number;
+        expiredAt: string;
+        createdAt: string;
+      }>;
     }>
   > {
     return this.inventoryService.getStockOverview();
+  }
+
+  @Get('stocks')
+  async getStocks(): Promise<
+    Array<{
+      sku: string;
+      productId: string;
+      name: string;
+      productName: string;
+      stockQuantity: number;
+      physicalStockQuantity: number;
+      physicalQuantity: number;
+      reservedQuantity: number;
+      availableQuantity: number;
+      baseUnit: string;
+      units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
+      warehouse: string;
+      activeReservations: Array<{
+        id: string;
+        orderId: string;
+        orderCode?: string;
+        quantity: number;
+        expiredAt: string;
+        createdAt: string;
+      }>;
+    }>
+  > {
+    return this.inventoryService.getStockOverview();
+  }
+
+  /**
+   * Lấy danh sách phiếu giữ chỗ kho đang hoạt động (SN-180)
+   * GET /inventory/reservations
+   */
+  @Get('reservations')
+  async getReservations(
+    @Query('sku') sku?: string,
+    @Query('orderId') orderId?: string,
+  ) {
+    return this.inventoryService.getActiveReservations(sku, orderId);
   }
 
   /**
