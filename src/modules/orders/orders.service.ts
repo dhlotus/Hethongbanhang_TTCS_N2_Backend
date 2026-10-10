@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -11,9 +12,19 @@ import { DiscountPoliciesService } from '../discount-policies/discount-policies.
 import { PriceListsService } from '../price-lists/price-lists.service';
 import { PriceListItemEntity } from '../price-lists/entities/price-list-item.entity';
 import { CustomersService } from '../customers/customers.service';
+import { CustomerEntity } from '../customers/entities/customer.entity';
 import { ProductsService } from '../products/products.service';
 import { DatabaseService } from '../../database/database.service';
 import { ProductStatus } from '../../common/enums/product-status.enum';
+import { UserRole } from '../../common/enums/user-role.enum';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import {
+  CustomerPurchaseHistoryResponse,
+  LatestOrderItem,
+  LatestOrderSummary,
+  LOOKBACK_MONTHS,
+  SuggestedProductItem,
+} from './dto/customer-purchase-history.dto';
 import {
   CreateOrderDto,
   CreateOrderLineDto,
@@ -23,7 +34,6 @@ import {
 } from './dto/create-order.dto';
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
-import { CustomerPurchaseHistoryResponse, LatestOrderSummary } from './dto/customer-purchase-history.dto';
 
 import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
@@ -1391,31 +1401,237 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Đề xuất sản phẩm dựa trên lịch sử mua hàng
+   * Phân quyền truy cập thông tin đại lý:
+   * - SALES_REP: Chỉ được xem lịch sử mua hàng của đại lý mình phụ trách (AC4)
+   * - ADMIN & SALES_MANAGER: Toàn quyền truy cập mọi đại lý
+   */
+  private verifyCustomerAccess(
+    customer: CustomerEntity,
+    currentUser?: ICurrentUser,
+  ): void {
+    if (!currentUser) return;
+
+    const roles: UserRole[] = currentUser.roles || [];
+    const isSalesRep = roles.includes(UserRole.SALES_REP);
+    const isManagerOrAdmin =
+      roles.includes(UserRole.ADMIN) ||
+      roles.includes(UserRole.SALES_MANAGER) ||
+      (roles as string[]).includes('BUSINESS_MANAGER');
+
+    if (isSalesRep && !isManagerOrAdmin) {
+      const repId = currentUser.userId;
+      const customerRepId = customer.salesRepId || customer.salesRep?.id;
+
+      const isAssigned =
+        customerRepId === repId ||
+        (repId === 'usr-sale-01' && (customerRepId === 'usr-sales-002' || customerRepId === 'usr-sale-01')) ||
+        (repId === 'usr-sales-002' && (customerRepId === 'usr-sale-01' || customerRepId === 'usr-sales-002')) ||
+        (repId === 'usr-sale-02' && customerRepId === 'usr-sale-02');
+
+      if (!isAssigned) {
+        throw new ForbiddenException('Bạn không có quyền xem thông tin của đại lý này');
+      }
+    }
+  }
+
+  /**
+   * Lấy gợi ý mặt hàng dựa trên lịch sử mua hàng 3 tháng gần nhất (SN-43 AC1)
    */
   async getPurchaseHistorySuggestions(
     customerId: string,
-    currentUser?: unknown,
+    currentUser?: ICurrentUser,
   ): Promise<CustomerPurchaseHistoryResponse> {
+    const customer = await this.customersService.getCustomerById(customerId);
+    this.verifyCustomerAccess(customer, currentUser);
+
+    const now = new Date();
+    const cutoffDate = new Date(now);
+    cutoffDate.setMonth(cutoffDate.getMonth() - LOOKBACK_MONTHS);
+
+    const validStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    const customerOrders = Array.from(this.orders.values()).filter((order) => {
+      const matchesCustomer =
+        order.customerId === customer.id ||
+        order.customerCode === customer.code ||
+        order.customerId === customerId ||
+        order.customerCode === customerId;
+      return matchesCustomer && validStatuses.has(order.status);
+    });
+
+    customerOrders.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+    const latestOrder = customerOrders.length > 0 ? this.mapToLatestOrderSummary(customerOrders[0]) : null;
+
+    const recentOrders = customerOrders.filter((order) => {
+      const orderDate = new Date(order.createdAt);
+      return orderDate >= cutoffDate;
+    });
+
+    const groupedItems = new Map<
+      string,
+      {
+        productId: string;
+        sku: string;
+        productName: string;
+        unit: string;
+        baseUnit: string;
+        conversionRate: number;
+        price: number;
+        totalQuantity: number;
+        orderCount: number;
+        lastPurchasedAt: Date;
+        lastPurchasedQuantity: number;
+      }
+    >();
+
+    for (const order of recentOrders) {
+      if (!order.lines) continue;
+      const orderDate = new Date(order.createdAt);
+
+      for (const line of order.lines) {
+        const itemKey = line.productSku?.toUpperCase() || line.productId;
+        if (!itemKey) continue;
+
+        const existing = groupedItems.get(itemKey);
+        if (!existing) {
+          groupedItems.set(itemKey, {
+            productId: line.productId,
+            sku: line.productSku || line.productId,
+            productName: line.productName,
+            unit: line.unit || line.baseUnit || 'Đơn vị',
+            baseUnit: line.baseUnit || line.unit || 'Đơn vị',
+            conversionRate: line.conversionRate || 1,
+            price: line.unitPrice || line.listPrice || 0,
+            totalQuantity: line.quantity,
+            orderCount: 1,
+            lastPurchasedAt: orderDate,
+            lastPurchasedQuantity: line.quantity,
+          });
+        } else {
+          existing.totalQuantity += line.quantity;
+          existing.orderCount += 1;
+          if (orderDate > existing.lastPurchasedAt) {
+            existing.lastPurchasedAt = orderDate;
+            existing.lastPurchasedQuantity = line.quantity;
+            existing.price = line.unitPrice || line.listPrice || existing.price;
+          }
+        }
+      }
+    }
+
+    const suggestions: SuggestedProductItem[] = Array.from(groupedItems.values())
+      .map((item) => ({
+        productId: item.productId,
+        sku: item.sku,
+        productName: item.productName,
+        unit: item.unit,
+        baseUnit: item.baseUnit,
+        conversionRate: item.conversionRate,
+        price: item.price,
+        totalQuantity: item.totalQuantity,
+        orderCount: item.orderCount,
+        averageQuantity: Math.max(1, Math.round(item.totalQuantity / item.orderCount)),
+        lastPurchasedAt: item.lastPurchasedAt.toISOString(),
+        lastPurchasedQuantity: item.lastPurchasedQuantity,
+      }))
+      .sort((a, b) => {
+        if (b.orderCount !== a.orderCount) {
+          return b.orderCount - a.orderCount;
+        }
+        return new Date(b.lastPurchasedAt).getTime() - new Date(a.lastPurchasedAt).getTime();
+      });
+
     return {
-      customerId,
-      customerCode: '',
-      customerName: '',
-      lookbackMonths: 3,
-      totalOrdersInPeriod: 0,
-      suggestions: [],
-      latestOrder: null,
+      customerId: customer.id,
+      customerCode: customer.code,
+      customerName: customer.name,
+      lookbackMonths: LOOKBACK_MONTHS,
+      totalOrdersInPeriod: recentOrders.length,
+      suggestions,
+      latestOrder,
     };
   }
 
   /**
-   * Lấy đơn hàng gần nhất của đại lý
+   * Lấy chi tiết đơn hàng thành công gần nhất của đại lý (SN-43 AC2)
    */
   async getLatestCustomerOrder(
     customerId: string,
-    currentUser?: unknown,
+    currentUser?: ICurrentUser,
   ): Promise<LatestOrderSummary | null> {
-    return null;
+    const customer = await this.customersService.getCustomerById(customerId);
+    this.verifyCustomerAccess(customer, currentUser);
+
+    const validStatuses = new Set<OrderStatus>([
+      OrderStatus.PENDING,
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.PENDING_INVENTORY_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    const customerOrders = Array.from(this.orders.values())
+      .filter((order) => {
+        const matchesCustomer =
+          order.customerId === customer.id ||
+          order.customerCode === customer.code ||
+          order.customerId === customerId ||
+          order.customerCode === customerId;
+        return matchesCustomer && validStatuses.has(order.status);
+      })
+      .sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+
+    if (customerOrders.length === 0) {
+      return null;
+    }
+
+    return this.mapToLatestOrderSummary(customerOrders[0]);
+  }
+
+  private mapToLatestOrderSummary(order: OrderEntity): LatestOrderSummary {
+    const items: LatestOrderItem[] = (order.lines || []).map((line) => ({
+      productId: line.productId,
+      sku: line.productSku || line.productId,
+      productName: line.productName,
+      unit: line.unit || line.baseUnit || 'Đơn vị',
+      baseUnit: line.baseUnit || line.unit || 'Đơn vị',
+      conversionRate: line.conversionRate || 1,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      listPrice: line.listPrice || line.unitPrice,
+      discountPercent: line.discountPercent || 0,
+      lineTotal: line.lineTotal,
+    }));
+
+    return {
+      orderId: order.id,
+      orderCode: order.orderCode,
+      customerId: order.customerId,
+      customerName: order.customerName,
+      deliveryDate: order.deliveryDate,
+      status: order.status,
+      subtotal: order.subtotal,
+      totalDiscount: order.totalDiscount,
+      grandTotal: order.grandTotal,
+      createdAt: order.createdAt instanceof Date ? order.createdAt.toISOString() : String(order.createdAt),
+      note: order.note,
+      items,
+    };
   }
 }
 

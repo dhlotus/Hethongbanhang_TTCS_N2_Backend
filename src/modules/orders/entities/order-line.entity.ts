@@ -18,25 +18,25 @@ export class OrderLineEntity {
   lineTotal: number; // Thành tiền = quantity * unitPrice
   stockAvailable?: number; // Tồn khả dụng tham khảo
   minPrice?: number; // Giá sàn theo đơn vị đặt hàng
+  deliveredQuantity?: number; // Số lượng thực tế đã giao nhận (SN-170)
+  deliveredBaseQuantity?: number; // Số lượng cơ sở thực tế đã giao
+  isShortDelivery?: boolean; // Cờ báo dòng hàng bị giao thiếu (SN-170)
+  shortDeliveryReason?: string; // Lý do giao thiếu (SN-170)
   requiresApproval: boolean;
-  deliveredQuantity?: number;
-  deliveredBaseQuantity?: number;
-  shortDeliveryReason?: string;
-  isShortDelivery?: boolean;
 
   constructor(partial: Partial<OrderLineEntity>) {
     Object.assign(this, partial);
     this.conversionRate = partial.conversionRate ?? 1;
     this.quantity = partial.quantity ?? 1;
+    this.deliveredQuantity = partial.deliveredQuantity;
+    this.deliveredBaseQuantity = partial.deliveredBaseQuantity;
+    this.isShortDelivery = partial.isShortDelivery ?? false;
+    this.shortDeliveryReason = partial.shortDeliveryReason;
     this.baseQuantity = partial.baseQuantity ?? Math.round(this.quantity * this.conversionRate);
     this.unitPrice = partial.unitPrice ?? 0;
     this.listPrice = partial.listPrice ?? this.unitPrice;
     this.discountPercent = partial.discountPercent ?? 0;
     this.lineTotal = partial.lineTotal ?? Math.round(this.quantity * this.unitPrice);
     this.requiresApproval = partial.requiresApproval ?? false;
-    this.deliveredQuantity = partial.deliveredQuantity;
-    this.deliveredBaseQuantity = partial.deliveredBaseQuantity;
-    this.shortDeliveryReason = partial.shortDeliveryReason;
-    this.isShortDelivery = partial.isShortDelivery;
   }
 }
