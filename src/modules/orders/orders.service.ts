@@ -676,8 +676,10 @@ export class OrdersService implements OnModuleInit {
     // Sắp xếp đơn mới nhất lên đầu
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+    // Lọc theo trạng thái đơn hàng
     if (query.status && (query.status as string) !== 'ALL') {
-      list = list.filter((o) => o.status === query.status);
+      const st = (query.status as string).toUpperCase().trim();
+      list = list.filter((o) => o.status && o.status.toUpperCase().trim() === st);
     }
 
     if (query.customerId) {
@@ -693,20 +695,36 @@ export class OrdersService implements OnModuleInit {
       list = list.filter((o) => o.salesRepId === query.salesRepId);
     }
 
-    if (query.search) {
+    // Tìm kiếm đa tiêu chí: Mã đơn, tên đại lý, mã đại lý, người nhận, số điện thoại
+    if (query.search && query.search.trim()) {
       const q = query.search.toLowerCase().trim();
       list = list.filter(
         (o) =>
-          o.orderCode.toLowerCase().includes(q) ||
-          o.customerName.toLowerCase().includes(q) ||
-          o.customerCode.toLowerCase().includes(q) ||
-          o.deliveryPoint?.receiverName.toLowerCase().includes(q) ||
-          o.deliveryPoint?.phone.includes(q),
+          (o.orderCode && o.orderCode.toLowerCase().includes(q)) ||
+          (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+          (o.customerCode && o.customerCode.toLowerCase().includes(q)) ||
+          (o.deliveryPoint?.receiverName &&
+            o.deliveryPoint.receiverName.toLowerCase().includes(q)) ||
+          (o.deliveryPoint?.phone && o.deliveryPoint.phone.includes(q)),
       );
     }
 
-    const page = Math.max(1, query.page || 1);
-    const limit = Math.max(1, query.limit || 10);
+    // Lọc theo khoảng thời gian tạo đơn
+    if (query.fromDate) {
+      const fromTime = new Date(query.fromDate).getTime();
+      if (!isNaN(fromTime)) {
+        list = list.filter((o) => new Date(o.createdAt).getTime() >= fromTime);
+      }
+    }
+    if (query.toDate) {
+      const toTime = new Date(query.toDate).getTime();
+      if (!isNaN(toTime)) {
+        list = list.filter((o) => new Date(o.createdAt).getTime() <= toTime);
+      }
+    }
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 10);
     const total = list.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const start = (page - 1) * limit;
