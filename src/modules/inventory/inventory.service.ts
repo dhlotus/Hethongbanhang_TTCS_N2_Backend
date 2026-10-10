@@ -5,6 +5,10 @@ import { InventoryTransactionEntity } from './entities/inventory-transaction.ent
 import { DatabaseService } from '../../database/database.service';
 import type { PoolClient } from 'pg';
 import type { ProductEntity } from '../products/entities/product.entity';
+import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
+
+const DEFAULT_WAREHOUSE_ID = 'WH01';
+const DEFAULT_WAREHOUSE_NAME = 'Kho Tổng Miền Nam - LOHA WH01';
 
 export interface StockAdjustmentResult {
   success: boolean;
@@ -46,6 +50,8 @@ export class InventoryService implements OnModuleInit {
    */
   private locks = new Map<string, Promise<void>>();
   private stockBalanceSchemaPromise: Promise<void> | null = null;
+  /** Fallback in-memory: Map<SKU viết hoa, mức tồn tối thiểu> (dùng khi không có PostgreSQL) */
+  private minStockLevels = new Map<string, number>();
   private readonly databaseService: DatabaseService;
 
   constructor(
@@ -76,7 +82,10 @@ export class InventoryService implements OnModuleInit {
           created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
-      `).then(() => undefined).catch((error: unknown) => {
+      `).then(() => this.databaseService.query(`
+        ALTER TABLE app_inventory_stock_balances
+        ADD COLUMN IF NOT EXISTS min_stock_level NUMERIC(15, 2) DEFAULT 0
+      `)).then(() => undefined).catch((error: unknown) => {
         this.stockBalanceSchemaPromise = null;
         throw error;
       });
@@ -226,21 +235,10 @@ export class InventoryService implements OnModuleInit {
   /**
    * Xem tồn kho khả dụng của danh mục sản phẩm kèm đơn vị quy đổi
    */
-  async getStockOverview(): Promise<
-    Array<{
-      sku: string;
-      name: string;
-      stockQuantity: number;
-      physicalStockQuantity: number;
-      reservedQuantity: number;
-      baseUnit: string;
-      units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
-      warehouse: string;
-    }>
-  > {
+  async getStockOverview(): Promise<StockBalance[]> {
     const products = await this.productsService.findAll();
     if (!this.databaseService.isConnected()) {
-      return products.map((p) => ({
+      return products.map((p) => this.buildStockBalance({
         sku: p.sku,
         name: p.name,
         stockQuantity: p.stockQuantity ?? 0,
@@ -252,10 +250,10 @@ export class InventoryService implements OnModuleInit {
           conversionRate: u.conversionRate,
           isBaseUnit: u.isBaseUnit,
         })),
-        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-      }));
+      }, this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 0));
     }
     const physicalBalances = await this.getStockBalances(products);
+    const minLevels = await this.getMinStockLevelsFromDb(products);
     const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
       `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
        FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
@@ -271,7 +269,7 @@ export class InventoryService implements OnModuleInit {
       const available = typeof p.availableStock === 'number'
         ? p.availableStock
         : Math.max(0, physicalStockQuantity - reservedQuantity);
-      return {
+      return this.buildStockBalance({
         sku: p.sku,
         name: p.name,
         stockQuantity: available,
@@ -283,9 +281,97 @@ export class InventoryService implements OnModuleInit {
           conversionRate: u.conversionRate,
           isBaseUnit: u.isBaseUnit,
         })),
-        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-      };
+      }, minLevels.get(p.sku.trim().toUpperCase()) ?? 0);
     });
+  }
+
+  /**
+   * Gắn mức tồn tối thiểu và tính cờ cảnh báo cho một dòng sổ tồn (SN-183).
+   */
+  private buildStockBalance(
+    base: Omit<StockBalance, 'warehouse' | 'warehouseId' | 'minStockLevel' | 'isBelowMinStock'>,
+    minStockLevel: number,
+  ): StockBalance {
+    return {
+      ...base,
+      warehouse: DEFAULT_WAREHOUSE_NAME,
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      minStockLevel,
+      isBelowMinStock: minStockLevel > 0 && base.stockQuantity <= minStockLevel,
+    };
+  }
+
+  private async getMinStockLevelsFromDb(products: ProductEntity[]): Promise<Map<string, number>> {
+    await this.ensureStockBalanceTable();
+    if (products.length === 0) return new Map();
+    const rows = await this.databaseService.query<{ product_sku: string; min_stock_level: string | null }>(
+      `SELECT product_sku, COALESCE(min_stock_level, 0)::text AS min_stock_level
+       FROM app_inventory_stock_balances
+       WHERE product_sku = ANY($1::text[])`,
+      [products.map((product) => product.sku.trim().toUpperCase())],
+    );
+    return new Map(rows.map((row) => [row.product_sku, Number(row.min_stock_level ?? 0)]));
+  }
+
+  /**
+   * Khai báo mức tồn tối thiểu theo SKU tại kho (SN-183).
+   * Hệ thống hiện vận hành một kho (WH01) nên warehouseId chỉ được kiểm tra không rỗng.
+   */
+  async setMinStockLevel(
+    warehouseId: string,
+    sku: string,
+    minStock: number,
+  ): Promise<StockBalance> {
+    if (!warehouseId?.trim()) {
+      throw new BadRequestException('Thiếu mã kho.');
+    }
+    const level = Number(minStock);
+    if (!Number.isFinite(level) || level < 0) {
+      throw new BadRequestException('Mức tồn tối thiểu phải là số không âm.');
+    }
+    const cleanSku = sku.trim().toUpperCase();
+    const product = await this.productsService.findById(cleanSku);
+    const productSku = product.sku.trim().toUpperCase();
+
+    if (this.databaseService.isConnected()) {
+      await this.ensureStockBalanceTable();
+      await this.databaseService.query(
+        `INSERT INTO app_inventory_stock_balances (product_sku, physical_quantity, min_stock_level)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (product_sku)
+         DO UPDATE SET min_stock_level = EXCLUDED.min_stock_level, updated_at = CURRENT_TIMESTAMP`,
+        [productSku, product.stockQuantity ?? 0, level],
+      );
+    }
+    this.minStockLevels.set(productSku, level);
+
+    const balances = await this.getStockOverview();
+    const updated = balances.find((row) => row.sku.trim().toUpperCase() === productSku);
+    if (!updated) {
+      throw new BadRequestException(`Không tìm thấy SKU ${sku}.`);
+    }
+    return updated;
+  }
+
+  /**
+   * Danh sách SKU có tồn khả dụng <= tồn tối thiểu (> 0); hụt nhiều nhất lên đầu (SN-183).
+   */
+  async getLowStockAlerts(warehouseId?: string): Promise<LowStockAlert[]> {
+    const balances = await this.getStockOverview();
+    const targetWarehouse = warehouseId?.trim().toUpperCase();
+    return balances
+      .filter((row) => !targetWarehouse || row.warehouseId.toUpperCase() === targetWarehouse)
+      .filter((row) => (row.minStockLevel ?? 0) > 0 && row.stockQuantity <= (row.minStockLevel ?? 0))
+      .map((row): LowStockAlert => {
+        const minStockLevel = row.minStockLevel ?? 0;
+        return {
+          ...row,
+          minStockLevel,
+          isBelowMinStock: true,
+          shortage: minStockLevel - row.stockQuantity,
+        };
+      })
+      .sort((a, b) => b.shortage - a.shortage);
   }
 
   /**
