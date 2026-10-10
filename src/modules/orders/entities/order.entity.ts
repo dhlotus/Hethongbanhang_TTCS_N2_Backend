@@ -44,6 +44,7 @@ export class OrderEntity {
   cancelReason?: string;
   isCreditLimitExceeded?: boolean;
   creditLimitExceededAmount?: number;
+  isShortDelivery?: boolean;
   createdAt: Date;
   updatedAt: Date;
 
@@ -58,6 +59,7 @@ export class OrderEntity {
     this.requiresApproval = partial.requiresApproval ?? false;
     this.approvalReasons = partial.approvalReasons ?? [];
     this.cancelReason = partial.cancelReason;
+    this.isShortDelivery = partial.isShortDelivery;
     this.status = partial.status ?? OrderStatus.DRAFT;
     this.paymentStatus = partial.paymentStatus ?? PaymentStatus.UNPAID;
     this.isCreditLimitExceeded = partial.isCreditLimitExceeded ?? false;
