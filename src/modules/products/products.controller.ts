@@ -23,6 +23,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { Public } from '../../common/decorators/public.decorator';
 import { CostPriceSanitizerInterceptor } from '../../common/interceptors/cost-price-sanitizer.interceptor';
 import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
@@ -57,6 +58,7 @@ export class ProductsController {
    * Quyền: Mọi vai trò đã đăng nhập (Giá vốn và biên LN được lọc theo vai trò)
    */
   @Get()
+  @Public()
   async findAll(
     @Query() filterDto: GetProductsFilterDto,
   ): Promise<PaginatedProductsResponse> {

@@ -821,7 +821,40 @@ export class OrdersService implements OnModuleInit {
     salesRep?: { id?: string; name?: string },
   ): Promise<OrderEntity> {
     return this.orderLock.acquire(async () => {
-      // 0. API Validation Guard (SN-39): Kiểm tra số lượng đặt với tồn khả dụng
+      // Chuẩn hóa DTO nếu gửi từ Portal dạng items & deliveryAddress
+      if ((!dto.lines || dto.lines.length === 0) && dto.items && dto.items.length > 0) {
+        dto.lines = dto.items.map((item) => {
+          const product = this.productsService?.findProductInternal(item.productId);
+          const unit = item.unit || product?.baseUnit || 'Cái';
+          return {
+            productId: item.productId,
+            productSku: product?.sku || item.productId,
+            productName: product?.name || 'Sản phẩm',
+            unit,
+            baseUnit: product?.baseUnit || unit,
+            conversionRate: 1,
+            quantity: Number(item.quantity),
+            unitPrice: Number(item.price ?? product?.price ?? 0),
+            listPrice: Number(product?.price ?? item.price ?? 0),
+            discountPercent: Number(item.discountPercent ?? 0),
+            isPriceManuallyEdited: false,
+            stockAvailable: product?.availableStock ?? product?.stockQuantity,
+          };
+        });
+      }
+
+      if (!dto.deliveryPoint && dto.deliveryAddress) {
+        dto.deliveryPoint = {
+          name: 'Địa chỉ giao hàng',
+          address: dto.deliveryAddress,
+        };
+      }
+
+      if (!dto.lines || dto.lines.length === 0) {
+        throw new BadRequestException('Đơn hàng phải có ít nhất một sản phẩm');
+      }
+
+      // 0. API Validation Guard (SN-39 & SN-42): Kiểm tra số lượng đặt với tồn khả dụng
       this.validateOrderLinesAvailableStock(dto.lines || []);
 
       const customer = await this.customersService.getCustomerById(dto.customerId);
@@ -961,16 +994,17 @@ export class OrdersService implements OnModuleInit {
       approvalReasons: orderApprovalReasons,
       isCreditLimitExceeded,
       creditLimitExceededAmount,
+      createdSource: dto.createdSource || (salesRep ? 'SALES_REP' : 'AGENCY_PORTAL'),
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
     await this.saveOrder(newOrder);
 
-    // 3. THÊM LOGIC GIỮ CHỖ TỒN KHẢ DỤNG (RESERVE STOCK - Bug Fix SN-42)
-    // Khi tạo đơn hàng mới thành công, lặp qua danh sách items trong đơn hàng.
-    // Tìm sản phẩm tương ứng trong Inventory/Products Service và TRỪ trực tiếp số lượng đặt vào trường availableStock
-    // Công thức: product.availableStock = product.availableStock - item.quantity (quy đổi)
+    // 3. THÊM LOGIC TRỪ TỒN KHO REAL-TIME DB & MEMORY (Task SN-42)
+    // Ngay khi đơn được khởi tạo ở trạng thái PENDING (hoặc các trạng thái hợp lệ),
+    // lập tức cập nhật trong Database PostgreSQL / Memory:
+    // availableStock = availableStock - quantity cho từng sản phẩm trong đơn.
     if (this.productsService && newOrder.lines) {
       for (const line of newOrder.lines) {
         const product = this.productsService.findProductInternal(
@@ -978,14 +1012,32 @@ export class OrdersService implements OnModuleInit {
         );
         if (product) {
           const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
-          const deductQuantity = line.baseQuantity || Math.round((line.quantity || 0) * conversionRate);
+          const deductQuantity = line.baseQuantity || Math.round((Number(line.quantity) || 0) * conversionRate);
 
           const currentStock = typeof product.availableStock === 'number'
             ? product.availableStock
             : Math.max(0, (product.stockQuantity ?? 0) - this.getReservedStock(product.id || product.sku));
 
+          if (currentStock - deductQuantity < 0) {
+            throw new BadRequestException(
+              `Sản phẩm ${product.name || line.productName || line.productSku} vượt quá tồn khả dụng (Còn lại: ${currentStock}, yêu cầu: ${deductQuantity})`
+            );
+          }
+
           product.availableStock = Math.max(0, currentStock - deductQuantity);
           product.availableQuantity = product.availableStock;
+          this.productsService.deductAvailableStock(product.id || product.sku, deductQuantity);
+
+          if (this.databaseService) {
+            try {
+              this.databaseService.query(
+                'UPDATE app_inventory_stock_balances SET physical_quantity = GREATEST(0, physical_quantity - $1), updated_at = CURRENT_TIMESTAMP WHERE product_sku = $2',
+                [deductQuantity, (product.sku || line.productSku).trim().toUpperCase()]
+              ).catch(() => {});
+            } catch {
+              // Bỏ qua nếu bảng PostgreSQL chưa tồn tại
+            }
+          }
         }
       }
     }
@@ -1530,6 +1582,40 @@ export class OrdersService implements OnModuleInit {
   /**
    * Xóa đơn hàng (chỉ cho phép xóa đơn Nháp hoặc Đã hủy)
    */
+
+  /**
+   * Hủy đơn hàng ở trạng thái Chờ duyệt (SN-49 / SN-46)
+   */
+  async cancelOrder(id: string, reason?: string): Promise<OrderEntity> {
+    return this.orderLock.acquire(async () => {
+      const order = await this.findOrderById(id);
+      const cancellableStatuses = [
+        OrderStatus.PENDING,
+        OrderStatus.PENDING_APPROVAL,
+        OrderStatus.PENDING_INVENTORY_APPROVAL,
+        OrderStatus.DRAFT,
+      ];
+      if (!cancellableStatuses.includes(order.status)) {
+        throw new BadRequestException('Chỉ có thể hủy đơn hàng đang ở trạng thái Chờ duyệt hoặc Nháp');
+      }
+
+      order.status = OrderStatus.CANCELLED;
+      order.updatedAt = new Date();
+      if (reason) {
+        order.note = order.note ? `${order.note} [Lý do hủy: ${reason}]` : `[Lý do hủy: ${reason}]`;
+      }
+
+      if (this.databaseService) {
+        await this.databaseService.query(
+          `UPDATE app_order_records SET payload = $1::jsonb, updated_at = $2 WHERE id = $3`,
+          [JSON.stringify(order), order.updatedAt, order.id],
+        );
+      }
+      this.orders.set(order.id, order);
+      return order;
+    });
+  }
+
   async deleteOrder(id: string): Promise<{ success: boolean; message: string }> {
     const order = await this.findOrderById(id);
     if (order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.CANCELLED) {
