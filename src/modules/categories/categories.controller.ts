@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -20,6 +21,8 @@ import { MoveProductsDto } from './dto/move-products.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CategoryEntity } from './entities/category.entity';
 import { CategoryTreeNode } from './interfaces/category-tree.interface';
+import { ProductEntity } from '../products/entities/product.entity';
+import { PaginatedProductsResponse } from '../products/interfaces/paginated-products.interface';
 
 /**
  * Controller Quản lý Nhóm Hàng Đa Cấp (Tree Structure) - SN-150 / SN-22:
@@ -64,12 +67,18 @@ export class CategoriesController {
 
   /**
    * Lấy danh sách sản phẩm thuộc một nhóm hàng (và toàn bộ các phân loại con của nhóm đó)
-   * GET /api/categories/:id/products
+   * Hỗ trợ phân trang: GET /api/categories/:id/products?page=...&limit=...
    * Quyền: Mọi vai trò đã xác thực
    */
   @Get(':id/products')
-  async getProductsByCategory(@Param('id') id: string) {
-    return this.categoriesService.getProductsByCategoryId(id);
+  async getProductsByCategory(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<PaginatedProductsResponse | ProductEntity[]> {
+    const pageNum = page !== undefined ? parseInt(page, 10) : undefined;
+    const limitNum = limit !== undefined ? parseInt(limit, 10) : undefined;
+    return this.categoriesService.getProductsByCategoryId(id, pageNum, limitNum);
   }
 
   /**
