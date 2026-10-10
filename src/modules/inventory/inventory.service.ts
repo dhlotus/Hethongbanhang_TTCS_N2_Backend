@@ -36,6 +36,29 @@ export interface StockAdjustmentResult {
   timestamp: string;
 }
 
+export interface StockOverviewItem {
+  id: string;
+  sku: string;
+  name: string;
+  category: string;
+  parentCategory: string;
+  subCategory?: string;
+  physicalStock: number;
+  reservedStock: number;
+  availableStock: number;
+  stockQuantity: number;
+  physicalStockQuantity: number;
+  reservedQuantity: number;
+  minStockLevel?: number;
+  isBelowMinStock?: boolean;
+  baseUnit: string;
+  units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
+  warehouse: string;
+  warehouseId: string;
+  status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  imageUrl?: string;
+}
+
 @Injectable()
 export class InventoryService implements OnModuleInit {
   /**
@@ -247,59 +270,155 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Xem tồn kho khả dụng của danh mục sản phẩm kèm đơn vị quy đổi
+   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho
    */
-  async getStockOverview(warehouseId: string = DEFAULT_WAREHOUSE_ID): Promise<StockBalance[]> {
+  async getStockOverview(query?: {
+    warehouse?: string;
+    warehouseId?: string;
+    category?: string;
+    status?: string;
+    search?: string;
+  } | string): Promise<StockOverviewItem[]> {
+    const q = typeof query === 'string' ? { warehouseId: query } : query;
+    const warehouseId = q?.warehouseId || q?.warehouse || DEFAULT_WAREHOUSE_ID;
     const products = await this.productsService.findAll();
+
+    let items: StockOverviewItem[] = [];
+
     if (!this.databaseService.isConnected()) {
-      return products.map((p) => this.buildStockBalance({
-        sku: p.sku,
-        name: p.name,
-        stockQuantity: p.stockQuantity ?? 0,
-        physicalStockQuantity: p.stockQuantity ?? 0,
-        reservedQuantity: 0,
-        baseUnit: p.baseUnit,
-        units: (p.units || []).map((u) => ({
-          unitName: u.unitName,
-          conversionRate: u.conversionRate,
-          isBaseUnit: u.isBaseUnit,
-        })),
-      }, this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 0));
+      items = products.map((p) => {
+        const physicalStock = p.physicalStock !== undefined ? p.physicalStock : (p.stockQuantity ?? 0);
+        const reservedStock = p.reservedStock !== undefined ? p.reservedStock : 0;
+        const availableStock =
+          p.availableStock !== undefined
+            ? p.availableStock
+            : Math.max(0, physicalStock - reservedStock);
+
+        let status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' = 'IN_STOCK';
+        if (availableStock <= 0) {
+          status = 'OUT_OF_STOCK';
+        } else if (availableStock <= 10) {
+          status = 'LOW_STOCK';
+        }
+
+        const minStockLevel = this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 10;
+        const isBelowMinStock = availableStock <= minStockLevel && minStockLevel > 0;
+
+        return {
+          id: p.id,
+          sku: p.sku,
+          name: p.name,
+          category: p.category || `${p.parentCategory || ''} / ${p.subCategory || ''}`,
+          parentCategory: p.parentCategory || 'Sữa & Chế phẩm sữa',
+          subCategory: p.subCategory || '',
+          physicalStock,
+          reservedStock,
+          availableStock,
+          stockQuantity: availableStock,
+          physicalStockQuantity: physicalStock,
+          reservedQuantity: reservedStock,
+          minStockLevel,
+          isBelowMinStock,
+          baseUnit: p.baseUnit,
+          units: (p.units || []).map((u) => ({
+            unitName: u.unitName,
+            conversionRate: u.conversionRate,
+            isBaseUnit: Boolean(u.isBaseUnit),
+          })),
+          warehouse: DEFAULT_WAREHOUSE_NAME,
+          warehouseId,
+          status,
+          imageUrl: p.imageUrl,
+        };
+      });
+    } else {
+      const physicalBalances = await this.getStockBalances(products, warehouseId);
+      const minLevels = await this.getMinStockLevelsFromDb(products, warehouseId);
+      const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
+        `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
+         FROM app_order_inventory_reservations WHERE status = 'RESERVED' AND warehouse_id = $1::uuid GROUP BY product_sku`,
+        [warehouseId],
+      );
+      const warehouseRows = await this.databaseService.query<{ name: string }>(
+        'SELECT name FROM warehouses WHERE id = $1::uuid',
+        [warehouseId],
+      );
+      const warehouseName = warehouseRows[0]?.name || DEFAULT_WAREHOUSE_NAME;
+      const reservations = new Map(
+        reservationResult.map((row) => [row.product_sku.toUpperCase(), Number(row.reserved)]),
+      );
+
+      items = products.map((p) => {
+        const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity ?? 0;
+        const reservedQuantity = reservations.get(p.sku.toUpperCase()) ?? 0;
+        const available = Math.max(0, physicalStockQuantity - reservedQuantity);
+
+        let status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' = 'IN_STOCK';
+        if (available <= 0) {
+          status = 'OUT_OF_STOCK';
+        } else if (available <= 10) {
+          status = 'LOW_STOCK';
+        }
+
+        const minStockLevel = minLevels.get(p.sku.trim().toUpperCase()) ?? 0;
+        const isBelowMinStock = available <= minStockLevel && minStockLevel > 0;
+
+        return {
+          id: p.id,
+          sku: p.sku,
+          name: p.name,
+          category: p.category || `${p.parentCategory || ''} / ${p.subCategory || ''}`,
+          parentCategory: p.parentCategory || 'Sữa & Chế phẩm sữa',
+          subCategory: p.subCategory || '',
+          physicalStock: physicalStockQuantity,
+          reservedStock: reservedQuantity,
+          availableStock: available,
+          stockQuantity: available,
+          physicalStockQuantity,
+          reservedQuantity,
+          minStockLevel,
+          isBelowMinStock,
+          baseUnit: p.baseUnit,
+          units: (p.units || []).map((u) => ({
+            unitName: u.unitName,
+            conversionRate: u.conversionRate,
+            isBaseUnit: Boolean(u.isBaseUnit),
+          })),
+          warehouse: warehouseName,
+          warehouseId,
+          status,
+          imageUrl: p.imageUrl,
+        };
+      });
     }
-    const physicalBalances = await this.getStockBalances(products, warehouseId);
-    const minLevels = await this.getMinStockLevelsFromDb(products, warehouseId);
-    const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
-      `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
-       FROM app_order_inventory_reservations WHERE status = 'RESERVED' AND warehouse_id = $1::uuid GROUP BY product_sku`,
-      [warehouseId],
-    );
-    const warehouseRows = await this.databaseService.query<{ name: string }>(
-      'SELECT name FROM warehouses WHERE id = $1::uuid',
-      [warehouseId],
-    );
-    const warehouseName = warehouseRows[0]?.name || DEFAULT_WAREHOUSE_NAME;
-    const reservations = new Map(
-      reservationResult.map((row) => [row.product_sku.toUpperCase(), Number(row.reserved)]),
-    );
-    return products.map((p) => {
-      const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity;
-      const dbReserved = reservations.get(p.sku.toUpperCase()) ?? 0;
-      const reservedQuantity = dbReserved;
-      const available = Math.max(0, physicalStockQuantity - reservedQuantity);
-      return this.buildStockBalance({
-        sku: p.sku,
-        name: p.name,
-        stockQuantity: available,
-        physicalStockQuantity,
-        reservedQuantity,
-        baseUnit: p.baseUnit,
-        units: (p.units || []).map((u) => ({
-          unitName: u.unitName,
-          conversionRate: u.conversionRate,
-          isBaseUnit: u.isBaseUnit,
-        })),
-      }, minLevels.get(p.sku.trim().toUpperCase()) ?? 0, warehouseId, warehouseName);
-    });
+
+    if (q?.search) {
+      const searchLower = q.search.trim().toLowerCase();
+      items = items.filter(
+        (i) => i.sku.toLowerCase().includes(searchLower) || i.name.toLowerCase().includes(searchLower),
+      );
+    }
+
+    if (q?.category && q.category !== 'ALL') {
+      items = items.filter(
+        (i) =>
+          i.category.includes(q.category!) ||
+          i.parentCategory === q.category ||
+          i.subCategory === q.category,
+      );
+    }
+
+    if (q?.status && q.status !== 'ALL') {
+      items = items.filter((i) => i.status === q.status);
+    }
+
+    if (q?.warehouse && q.warehouse !== 'ALL' && q.warehouse !== warehouseId) {
+      items = items.filter(
+        (i) => i.warehouse === q.warehouse || i.warehouseId === q.warehouse,
+      );
+    }
+
+    return items;
   }
 
   /**
