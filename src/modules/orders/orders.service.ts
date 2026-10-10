@@ -93,6 +93,10 @@ export class OrdersService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    if (this.databaseService && !this.databaseService.isConnected()) {
+      (this as any).databaseService = undefined;
+      for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
+    }
     if (!this.databaseService) return;
 
     await this.databaseService.query(`
