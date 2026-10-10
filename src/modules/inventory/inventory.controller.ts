@@ -21,7 +21,7 @@ import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
 import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
-import { InventoryService, StockAdjustmentResult } from './inventory.service';
+import { InventoryService, StockAdjustmentResult, StockOverviewItem } from './inventory.service';
 import { InventoryAuditEntity } from './entities/inventory-audit.entity';
 import {
   CreateInventoryAuditDto,
@@ -43,13 +43,18 @@ export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
   /**
-   * Xem danh sách và số lượng tồn kho khả dụng kèm đơn vị quy đổi
-   * GET /inventory/stock
+   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho
+   * GET /inventory/stock?warehouse=...&category=...&status=...&search=...
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
   @Get('stock')
-  async getStockOverview(): Promise<StockBalance[]> {
-    return this.inventoryService.getStockOverview();
+  async getStockOverview(
+    @Query('warehouse') warehouse?: string,
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ): Promise<StockOverviewItem[]> {
+    return this.inventoryService.getStockOverview({ warehouse, category, status, search });
   }
 
   /**
