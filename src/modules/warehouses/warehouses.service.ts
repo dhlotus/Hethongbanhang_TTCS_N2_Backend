@@ -7,6 +7,7 @@ import { CreateLocationDto } from './dto/create-location.dto';
 import { DEFAULT_WAREHOUSE_ID } from './warehouse.constants';
 import {
   AgencyWarehouseAssignmentEntity,
+  AgencyWarehouseDetailEntity,
   AgencyWarehouseUpdateEntity,
   WarehouseEntity,
   WarehouseLocationEntity,
@@ -114,13 +115,24 @@ export class WarehousesService {
     return rows;
   }
 
-  async getAgencyDefault(agencyId: string): Promise<AgencyWarehouseAssignmentEntity> {
+  async getAgencyDefault(agencyId: string): Promise<AgencyWarehouseDetailEntity> {
     await this.customersService.getCustomerById(agencyId);
     const rows = await this.databaseService.query<{ warehouse_id: string }>(
       'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
       [agencyId],
     );
-    return { agencyId, warehouseId: rows[0]?.warehouse_id ?? DEFAULT_WAREHOUSE_ID };
+    const warehouseId = rows[0]?.warehouse_id ?? DEFAULT_WAREHOUSE_ID;
+    const warehouses = await this.databaseService.query<{ code: string; name: string }>(
+      'SELECT code, name FROM warehouses WHERE id = $1::uuid',
+      [warehouseId],
+    );
+    if (!warehouses[0]) throw new NotFoundException('Không tìm thấy kho phục vụ đại lý');
+    return {
+      agencyId,
+      warehouseId,
+      warehouseCode: warehouses[0].code,
+      warehouseName: warehouses[0].name,
+    };
   }
 
   async setAgencyDefaultWarehouse(

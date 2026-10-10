@@ -8,6 +8,7 @@ import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 import { CreateLocationDto } from './dto/create-location.dto';
 import {
   AgencyWarehouseAssignmentEntity,
+  AgencyWarehouseDetailEntity,
   AgencyWarehouseUpdateEntity,
   WarehouseEntity,
   WarehouseLocationEntity,
@@ -69,7 +70,7 @@ export class WarehousesController {
 
   @Get('agencies/:agencyId/default')
   @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.SALES_REP, UserRole.SALES_MANAGER)
-  getAgencyDefault(@Param('agencyId') agencyId: string): Promise<AgencyWarehouseAssignmentEntity> {
+  getAgencyDefault(@Param('agencyId') agencyId: string): Promise<AgencyWarehouseDetailEntity> {
     return this.warehousesService.getAgencyDefault(agencyId);
   }
 

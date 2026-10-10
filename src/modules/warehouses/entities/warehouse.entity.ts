@@ -36,6 +36,11 @@ export interface AgencyWarehouseAssignmentEntity {
   warehouseId: string;
 }
 
+export interface AgencyWarehouseDetailEntity extends AgencyWarehouseAssignmentEntity {
+  warehouseCode: string;
+  warehouseName: string;
+}
+
 export interface AgencyWarehouseUpdateEntity {
   agencyId: string;
   defaultWarehouseId: string | null;
