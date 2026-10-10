@@ -29,7 +29,6 @@ describe('Quản lý Giữ chỗ Tồn kho & Nhả tồn tự động (JIRA SN-1
       customersService,
       undefined,
       undefined,
-      undefined,
       productsService,
       inventoryService,
     );

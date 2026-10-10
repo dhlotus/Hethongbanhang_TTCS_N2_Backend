@@ -35,7 +35,10 @@
       ]
     },
     "coverageDirectory": "./coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^@nestjs/mapped-types$": "<rootDir>/test/__mocks__/@nestjs/mapped-types.ts"
+    }
   },
   "dependencies": {
     "@nestjs/common": "^11.0.11",

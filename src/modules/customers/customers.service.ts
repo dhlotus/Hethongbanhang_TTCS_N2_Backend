@@ -579,22 +579,7 @@ export class CustomersService implements OnModuleInit {
     if (query?.salesRepId && query.salesRepId !== 'ALL') {
       const targetRepId = query.salesRepId;
       list = list.filter((c) => {
-        if (c.salesRepId === targetRepId || c.salesRep?.id === targetRepId) {
-          return true;
-        }
-        if (
-          (targetRepId === 'usr-sales-002' || targetRepId === 'usr-sale-01') &&
-          (c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002')
-        ) {
-          return true;
-        }
-        if (
-          (targetRepId === 'usr-sale-02' || targetRepId === '00000000-0000-0000-0000-000000000013') &&
-          (c.salesRepId === 'usr-sale-02' || c.salesRepId === '00000000-0000-0000-0000-000000000013')
-        ) {
-          return true;
-        }
-        return false;
+        return c.salesRepId === targetRepId || c.salesRep?.id === targetRepId;
       });
     }
 

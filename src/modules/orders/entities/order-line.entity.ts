@@ -19,6 +19,10 @@ export class OrderLineEntity {
   stockAvailable?: number; // Tồn khả dụng tham khảo
   minPrice?: number; // Giá sàn theo đơn vị đặt hàng
   requiresApproval: boolean;
+  deliveredQuantity?: number; // Số lượng thực giao (SN-170)
+  deliveredBaseQuantity?: number; // Số lượng cơ sở thực giao (SN-170)
+  shortDeliveryReason?: string; // Lý do giao thiếu (SN-170)
+  isShortDelivery?: boolean; // Cờ dòng giao thiếu (SN-170)
 
   constructor(partial: Partial<OrderLineEntity>) {
     Object.assign(this, partial);
@@ -30,5 +34,9 @@ export class OrderLineEntity {
     this.discountPercent = partial.discountPercent ?? 0;
     this.lineTotal = partial.lineTotal ?? Math.round(this.quantity * this.unitPrice);
     this.requiresApproval = partial.requiresApproval ?? false;
+    this.deliveredQuantity = partial.deliveredQuantity;
+    this.deliveredBaseQuantity = partial.deliveredBaseQuantity;
+    this.shortDeliveryReason = partial.shortDeliveryReason;
+    this.isShortDelivery = partial.isShortDelivery;
   }
 }

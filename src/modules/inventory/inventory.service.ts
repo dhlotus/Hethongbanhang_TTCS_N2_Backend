@@ -636,6 +636,20 @@ export class InventoryService implements OnModuleInit {
     if (baseQuantityChange === 0) {
       throw new BadRequestException('Số lượng điều chỉnh sau quy đổi phải khác 0.');
     }
+    if (!this.databaseService.isConnected()) {
+      const previousQuantity = product.stockQuantity ?? 0;
+      if (baseQuantityChange < 0 && previousQuantity + baseQuantityChange < 0) {
+        throw new BadRequestException(`Tồn kho không đủ để xuất trừ (hiện có: ${previousQuantity}).`);
+      }
+      const newQuantity = previousQuantity + baseQuantityChange;
+      await this.productsService.setStockQuantity(product.id, newQuantity);
+      const transaction = this.createInventoryTransaction(
+        product, dto, userId, conversion.unitName, conversion.conversionRate,
+        baseQuantityChange, previousQuantity, newQuantity,
+      );
+      this.writeLedger(transaction);
+      return this.createAdjustmentResult(transaction, dto, userId, previousQuantity, newQuantity);
+    }
     const client = await this.databaseService.getClient();
     let transaction: InventoryTransactionEntity;
     let previousQuantity = 0;
