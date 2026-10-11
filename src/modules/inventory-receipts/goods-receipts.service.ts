@@ -12,46 +12,54 @@ export class GoodsReceiptsService implements OnModuleInit {
   constructor(private readonly db: DatabaseService) {}
 
   async onModuleInit() {
-    this.logger.log('Khởi tạo bảng goods_receipts và goods_receipt_items...');
-    await this.db.query(`
-      CREATE TABLE IF NOT EXISTS goods_receipts (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        code VARCHAR(50) UNIQUE NOT NULL,
-        warehouse_id VARCHAR(50) NOT NULL,
-        supplier_id VARCHAR(50),
-        receipt_type VARCHAR(50) NOT NULL,
-        reference_document VARCHAR(100),
-        document_url VARCHAR(255),
-        status VARCHAR(50) DEFAULT 'DRAFT',
-        total_cost DECIMAL(15, 2) DEFAULT 0,
-        notes TEXT,
-        created_by VARCHAR(50),
-        received_by VARCHAR(50),
-        received_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    if (!this.db.isConnected()) {
+      this.logger.warn('Chưa có kết nối DB PostgreSQL, bỏ qua khởi tạo bảng goods_receipts (chạy chế độ fallback)');
+      return;
+    }
+    try {
+      this.logger.log('Khởi tạo bảng goods_receipts và goods_receipt_items...');
+      await this.db.query(`
+        CREATE TABLE IF NOT EXISTS goods_receipts (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          code VARCHAR(50) UNIQUE NOT NULL,
+          warehouse_id VARCHAR(50) NOT NULL,
+          supplier_id VARCHAR(50),
+          receipt_type VARCHAR(50) NOT NULL,
+          reference_document VARCHAR(100),
+          document_url VARCHAR(255),
+          status VARCHAR(50) DEFAULT 'DRAFT',
+          total_cost DECIMAL(15, 2) DEFAULT 0,
+          notes TEXT,
+          created_by VARCHAR(50),
+          received_by VARCHAR(50),
+          received_at TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
 
-    await this.db.query(`
-      CREATE TABLE IF NOT EXISTS goods_receipt_items (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        receipt_id UUID REFERENCES goods_receipts(id) ON DELETE CASCADE,
-        product_id VARCHAR(50) NOT NULL,
-        unit_id VARCHAR(50) NOT NULL,
-        package_quantity DECIMAL(15, 2) NOT NULL,
-        conversion_factor DECIMAL(10, 2) NOT NULL,
-        base_quantity DECIMAL(15, 2) NOT NULL,
-        unit_cost DECIMAL(15, 2) NOT NULL,
-        total_cost DECIMAL(15, 2) NOT NULL,
-        batch_number VARCHAR(50),
-        mfg_date DATE,
-        expiry_date DATE,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    this.logger.log('Đã tạo xong các bảng cho goods_receipts.');
+      await this.db.query(`
+        CREATE TABLE IF NOT EXISTS goods_receipt_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          receipt_id UUID REFERENCES goods_receipts(id) ON DELETE CASCADE,
+          product_id VARCHAR(50) NOT NULL,
+          unit_id VARCHAR(50) NOT NULL,
+          package_quantity DECIMAL(15, 2) NOT NULL,
+          conversion_factor DECIMAL(10, 2) NOT NULL,
+          base_quantity DECIMAL(15, 2) NOT NULL,
+          unit_cost DECIMAL(15, 2) NOT NULL,
+          total_cost DECIMAL(15, 2) NOT NULL,
+          batch_number VARCHAR(50),
+          mfg_date DATE,
+          expiry_date DATE,
+          notes TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      this.logger.log('Đã tạo xong các bảng cho goods_receipts.');
+    } catch (err) {
+      this.logger.warn(`Không thể khởi tạo bảng goods_receipts: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async create(dto: CreateGoodsReceiptDto, user: ICurrentUser): Promise<{ id: string }> {
