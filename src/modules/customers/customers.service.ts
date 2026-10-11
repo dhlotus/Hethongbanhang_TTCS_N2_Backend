@@ -5,6 +5,8 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DatabaseService } from '../../database/database.service';
 import { CustomerEntity, CustomerStatus } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
@@ -36,12 +38,69 @@ export class CustomersService implements OnModuleInit {
 
   constructor(@Optional() private readonly dbService?: DatabaseService) {
     this.seedInitialCustomers();
+    this.loadCustomersFromDisk();
   }
 
   async onModuleInit(): Promise<void> {
     if (this.customers.size === 0) {
       this.seedInitialCustomers();
     }
+    this.loadCustomersFromDisk();
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'customers.json');
+  }
+
+  private loadCustomersFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<CustomerEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const existing = this.customers.get(item.id);
+        if (existing) {
+          Object.assign(existing, {
+            ...item,
+            createdAt: item.createdAt ? new Date(item.createdAt) : existing.createdAt,
+            updatedAt: item.updatedAt ? new Date(item.updatedAt) : existing.updatedAt,
+          });
+        } else {
+          this.customers.set(item.id, new CustomerEntity(item));
+        }
+      }
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi nạp dữ liệu đại lý từ đĩa:', err);
+    }
+  }
+
+  private saveCustomersToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.customers.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi lưu dữ liệu đại lý ra đĩa:', err);
+    }
+  }
+
+  private generateNextCustomerCode(): string {
+    let num = this.customers.size + 1;
+    while (
+      Array.from(this.customers.values()).some(
+        (c) => c.code?.toUpperCase() === `DL-${String(num).padStart(4, '0')}`,
+      )
+    ) {
+      num++;
+    }
+    return `DL-${String(num).padStart(4, '0')}`;
   }
 
   /**
@@ -711,6 +770,7 @@ export class CustomersService implements OnModuleInit {
 
     customer.deliveryPoints.push(newPoint);
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return newPoint;
   }
 
@@ -746,6 +806,7 @@ export class CustomersService implements OnModuleInit {
 
     point.updatedAt = new Date();
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return point;
   }
 
@@ -768,6 +829,7 @@ export class CustomersService implements OnModuleInit {
 
     targetPoint.updatedAt = new Date();
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return targetPoint;
   }
 
@@ -793,6 +855,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return {
       success: true,
       message: 'Đã xóa điểm giao hàng thành công',
@@ -818,6 +881,7 @@ export class CustomersService implements OnModuleInit {
     customer.lockedAt = new Date();
     customer.lockedBy = currentUser?.fullName || currentUser?.userId || 'Hệ thống';
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -856,6 +920,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -883,6 +948,7 @@ export class CustomersService implements OnModuleInit {
     customer.lockedAt = undefined;
     customer.lockedBy = undefined;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -911,6 +977,7 @@ export class CustomersService implements OnModuleInit {
     const customer = await this.getCustomerById(customerId);
     customer.status = status;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -1167,9 +1234,9 @@ export class CustomersService implements OnModuleInit {
    * - Mã đại lý là duy nhất (SN-30 AC2)
    */
   async createCustomer(dto: CreateCustomerDto): Promise<CustomerEntity> {
-    const trimmedCode = dto.code?.trim();
+    let trimmedCode = dto.code?.trim();
     if (!trimmedCode) {
-      throw new BadRequestException('Mã đại lý không được để trống.');
+      trimmedCode = this.generateNextCustomerCode();
     }
 
     // Kiểm tra tính duy nhất của mã đại lý (không phân biệt hoa/thường)
@@ -1232,6 +1299,37 @@ export class CustomersService implements OnModuleInit {
     });
 
     this.customers.set(newId, newCustomer);
+    this.saveCustomersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `INSERT INTO customers (id, code, name, region, customer_group, tax_code, phone, email, address, credit_limit, current_debt, max_debt_days, status, sales_rep_id, sales_rep_name, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+           ON CONFLICT (id) DO NOTHING;`,
+          [
+            newId,
+            trimmedCode,
+            newCustomer.name,
+            newCustomer.region,
+            newCustomer.customerGroup,
+            newCustomer.taxCode,
+            newCustomer.phone,
+            newCustomer.email,
+            newCustomer.address,
+            newCustomer.creditLimit,
+            0,
+            newCustomer.maxDebtDays,
+            newCustomer.status,
+            newCustomer.salesRepId,
+            salesRepName,
+          ],
+        );
+      } catch {
+        // In-memory & disk fallback
+      }
+    }
+
     return newCustomer;
   }
 
@@ -1255,6 +1353,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     this.customers.delete(customer.id);
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {

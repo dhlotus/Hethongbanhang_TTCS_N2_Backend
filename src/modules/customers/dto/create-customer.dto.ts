@@ -1,12 +1,12 @@
-import { IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Min, ValidateIf } from 'class-validator';
 
 /**
  * DTO Thêm mới Đại lý (SN-35)
  */
 export class CreateCustomerDto {
-  @IsNotEmpty({ message: 'Mã đại lý không được để trống' })
+  @IsOptional()
   @IsString({ message: 'Mã đại lý phải là chuỗi' })
-  code: string;
+  code?: string;
 
   @IsNotEmpty({ message: 'Tên đại lý không được để trống' })
   @IsString({ message: 'Tên đại lý phải là chuỗi' })
@@ -39,6 +39,7 @@ export class CreateCustomerDto {
   phone: string;
 
   @IsOptional()
+  @ValidateIf((o) => o.email !== undefined && o.email !== null && o.email !== '')
   @IsEmail({}, { message: 'Email không đúng định dạng' })
   email?: string;
 
