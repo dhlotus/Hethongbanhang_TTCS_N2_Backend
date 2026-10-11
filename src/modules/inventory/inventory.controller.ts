@@ -43,7 +43,7 @@ export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
   /**
-   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho
+   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
    * GET /inventory/stock?warehouse=...&category=...&status=...&search=...
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
@@ -102,6 +102,67 @@ export class InventoryController {
     @Query('warehouseId') warehouseId?: string,
   ): Promise<LowStockAlert[]> {
     return this.inventoryService.getLowStockAlerts(warehouseId);
+  }
+
+  @Get('stocks')
+  async getStocks(): Promise<
+    Array<{
+      sku: string;
+      productId: string;
+      name: string;
+      productName: string;
+      stockQuantity: number;
+      physicalStockQuantity: number;
+      physicalQuantity: number;
+      reservedQuantity: number;
+      availableQuantity: number;
+      baseUnit: string;
+      units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
+      warehouse: string;
+      warehouseId?: string;
+      minStockLevel?: number;
+      isBelowMinStock?: boolean;
+      activeReservations: Array<{
+        id: string;
+        orderId: string;
+        orderCode?: string;
+        quantity: number;
+        expiredAt: string;
+        createdAt: string;
+      }>;
+    }>
+  > {
+    const list = await this.inventoryService.getStockOverview();
+    return list.map((item) => ({
+      sku: item.sku,
+      productId: item.productId || item.sku,
+      name: item.name,
+      productName: item.productName || item.name,
+      stockQuantity: item.stockQuantity,
+      physicalStockQuantity: item.physicalStockQuantity,
+      physicalQuantity: item.physicalQuantity ?? item.physicalStockQuantity,
+      reservedQuantity: item.reservedQuantity,
+      availableQuantity: item.availableQuantity ?? item.stockQuantity,
+      baseUnit: item.baseUnit,
+      units: item.units,
+      warehouse: item.warehouse,
+      warehouseId: item.warehouseId,
+      minStockLevel: item.minStockLevel ?? 0,
+      isBelowMinStock: Boolean(item.isBelowMinStock),
+      activeReservations: item.activeReservations || [],
+    }));
+  }
+
+  /**
+   * Lấy danh sách phiếu giữ chỗ kho đang hoạt động (SN-180)
+   * GET /inventory/reservations
+   */
+  @Get('reservations')
+  async getReservations(
+    @Query('sku') sku?: string,
+    @Query('orderId') orderId?: string,
+  ) {
+    return this.inventoryService.getActiveReservations(sku, orderId);
   }
 
   /**

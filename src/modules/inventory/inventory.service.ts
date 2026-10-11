@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
+import { StockReservationEntity, StockReservationStatus } from './entities/stock-reservation.entity';
 import { DatabaseService } from '../../database/database.service';
 import type { PoolClient } from 'pg';
 import type { ProductEntity } from '../products/entities/product.entity';
@@ -36,25 +37,14 @@ export interface StockAdjustmentResult {
   timestamp: string;
 }
 
-export interface StockOverviewItem {
+export interface StockOverviewItem extends StockBalance {
   id: string;
-  sku: string;
-  name: string;
   category: string;
   parentCategory: string;
   subCategory?: string;
   physicalStock: number;
   reservedStock: number;
   availableStock: number;
-  stockQuantity: number;
-  physicalStockQuantity: number;
-  reservedQuantity: number;
-  minStockLevel?: number;
-  isBelowMinStock?: boolean;
-  baseUnit: string;
-  units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
-  warehouse: string;
-  warehouseId: string;
   status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
   imageUrl?: string;
 }
@@ -83,6 +73,9 @@ export class InventoryService implements OnModuleInit {
   private minStockLevels = new Map<string, number>();
   private readonly databaseService: DatabaseService;
 
+  private memoryStockReservations = new Map<string, StockReservationEntity>();
+  private stockReservationSchemaPromise: Promise<void> | null = null;
+
   constructor(
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
@@ -99,10 +92,37 @@ export class InventoryService implements OnModuleInit {
     if (this.audits.size === 0) {
       this.seedInitialAudits();
     }
-    if (this.databaseService.isConnected()) {
+    if (this.databaseService?.isConnected()) {
       await this.ensureStockBalanceTable();
+      await this.ensureStockReservationsTable();
       await this.seedStockBalances();
     }
+  }
+
+  async ensureStockReservationsTable(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    if (!this.stockReservationSchemaPromise) {
+      this.stockReservationSchemaPromise = this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS stock_reservations (
+          id TEXT PRIMARY KEY,
+          order_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          warehouse_id TEXT NOT NULL DEFAULT 'wh-main',
+          quantity NUMERIC(15, 2) NOT NULL CHECK (quantity > 0),
+          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RELEASED', 'FULFILLED', 'RESERVED')),
+          expired_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          released_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_reservations_order ON stock_reservations(order_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_reservations_status_expired ON stock_reservations(status, expired_at) WHERE status = 'ACTIVE' OR status = 'RESERVED';
+        CREATE INDEX IF NOT EXISTS idx_stock_reservations_product ON stock_reservations(product_id) WHERE status = 'ACTIVE' OR status = 'RESERVED';
+      `).then(() => undefined).catch((error: unknown) => {
+        this.stockReservationSchemaPromise = null;
+        throw error;
+      });
+    }
+    await this.stockReservationSchemaPromise;
   }
 
   async ensureStockBalanceTable(): Promise<void> {
@@ -120,6 +140,22 @@ export class InventoryService implements OnModuleInit {
       `).then(() => this.databaseService.query(`
         ALTER TABLE app_inventory_stock_balances
         ADD COLUMN IF NOT EXISTS min_stock_level NUMERIC(15, 2) DEFAULT 0
+      `)).then(() => this.databaseService.query(`
+        ALTER TABLE app_inventory_stock_balances
+        ADD COLUMN IF NOT EXISTS warehouse_id UUID NOT NULL DEFAULT '${DEFAULT_WAREHOUSE_ID}'
+      `)).then(() => this.databaseService.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE c.conrelid = 'app_inventory_stock_balances'::regclass
+              AND c.contype = 'p' AND a.attname = 'warehouse_id'
+          ) THEN
+            ALTER TABLE app_inventory_stock_balances DROP CONSTRAINT IF EXISTS app_inventory_stock_balances_pkey;
+            ALTER TABLE app_inventory_stock_balances ADD CONSTRAINT app_inventory_stock_balances_pkey PRIMARY KEY (product_sku, warehouse_id);
+          END IF;
+        END $$;
       `)).then(() => undefined).catch((error: unknown) => {
         this.stockBalanceSchemaPromise = null;
         throw error;
@@ -270,7 +306,7 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho
+   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
    */
   async getStockOverview(query?: {
     warehouse?: string;
@@ -283,114 +319,261 @@ export class InventoryService implements OnModuleInit {
     const warehouseId = q?.warehouseId || q?.warehouse || DEFAULT_WAREHOUSE_ID;
     const products = await this.productsService.findAll();
 
-    let items: StockOverviewItem[] = [];
+    let physicalBalances = new Map<string, number>();
+    const reservations = new Map<string, number>();
+    const reservationsListBySku = new Map<
+      string,
+      Array<{
+        id: string;
+        orderId: string;
+        orderCode?: string;
+        customerName?: string;
+        orderStatus?: string;
+        quantity: number;
+        expiredAt: string;
+        createdAt: string;
+      }>
+    >();
+    let minLevels = new Map<string, number>();
+    let warehouseName = DEFAULT_WAREHOUSE_NAME;
 
-    if (!this.databaseService.isConnected()) {
-      items = products.map((p) => {
-        const physicalStock = p.physicalStock !== undefined ? p.physicalStock : (p.stockQuantity ?? 0);
-        const reservedStock = p.reservedStock !== undefined ? p.reservedStock : 0;
-        const availableStock =
-          p.availableStock !== undefined
-            ? p.availableStock
-            : Math.max(0, physicalStock - reservedStock);
+    if (this.databaseService?.isConnected()) {
+      await this.ensureStockReservationsTable();
+      physicalBalances = await this.getStockBalances(products, warehouseId);
+      minLevels = await this.getMinStockLevelsFromDb(products, warehouseId);
+      try {
+        const warehouseRows = await this.databaseService.query<{ name: string }>(
+          'SELECT name FROM warehouses WHERE id = $1::uuid',
+          [warehouseId],
+        );
+        if (warehouseRows[0]?.name) warehouseName = warehouseRows[0].name;
+      } catch {
+        // Ignore
+      }
 
-        let status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' = 'IN_STOCK';
-        if (availableStock <= 0) {
-          status = 'OUT_OF_STOCK';
-        } else if (availableStock <= 10) {
-          status = 'LOW_STOCK';
+      try {
+        const resRows = await this.databaseService.query<{
+          id: string;
+          order_id: string;
+          product_id: string;
+          quantity: string;
+          expired_at: string;
+          created_at: string;
+          order_code?: string;
+          customer_name?: string;
+          order_status?: string;
+        }>(
+          `SELECT r.id, r.order_id, r.product_id, r.quantity::text,
+                  r.expired_at::text, r.created_at::text,
+                  COALESCE(o.order_code, o.id, r.order_id) as order_code,
+                  COALESCE(o.payload->>'customerName', '') as customer_name,
+                  COALESCE(o.payload->>'status', 'APPROVED') as order_status
+           FROM stock_reservations r
+           LEFT JOIN app_order_records o ON (o.id = r.order_id OR o.order_code = r.order_id)
+           WHERE r.status IN ('ACTIVE', 'RESERVED') AND r.expired_at > CURRENT_TIMESTAMP`,
+        );
+
+        const addReservationToSku = (key: string, item: {
+          id: string;
+          orderId: string;
+          orderCode?: string;
+          customerName?: string;
+          orderStatus?: string;
+          quantity: number;
+          expiredAt: string;
+          createdAt: string;
+        }) => {
+          const upper = key.toUpperCase();
+          const targetKeys = [upper];
+          if (upper === 'LH-MILK-900G') targetKeys.push('LH-MILK-POWDER-900G');
+          if (upper === 'LH-MILK-POWDER-900G') targetKeys.push('LH-MILK-900G');
+
+          for (const k of targetKeys) {
+            reservations.set(k, (reservations.get(k) || 0) + item.quantity);
+            const list = reservationsListBySku.get(k) || [];
+            if (!list.some((existing) => existing.id === item.id)) {
+              list.push(item);
+            }
+            reservationsListBySku.set(k, list);
+          }
+        };
+
+        for (const row of resRows) {
+          const qty = Number(row.quantity) || 0;
+          addReservationToSku(row.product_id, {
+            id: row.id,
+            orderId: row.order_id,
+            orderCode: row.order_code || row.order_id,
+            customerName: row.customer_name,
+            orderStatus: row.order_status || 'APPROVED',
+            quantity: qty,
+            expiredAt: row.expired_at,
+            createdAt: row.created_at,
+          });
         }
 
-        const minStockLevel = this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 10;
-        const isBelowMinStock = availableStock <= minStockLevel && minStockLevel > 0;
+        // Bổ sung các đơn hàng APPROVED/PROCESSING từ app_order_records nếu chưa có trong stock_reservations
+        const activeOrderRows = await this.databaseService.query<{
+          id: string;
+          order_code: string;
+          order_status: string;
+          customer_name: string;
+          lines: Array<{
+            id?: string;
+            productId?: string;
+            productSku?: string;
+            quantity?: number;
+            baseQuantity?: number;
+          }>;
+          reserved_until?: string;
+          created_at: string;
+        }>(
+          `SELECT id, order_code,
+                  COALESCE(payload->>'status', 'APPROVED') as order_status,
+                  COALESCE(payload->>'customerName', '') as customer_name,
+                  COALESCE(payload->'lines', '[]'::jsonb) as lines,
+                  payload->>'reservedUntil' as reserved_until,
+                  created_at::text
+           FROM app_order_records
+           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING')`,
+        );
 
-        return {
-          id: p.id,
-          sku: p.sku,
-          name: p.name,
-          category: p.category || `${p.parentCategory || ''} / ${p.subCategory || ''}`,
-          parentCategory: p.parentCategory || 'Sữa & Chế phẩm sữa',
-          subCategory: p.subCategory || '',
-          physicalStock,
-          reservedStock,
-          availableStock,
-          stockQuantity: availableStock,
-          physicalStockQuantity: physicalStock,
-          reservedQuantity: reservedStock,
-          minStockLevel,
-          isBelowMinStock,
-          baseUnit: p.baseUnit,
-          units: (p.units || []).map((u) => ({
-            unitName: u.unitName,
-            conversionRate: u.conversionRate,
-            isBaseUnit: Boolean(u.isBaseUnit),
-          })),
-          warehouse: DEFAULT_WAREHOUSE_NAME,
-          warehouseId,
-          status,
-          imageUrl: p.imageUrl,
-        };
-      });
+        const reservedOrderIds = new Set(resRows.map((r) => r.order_id));
+        for (const order of activeOrderRows) {
+          if (reservedOrderIds.has(order.id) || reservedOrderIds.has(order.order_code)) {
+            continue;
+          }
+          const lines = Array.isArray(order.lines) ? order.lines : [];
+          for (const line of lines) {
+            const lineSku = line.productSku || line.productId;
+            if (!lineSku) continue;
+            const lineQty = Number(line.baseQuantity ?? line.quantity) || 0;
+            if (lineQty <= 0) continue;
+
+            addReservationToSku(lineSku, {
+              id: `res-ord-${order.id}-${line.id || lineSku}`,
+              orderId: order.id,
+              orderCode: order.order_code || order.id,
+              customerName: order.customer_name,
+              orderStatus: order.order_status,
+              quantity: lineQty,
+              expiredAt: order.reserved_until || new Date(new Date(order.created_at).getTime() + 24 * 3600 * 1000).toISOString(),
+              createdAt: order.created_at,
+            });
+          }
+        }
+      } catch {
+        // Fallback to app_order_inventory_reservations if needed
+        try {
+          const legacyRows = await this.databaseService.query<{ product_sku: string; reserved: string; order_id?: string }>(
+            `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved, MAX(order_id) as order_id
+             FROM app_order_inventory_reservations WHERE status = 'RESERVED' GROUP BY product_sku`,
+          );
+          for (const row of legacyRows) {
+            const qty = Number(row.reserved) || 0;
+            const targetKeys = [row.product_sku.toUpperCase()];
+            if (row.product_sku.toUpperCase() === 'LH-MILK-900G') targetKeys.push('LH-MILK-POWDER-900G');
+            if (row.product_sku.toUpperCase() === 'LH-MILK-POWDER-900G') targetKeys.push('LH-MILK-900G');
+
+            for (const k of targetKeys) {
+              reservations.set(k, (reservations.get(k) || 0) + qty);
+              if (row.order_id) {
+                const list = reservationsListBySku.get(k) || [];
+                list.push({
+                  id: `res-leg-${row.order_id}-${k}`,
+                  orderId: row.order_id,
+                  orderCode: row.order_id,
+                  quantity: qty,
+                  expiredAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+                  createdAt: new Date().toISOString(),
+                });
+                reservationsListBySku.set(k, list);
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        }
+      }
     } else {
-      const physicalBalances = await this.getStockBalances(products, warehouseId);
-      const minLevels = await this.getMinStockLevelsFromDb(products, warehouseId);
-      const reservationResult = await this.databaseService.query<{ product_sku: string; reserved: string }>(
-        `SELECT product_sku, COALESCE(SUM(base_quantity), 0)::text AS reserved
-         FROM app_order_inventory_reservations WHERE status = 'RESERVED' AND warehouse_id = $1::uuid GROUP BY product_sku`,
-        [warehouseId],
-      );
-      const warehouseRows = await this.databaseService.query<{ name: string }>(
-        'SELECT name FROM warehouses WHERE id = $1::uuid',
-        [warehouseId],
-      );
-      const warehouseName = warehouseRows[0]?.name || DEFAULT_WAREHOUSE_NAME;
-      const reservations = new Map(
-        reservationResult.map((row) => [row.product_sku.toUpperCase(), Number(row.reserved)]),
-      );
+      // In-memory fallback
+      for (const res of this.memoryStockReservations.values()) {
+        if (res.status === StockReservationStatus.ACTIVE && new Date(res.expiredAt) > new Date()) {
+          const skuKey = res.productId.toUpperCase();
+          const targetKeys = [skuKey];
+          if (skuKey === 'LH-MILK-900G') targetKeys.push('LH-MILK-POWDER-900G');
+          if (skuKey === 'LH-MILK-POWDER-900G') targetKeys.push('LH-MILK-900G');
 
-      items = products.map((p) => {
-        const physicalStockQuantity = physicalBalances.get(p.sku.toUpperCase()) ?? p.stockQuantity ?? 0;
-        const reservedQuantity = reservations.get(p.sku.toUpperCase()) ?? 0;
-        const available = Math.max(0, physicalStockQuantity - reservedQuantity);
-
-        let status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' = 'IN_STOCK';
-        if (available <= 0) {
-          status = 'OUT_OF_STOCK';
-        } else if (available <= 10) {
-          status = 'LOW_STOCK';
+          for (const k of targetKeys) {
+            reservations.set(k, (reservations.get(k) || 0) + res.quantity);
+            const list = reservationsListBySku.get(k) || [];
+            if (!list.some((existing) => existing.id === res.id)) {
+              list.push({
+                id: res.id,
+                orderId: res.orderId,
+                orderCode: res.orderCode || res.orderId,
+                quantity: res.quantity,
+                expiredAt: res.expiredAt instanceof Date ? res.expiredAt.toISOString() : String(res.expiredAt),
+                createdAt: res.createdAt instanceof Date ? res.createdAt.toISOString() : String(res.createdAt),
+              });
+            }
+            reservationsListBySku.set(k, list);
+          }
         }
-
-        const minStockLevel = minLevels.get(p.sku.trim().toUpperCase()) ?? 0;
-        const isBelowMinStock = available <= minStockLevel && minStockLevel > 0;
-
-        return {
-          id: p.id,
-          sku: p.sku,
-          name: p.name,
-          category: p.category || `${p.parentCategory || ''} / ${p.subCategory || ''}`,
-          parentCategory: p.parentCategory || 'Sữa & Chế phẩm sữa',
-          subCategory: p.subCategory || '',
-          physicalStock: physicalStockQuantity,
-          reservedStock: reservedQuantity,
-          availableStock: available,
-          stockQuantity: available,
-          physicalStockQuantity,
-          reservedQuantity,
-          minStockLevel,
-          isBelowMinStock,
-          baseUnit: p.baseUnit,
-          units: (p.units || []).map((u) => ({
-            unitName: u.unitName,
-            conversionRate: u.conversionRate,
-            isBaseUnit: Boolean(u.isBaseUnit),
-          })),
-          warehouse: warehouseName,
-          warehouseId,
-          status,
-          imageUrl: p.imageUrl,
-        };
-      });
+      }
     }
+
+    let items: StockOverviewItem[] = products.map((p) => {
+      const pSkuUpper = p.sku.toUpperCase();
+      const aliasSku = pSkuUpper === 'LH-MILK-POWDER-900G' ? 'LH-MILK-900G' : pSkuUpper === 'LH-MILK-900G' ? 'LH-MILK-POWDER-900G' : '';
+      const physicalStockQuantity = physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0;
+      const dbReserved = reservations.get(pSkuUpper) ?? (aliasSku ? reservations.get(aliasSku) : undefined) ?? 0;
+      const orderReserved = p.reservedStock ?? 0;
+      const reservedQuantity = Math.max(dbReserved, orderReserved);
+      const available = Math.max(0, physicalStockQuantity - reservedQuantity);
+      const matchedReservations = reservationsListBySku.get(pSkuUpper) || (aliasSku ? reservationsListBySku.get(aliasSku) : []) || [];
+      const minStockLevel = minLevels.get(p.sku.trim().toUpperCase()) ?? (this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 0);
+      const isBelowMinStock = minStockLevel > 0 && available <= minStockLevel;
+
+      let status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' = 'IN_STOCK';
+      if (available <= 0) {
+        status = 'OUT_OF_STOCK';
+      } else if (available <= 10 || isBelowMinStock) {
+        status = 'LOW_STOCK';
+      }
+
+      return {
+        id: p.id,
+        productId: p.id,
+        sku: p.sku,
+        name: p.name,
+        productName: p.name,
+        category: p.category || `${p.parentCategory || ''} / ${p.subCategory || ''}`,
+        parentCategory: p.parentCategory || 'Sữa & Chế phẩm sữa',
+        subCategory: p.subCategory || '',
+        physicalStock: physicalStockQuantity,
+        physicalStockQuantity,
+        physicalQuantity: physicalStockQuantity,
+        reservedStock: reservedQuantity,
+        reservedQuantity,
+        availableStock: available,
+        availableQuantity: available,
+        stockQuantity: available,
+        baseUnit: p.baseUnit,
+        units: (p.units || []).map((u) => ({
+          unitName: u.unitName,
+          conversionRate: u.conversionRate,
+          isBaseUnit: u.isBaseUnit,
+        })),
+        warehouse: warehouseName,
+        warehouseId,
+        minStockLevel,
+        isBelowMinStock,
+        status,
+        imageUrl: p.imageUrl,
+        activeReservations: matchedReservations,
+      };
+    });
 
     if (q?.search) {
       const searchLower = q.search.trim().toLowerCase();
@@ -498,7 +681,7 @@ export class InventoryService implements OnModuleInit {
     const balances = await this.getStockOverview();
     const targetWarehouse = warehouseId?.trim().toUpperCase();
     return balances
-      .filter((row) => !targetWarehouse || row.warehouseId.toUpperCase() === targetWarehouse)
+      .filter((row) => !targetWarehouse || (row.warehouseId && row.warehouseId.toUpperCase() === targetWarehouse))
       .filter((row) => (row.minStockLevel ?? 0) > 0 && row.stockQuantity <= (row.minStockLevel ?? 0))
       .map((row): LowStockAlert => {
         const minStockLevel = row.minStockLevel ?? 0;
@@ -510,6 +693,103 @@ export class InventoryService implements OnModuleInit {
         };
       })
       .sort((a, b) => b.shortage - a.shortage);
+  }
+
+  /**
+   * Lấy danh sách phiếu giữ chỗ kho đang hoạt động (SN-180)
+   */
+  async getActiveReservations(
+    sku?: string,
+    orderId?: string,
+  ): Promise<StockReservationEntity[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.ensureStockReservationsTable();
+      let query = `
+        SELECT r.id, r.order_id, r.product_id, r.warehouse_id, r.quantity::text,
+               r.status, r.expired_at, r.created_at, r.released_at, o.order_code
+        FROM stock_reservations r
+        LEFT JOIN app_order_records o ON o.id = r.order_id
+        WHERE r.status IN ('ACTIVE', 'RESERVED')
+      `;
+      const params: unknown[] = [];
+      if (sku) {
+        params.push(sku.toUpperCase());
+        query += ` AND UPPER(r.product_id) = $${params.length}`;
+      }
+      if (orderId) {
+        params.push(orderId);
+        query += ` AND r.order_id = $${params.length}`;
+      }
+      query += ` ORDER BY r.created_at DESC`;
+      const rows = await this.databaseService.query<{
+        id: string;
+        order_id: string;
+        product_id: string;
+        warehouse_id: string;
+        quantity: string;
+        status: string;
+        expired_at: Date;
+        created_at: Date;
+        released_at?: Date;
+        order_code?: string;
+      }>(query, params);
+
+      return rows.map(
+        (row) =>
+          new StockReservationEntity({
+            id: row.id,
+            orderId: row.order_id,
+            orderCode: row.order_code || row.order_id,
+            productId: row.product_id,
+            warehouseId: row.warehouse_id,
+            quantity: Number(row.quantity),
+            status: row.status as StockReservationStatus,
+            expiredAt: new Date(row.expired_at),
+            createdAt: new Date(row.created_at),
+            releasedAt: row.released_at ? new Date(row.released_at) : undefined,
+          }),
+      );
+    }
+
+    return Array.from(this.memoryStockReservations.values()).filter((res) => {
+      if (res.status !== StockReservationStatus.ACTIVE) return false;
+      if (sku && res.productId.toUpperCase() !== sku.toUpperCase()) return false;
+      if (orderId && res.orderId !== orderId) return false;
+      return true;
+    });
+  }
+
+  addMemoryReservation(res: StockReservationEntity): void {
+    this.memoryStockReservations.set(res.id, res);
+  }
+
+  releaseMemoryReservationsByOrderId(orderId: string): number {
+    let count = 0;
+    for (const [id, res] of this.memoryStockReservations.entries()) {
+      if (res.orderId === orderId && res.status === StockReservationStatus.ACTIVE) {
+        res.status = StockReservationStatus.RELEASED;
+        res.releasedAt = new Date();
+        this.memoryStockReservations.set(id, res);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  releaseExpiredMemoryReservations(): { releasedReservations: number; cancelledOrderIds: string[] } {
+    const now = new Date();
+    const cancelledOrderIds = new Set<string>();
+    let count = 0;
+    for (const [id, res] of this.memoryStockReservations.entries()) {
+      if (res.status === StockReservationStatus.ACTIVE && new Date(res.expiredAt) < now) {
+        res.status = StockReservationStatus.RELEASED;
+        res.releasedAt = now;
+        this.memoryStockReservations.set(id, res);
+        cancelledOrderIds.add(res.orderId);
+        count++;
+      }
+    }
+    return { releasedReservations: count, cancelledOrderIds: Array.from(cancelledOrderIds) };
   }
 
   /**
