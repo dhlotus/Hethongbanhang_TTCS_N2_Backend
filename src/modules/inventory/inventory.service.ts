@@ -97,6 +97,22 @@ export class InventoryService implements OnModuleInit {
       `).then(() => this.databaseService.query(`
         ALTER TABLE app_inventory_stock_balances
         ADD COLUMN IF NOT EXISTS min_stock_level NUMERIC(15, 2) DEFAULT 0
+      `)).then(() => this.databaseService.query(`
+        ALTER TABLE app_inventory_stock_balances
+        ADD COLUMN IF NOT EXISTS warehouse_id UUID NOT NULL DEFAULT '${DEFAULT_WAREHOUSE_ID}'
+      `)).then(() => this.databaseService.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE c.conrelid = 'app_inventory_stock_balances'::regclass
+              AND c.contype = 'p' AND a.attname = 'warehouse_id'
+          ) THEN
+            ALTER TABLE app_inventory_stock_balances DROP CONSTRAINT IF EXISTS app_inventory_stock_balances_pkey;
+            ALTER TABLE app_inventory_stock_balances ADD CONSTRAINT app_inventory_stock_balances_pkey PRIMARY KEY (product_sku, warehouse_id);
+          END IF;
+        END $$;
       `)).then(() => undefined).catch((error: unknown) => {
         this.stockBalanceSchemaPromise = null;
         throw error;
