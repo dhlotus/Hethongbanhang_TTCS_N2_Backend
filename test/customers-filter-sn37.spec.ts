@@ -71,8 +71,14 @@ async function runTestSuite(): Promise<void> {
   const resName = await service.filterCustomers({ search: 'Minh Khang' }, adminUser);
   assert(resName.total >= 1 && resName.data[0].name.includes('Minh Khang'), 'Tìm kiếm theo tên đại lý (Minh Khang)');
 
+  const resNameNoAccent = await service.filterCustomers({ search: 'minh khang' }, adminUser);
+  assert(resNameNoAccent.total >= 1 && resNameNoAccent.data[0].name.includes('Minh Khang'), 'Tìm kiếm đại lý KHÔNG DẤU thành công (minh khang -> Minh Khang)');
+
   const resNameLower = await service.filterCustomers({ search: 'bảo châu' }, adminUser);
   assert(resNameLower.total >= 1 && resNameLower.data[0].name.includes('Bảo Châu'), 'Tìm kiếm không phân biệt hoa thường theo tên đại lý (bảo châu)');
+
+  const resBaoChauNoAccent = await service.filterCustomers({ search: 'bao chau' }, adminUser);
+  assert(resBaoChauNoAccent.total >= 1 && resBaoChauNoAccent.data[0].name.includes('Bảo Châu'), 'Tìm kiếm đại lý KHÔNG DẤU thành công (bao chau -> Bảo Châu)');
 
   const resPhone = await service.filterCustomers({ search: '0901234567' }, adminUser);
   assert(resPhone.total === 1 && resPhone.data[0].phone === '0901234567', 'Tìm kiếm đại lý theo số điện thoại chính xác (0901234567)');

@@ -24,6 +24,7 @@ import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
+import { matchesSearchTerm, removeVietnameseTones } from '../../common/utils/vietnamese.util';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-35)
@@ -524,13 +525,13 @@ export class CustomersService implements OnModuleInit {
   async findAllCustomers(query?: QueryCustomerDto): Promise<CustomerEntity[]> {
     let result = Array.from(this.customers.values());
 
-    if (query?.search) {
-      const q = query.search.toLowerCase().trim();
+    if (query?.search && query.search.trim()) {
+      const q = query.search.trim();
       result = result.filter(
         (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.code.toLowerCase().includes(q) ||
-          c.phone.includes(q),
+          matchesSearchTerm(c.name, q) ||
+          matchesSearchTerm(c.code, q) ||
+          matchesSearchTerm(c.phone, q),
       );
     }
 
@@ -549,7 +550,7 @@ export class CustomersService implements OnModuleInit {
    * Tìm kiếm và lọc danh sách đại lý phân quyền & phân trang chuẩn mực (SN-37)
    * - Nếu role là SALES_REP (nhân viên kinh doanh thông thường):
    *   Tự động mặc định chỉ lọc các đại lý được gán cho chính user đó phụ trách (trừ khi là ADMIN hoặc SALES_MANAGER)
-   * - Tìm kiếm nhanh (search): Không phân biệt hoa thường theo Mã (code), Tên (name), Số điện thoại (phone)
+   * - Tìm kiếm nhanh (search): Hỗ trợ cả tiếng Việt CÓ DẤU và KHÔNG DẤU theo Mã (code), Tên (name), Số điện thoại (phone), Địa chỉ (address), MST (taxCode)
    * - Kết hợp linh hoạt: region, customerGroup, salesRepId, status
    * - Phân trang đầy đủ: page, limit, total, totalPages
    */
@@ -583,29 +584,31 @@ export class CustomersService implements OnModuleInit {
       });
     }
 
-    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode
+    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode (hỗ trợ cả có dấu và không dấu)
     if (query?.search && query.search.trim()) {
-      const q = query.search.toLowerCase().trim();
+      const q = query.search.trim();
       list = list.filter(
         (c) =>
-          (c.code && c.code.toLowerCase().includes(q)) ||
-          (c.name && c.name.toLowerCase().includes(q)) ||
-          (c.phone && c.phone.includes(q)) ||
-          (c.address && c.address.toLowerCase().includes(q)) ||
-          (c.taxCode && c.taxCode.toLowerCase().includes(q)),
+          matchesSearchTerm(c.code, q) ||
+          matchesSearchTerm(c.name, q) ||
+          matchesSearchTerm(c.phone, q) ||
+          matchesSearchTerm(c.address, q) ||
+          matchesSearchTerm(c.taxCode, q),
       );
     }
 
     // 4. Lọc theo Khu vực / Địa bàn kinh doanh (hỗ trợ cả tiếng Việt và alias)
     if (query?.region && query.region !== 'ALL') {
       const reg = query.region.toLowerCase().trim();
+      const normReg = removeVietnameseTones(reg);
       list = list.filter((c) => {
         if (!c.region) return false;
         const cReg = c.region.toLowerCase().trim();
-        if (cReg === reg) return true;
-        if (reg === 'south' && (cReg.includes('nam') || cReg === 'miền nam')) return true;
-        if (reg === 'central' && (cReg.includes('trung') || cReg === 'miền trung')) return true;
-        if (reg === 'north' && (cReg.includes('bắc') || cReg === 'miền bắc')) return true;
+        const normCReg = removeVietnameseTones(cReg);
+        if (cReg === reg || normCReg === normReg) return true;
+        if (reg === 'south' && (normCReg.includes('nam') || normCReg === 'mien nam')) return true;
+        if (reg === 'central' && (normCReg.includes('trung') || normCReg === 'mien trung')) return true;
+        if (reg === 'north' && (normCReg.includes('bac') || normCReg === 'mien bac')) return true;
         return false;
       });
     }
