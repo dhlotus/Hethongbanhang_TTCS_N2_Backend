@@ -118,6 +118,12 @@ async function runTestSuite(): Promise<void> {
   const resInactive = await service.filterCustomers({ status: CustomerStatus.INACTIVE }, adminUser);
   assert(resInactive.total >= 1 && resInactive.data.every((c) => c.status === CustomerStatus.INACTIVE), 'Lọc đại lý ngừng kinh doanh (INACTIVE)');
 
+  const resRepLong = await service.filterCustomers({ salesRepId: 'usr-sale-01' }, adminUser);
+  assert(resRepLong.total >= 1 && resRepLong.data.every((c) => c.salesRepId === 'usr-sale-01' || c.salesRep?.id === 'usr-sale-01'), 'Lọc đại lý theo người phụ trách chỉ định (Trần Văn Long)');
+
+  const resUnassigned = await service.filterCustomers({ salesRepId: 'UNASSIGNED' }, adminUser);
+  assert(resUnassigned.total >= 1 && resUnassigned.data.every((c) => !c.salesRepId || c.salesRepId === ''), 'Lọc đại lý chưa phân công người phụ trách (UNASSIGNED)');
+
   const resMulti = await service.filterCustomers(
     {
       region: 'Miền Nam',

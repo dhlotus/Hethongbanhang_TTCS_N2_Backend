@@ -579,9 +579,15 @@ export class CustomersService implements OnModuleInit {
     // 2. Lọc theo nhân viên phụ trách chỉ định (dành cho Admin / Quản lý)
     if (query?.salesRepId && query.salesRepId !== 'ALL') {
       const targetRepId = query.salesRepId;
-      list = list.filter((c) => {
-        return c.salesRepId === targetRepId || c.salesRep?.id === targetRepId;
-      });
+      if (targetRepId === 'UNASSIGNED') {
+        list = list.filter(
+          (c) => !c.salesRepId || c.salesRepId === '' || c.salesRepId === 'unassigned',
+        );
+      } else {
+        list = list.filter((c) => {
+          return c.salesRepId === targetRepId || c.salesRep?.id === targetRepId;
+        });
+      }
     }
 
     // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode (hỗ trợ cả có dấu và không dấu)
