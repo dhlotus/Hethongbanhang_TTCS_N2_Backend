@@ -89,10 +89,8 @@ export class ProductsService implements OnModuleInit {
     product.physicalStock = product.stockQuantity ?? 0;
     product.reservedStock = reserved;
     const computedAvailable = Math.max(0, product.physicalStock - reserved);
-    product.availableStock = typeof product.availableStock === 'number'
-      ? Math.min(product.availableStock, computedAvailable)
-      : computedAvailable;
-    product.availableQuantity = product.availableStock;
+    product.availableStock = computedAvailable;
+    product.availableQuantity = computedAvailable;
     return product;
   }
 
@@ -110,6 +108,16 @@ export class ProductsService implements OnModuleInit {
 
     product.availableStock = Math.max(0, currentStock - quantity);
     product.availableQuantity = product.availableStock;
+    return product.availableStock;
+  }
+
+  /**
+   * Hoàn lại tồn khả dụng khi đơn hàng bị hủy (SN-180 AC2)
+   */
+  public restoreAvailableStock(productIdOrSku: string, quantity: number): number {
+    const product = this.findProductInternal(productIdOrSku);
+    if (!product) return 0;
+    this.populateProductStock(product);
     return product.availableStock;
   }
 

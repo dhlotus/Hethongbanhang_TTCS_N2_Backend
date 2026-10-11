@@ -44,8 +44,11 @@ export class OrderEntity {
   cancelReason?: string;
   isCreditLimitExceeded?: boolean;
   creditLimitExceededAmount?: number;
-  isShortDelivery?: boolean; // Cờ báo đơn hàng bị giao thiếu (SN-170)
-  createdSource?: string;
+  approvedAt?: Date;
+  approverId?: string;
+  reservedUntil?: Date;
+  isShortDelivery?: boolean; // Cờ đánh dấu giao thiếu (SN-170)
+  createdSource?: string; // Nguồn tạo đơn (SN-49)
   createdAt: Date;
   updatedAt: Date;
 
@@ -60,7 +63,6 @@ export class OrderEntity {
     this.requiresApproval = partial.requiresApproval ?? false;
     this.approvalReasons = partial.approvalReasons ?? [];
     this.cancelReason = partial.cancelReason;
-    this.isShortDelivery = partial.isShortDelivery;
     this.status = partial.status ?? OrderStatus.DRAFT;
     this.paymentStatus = partial.paymentStatus ?? PaymentStatus.UNPAID;
     this.isCreditLimitExceeded = partial.isCreditLimitExceeded ?? false;
