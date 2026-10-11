@@ -5,6 +5,8 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DatabaseService } from '../../database/database.service';
 import { CustomerEntity, CustomerStatus } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
@@ -24,6 +26,7 @@ import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
+import { matchesSearchTerm, removeVietnameseTones } from '../../common/utils/vietnamese.util';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-35)
@@ -35,12 +38,69 @@ export class CustomersService implements OnModuleInit {
 
   constructor(@Optional() private readonly dbService?: DatabaseService) {
     this.seedInitialCustomers();
+    this.loadCustomersFromDisk();
   }
 
   async onModuleInit(): Promise<void> {
     if (this.customers.size === 0) {
       this.seedInitialCustomers();
     }
+    this.loadCustomersFromDisk();
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'customers.json');
+  }
+
+  private loadCustomersFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<CustomerEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const existing = this.customers.get(item.id);
+        if (existing) {
+          Object.assign(existing, {
+            ...item,
+            createdAt: item.createdAt ? new Date(item.createdAt) : existing.createdAt,
+            updatedAt: item.updatedAt ? new Date(item.updatedAt) : existing.updatedAt,
+          });
+        } else {
+          this.customers.set(item.id, new CustomerEntity(item));
+        }
+      }
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi nạp dữ liệu đại lý từ đĩa:', err);
+    }
+  }
+
+  private saveCustomersToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.customers.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi lưu dữ liệu đại lý ra đĩa:', err);
+    }
+  }
+
+  private generateNextCustomerCode(): string {
+    let num = this.customers.size + 1;
+    while (
+      Array.from(this.customers.values()).some(
+        (c) => c.code?.toUpperCase() === `DL-${String(num).padStart(4, '0')}`,
+      )
+    ) {
+      num++;
+    }
+    return `DL-${String(num).padStart(4, '0')}`;
   }
 
   /**
@@ -524,13 +584,13 @@ export class CustomersService implements OnModuleInit {
   async findAllCustomers(query?: QueryCustomerDto): Promise<CustomerEntity[]> {
     let result = Array.from(this.customers.values());
 
-    if (query?.search) {
-      const q = query.search.toLowerCase().trim();
+    if (query?.search && query.search.trim()) {
+      const q = query.search.trim();
       result = result.filter(
         (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.code.toLowerCase().includes(q) ||
-          c.phone.includes(q),
+          matchesSearchTerm(c.name, q) ||
+          matchesSearchTerm(c.code, q) ||
+          matchesSearchTerm(c.phone, q),
       );
     }
 
@@ -549,7 +609,7 @@ export class CustomersService implements OnModuleInit {
    * Tìm kiếm và lọc danh sách đại lý phân quyền & phân trang chuẩn mực (SN-37)
    * - Nếu role là SALES_REP (nhân viên kinh doanh thông thường):
    *   Tự động mặc định chỉ lọc các đại lý được gán cho chính user đó phụ trách (trừ khi là ADMIN hoặc SALES_MANAGER)
-   * - Tìm kiếm nhanh (search): Không phân biệt hoa thường theo Mã (code), Tên (name), Số điện thoại (phone)
+   * - Tìm kiếm nhanh (search): Hỗ trợ cả tiếng Việt CÓ DẤU và KHÔNG DẤU theo Mã (code), Tên (name), Số điện thoại (phone), Địa chỉ (address), MST (taxCode)
    * - Kết hợp linh hoạt: region, customerGroup, salesRepId, status
    * - Phân trang đầy đủ: page, limit, total, totalPages
    */
@@ -578,34 +638,42 @@ export class CustomersService implements OnModuleInit {
     // 2. Lọc theo nhân viên phụ trách chỉ định (dành cho Admin / Quản lý)
     if (query?.salesRepId && query.salesRepId !== 'ALL') {
       const targetRepId = query.salesRepId;
-      list = list.filter((c) => {
-        return c.salesRepId === targetRepId || c.salesRep?.id === targetRepId;
-      });
+      if (targetRepId === 'UNASSIGNED') {
+        list = list.filter(
+          (c) => !c.salesRepId || c.salesRepId === '' || c.salesRepId === 'unassigned',
+        );
+      } else {
+        list = list.filter((c) => {
+          return c.salesRepId === targetRepId || c.salesRep?.id === targetRepId;
+        });
+      }
     }
 
-    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode
+    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode (hỗ trợ cả có dấu và không dấu)
     if (query?.search && query.search.trim()) {
-      const q = query.search.toLowerCase().trim();
+      const q = query.search.trim();
       list = list.filter(
         (c) =>
-          (c.code && c.code.toLowerCase().includes(q)) ||
-          (c.name && c.name.toLowerCase().includes(q)) ||
-          (c.phone && c.phone.includes(q)) ||
-          (c.address && c.address.toLowerCase().includes(q)) ||
-          (c.taxCode && c.taxCode.toLowerCase().includes(q)),
+          matchesSearchTerm(c.code, q) ||
+          matchesSearchTerm(c.name, q) ||
+          matchesSearchTerm(c.phone, q) ||
+          matchesSearchTerm(c.address, q) ||
+          matchesSearchTerm(c.taxCode, q),
       );
     }
 
     // 4. Lọc theo Khu vực / Địa bàn kinh doanh (hỗ trợ cả tiếng Việt và alias)
     if (query?.region && query.region !== 'ALL') {
       const reg = query.region.toLowerCase().trim();
+      const normReg = removeVietnameseTones(reg);
       list = list.filter((c) => {
         if (!c.region) return false;
         const cReg = c.region.toLowerCase().trim();
-        if (cReg === reg) return true;
-        if (reg === 'south' && (cReg.includes('nam') || cReg === 'miền nam')) return true;
-        if (reg === 'central' && (cReg.includes('trung') || cReg === 'miền trung')) return true;
-        if (reg === 'north' && (cReg.includes('bắc') || cReg === 'miền bắc')) return true;
+        const normCReg = removeVietnameseTones(cReg);
+        if (cReg === reg || normCReg === normReg) return true;
+        if (reg === 'south' && (normCReg.includes('nam') || normCReg === 'mien nam')) return true;
+        if (reg === 'central' && (normCReg.includes('trung') || normCReg === 'mien trung')) return true;
+        if (reg === 'north' && (normCReg.includes('bac') || normCReg === 'mien bac')) return true;
         return false;
       });
     }
@@ -622,10 +690,14 @@ export class CustomersService implements OnModuleInit {
       list = list.filter((c) => c.status && c.status.toUpperCase().trim() === st);
     }
 
-    // 7. Phân trang kết quả
+    // 7. Phân trang kết quả & Thống kê tổng hợp toàn bộ danh sách
+    const total = list.length;
+    const activeCount = list.filter((c) => c.status === CustomerStatus.ACTIVE).length;
+    const totalCreditLimit = list.reduce((sum, c) => sum + (c.creditLimit || 0), 0);
+    const totalCurrentDebt = list.reduce((sum, c) => sum + (c.currentDebt || 0), 0);
+
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
-    const total = list.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const startIndex = (page - 1) * limit;
     const data = list.slice(startIndex, startIndex + limit);
@@ -636,6 +708,9 @@ export class CustomersService implements OnModuleInit {
       page,
       limit,
       totalPages,
+      activeCount,
+      totalCreditLimit,
+      totalCurrentDebt,
     };
   }
 
@@ -695,6 +770,7 @@ export class CustomersService implements OnModuleInit {
 
     customer.deliveryPoints.push(newPoint);
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return newPoint;
   }
 
@@ -730,6 +806,7 @@ export class CustomersService implements OnModuleInit {
 
     point.updatedAt = new Date();
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return point;
   }
 
@@ -752,6 +829,7 @@ export class CustomersService implements OnModuleInit {
 
     targetPoint.updatedAt = new Date();
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return targetPoint;
   }
 
@@ -777,6 +855,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return {
       success: true,
       message: 'Đã xóa điểm giao hàng thành công',
@@ -802,6 +881,7 @@ export class CustomersService implements OnModuleInit {
     customer.lockedAt = new Date();
     customer.lockedBy = currentUser?.fullName || currentUser?.userId || 'Hệ thống';
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -840,6 +920,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -867,6 +948,7 @@ export class CustomersService implements OnModuleInit {
     customer.lockedAt = undefined;
     customer.lockedBy = undefined;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -895,6 +977,7 @@ export class CustomersService implements OnModuleInit {
     const customer = await this.getCustomerById(customerId);
     customer.status = status;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -1151,9 +1234,9 @@ export class CustomersService implements OnModuleInit {
    * - Mã đại lý là duy nhất (SN-30 AC2)
    */
   async createCustomer(dto: CreateCustomerDto): Promise<CustomerEntity> {
-    const trimmedCode = dto.code?.trim();
+    let trimmedCode = dto.code?.trim();
     if (!trimmedCode) {
-      throw new BadRequestException('Mã đại lý không được để trống.');
+      trimmedCode = this.generateNextCustomerCode();
     }
 
     // Kiểm tra tính duy nhất của mã đại lý (không phân biệt hoa/thường)
@@ -1216,6 +1299,37 @@ export class CustomersService implements OnModuleInit {
     });
 
     this.customers.set(newId, newCustomer);
+    this.saveCustomersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `INSERT INTO customers (id, code, name, region, customer_group, tax_code, phone, email, address, credit_limit, current_debt, max_debt_days, status, sales_rep_id, sales_rep_name, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+           ON CONFLICT (id) DO NOTHING;`,
+          [
+            newId,
+            trimmedCode,
+            newCustomer.name,
+            newCustomer.region,
+            newCustomer.customerGroup,
+            newCustomer.taxCode,
+            newCustomer.phone,
+            newCustomer.email,
+            newCustomer.address,
+            newCustomer.creditLimit,
+            0,
+            newCustomer.maxDebtDays,
+            newCustomer.status,
+            newCustomer.salesRepId,
+            salesRepName,
+          ],
+        );
+      } catch {
+        // In-memory & disk fallback
+      }
+    }
+
     return newCustomer;
   }
 
@@ -1239,6 +1353,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     this.customers.delete(customer.id);
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
