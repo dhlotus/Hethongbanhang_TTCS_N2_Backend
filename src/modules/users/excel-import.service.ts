@@ -276,7 +276,7 @@ export class ExcelImportService {
     }
 
     // Ghi đĩa đồng bộ 1 lần duy nhất sau khi hoàn tất toàn bộ danh sách để tối ưu hiệu năng
-    this.usersService.flushUsersToDisk();
+    await this.usersService.flushUsersToDisk();
 
     return results;
   }

@@ -55,6 +55,18 @@ export class CreateCustomerDto {
   @IsNumber({}, { message: 'Số ngày nợ tối đa phải là số' })
   @Min(0, { message: 'Số ngày nợ tối đa không được âm' })
   maxDebtDays?: number;
+
+  @IsOptional()
+  @IsString()
+  salesRepName?: string;
+
+  @IsOptional()
+  @IsString()
+  deliveryPointName?: string;
+
+  @IsOptional()
+  @IsString()
+  receiverName?: string;
 }
 
 /**

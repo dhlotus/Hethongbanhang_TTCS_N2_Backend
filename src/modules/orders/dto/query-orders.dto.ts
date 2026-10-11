@@ -24,7 +24,7 @@ export class QueryOrdersDto {
 
   @IsOptional()
   @IsString()
-  status?: OrderStatus | 'ALL';
+  status?: OrderStatus | string;
 
   @IsOptional()
   @IsString()
@@ -32,7 +32,17 @@ export class QueryOrdersDto {
 
   @IsOptional()
   @IsString()
+  @IsOptional()
+  @IsString()
   salesRepId?: string;
+
+  @IsOptional()
+  @IsString()
+  assignedUser?: string;
+
+  @IsOptional()
+  @IsString()
+  region?: string;
 
   @IsOptional()
   @IsString()

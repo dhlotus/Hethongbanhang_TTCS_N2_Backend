@@ -18,7 +18,12 @@ export class DashboardService {
     private readonly productsService: ProductsService,
   ) {}
 
-  async getOverview(currentUser: ICurrentUser, timeRange?: string): Promise<DashboardOverviewResponseDto> {
+  async getOverview(
+    currentUser: ICurrentUser,
+    timeRange?: string,
+    startDate?: string,
+    endDate?: string,
+  ): Promise<DashboardOverviewResponseDto> {
     const roles = currentUser.roles || [];
     const isManager = roles.some((r: string) => 
       r === UserRole.ADMIN || r === UserRole.SALES_MANAGER || r === Role.BUSINESS_MANAGER
@@ -43,6 +48,23 @@ export class DashboardService {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const quarterMonth = Math.floor(now.getMonth() / 3) * 3;
+    const startOfQuarter = new Date(now.getFullYear(), quarterMonth, 1);
+
+    // Xác định khoảng thời gian lọc biểu đồ
+    let chartStart = startOfMonth;
+    let chartEnd = now;
+
+    if (timeRange === 'today') {
+      chartStart = startOfToday;
+    } else if (timeRange === 'this_quarter') {
+      chartStart = startOfQuarter;
+    } else if (timeRange === 'custom' && startDate && endDate) {
+      chartStart = new Date(startDate);
+      chartStart.setHours(0, 0, 0, 0);
+      chartEnd = new Date(endDate);
+      chartEnd.setHours(23, 59, 59, 999);
+    }
 
     let todaySales = 0;
     let monthlySales = 0;
@@ -59,13 +81,18 @@ export class DashboardService {
       if (order.status !== OrderStatus.CANCELLED && order.status !== OrderStatus.DRAFT && order.status !== OrderStatus.RETURNED) {
         const orderDate = new Date(order.createdAt);
         
-        // Sales trend (only for current month)
-        if (orderDate >= startOfMonth) {
+        // Sales trend theo khoảng thời gian được chọn
+        if (orderDate >= chartStart && orderDate <= chartEnd) {
           const dateStr = orderDate.toISOString().split('T')[0];
           salesTrendMap.set(dateStr, (salesTrendMap.get(dateStr) || 0) + order.grandTotal);
+        }
+
+        // Tính doanh số tháng này
+        if (orderDate >= startOfMonth) {
           monthlySales += order.grandTotal;
         }
         
+        // Tính doanh số hôm nay
         if (orderDate >= startOfToday) {
           todaySales += order.grandTotal;
         }

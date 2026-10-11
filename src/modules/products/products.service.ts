@@ -25,6 +25,7 @@ import {
 } from './dto/import-product.dto';
 import { ProductUnitDto } from './dto/product-unit.dto';
 import { OrdersService } from '../orders/orders.service';
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -140,7 +141,9 @@ export class ProductsService implements OnModuleInit {
       product_sku: string;
       physical_quantity: string;
     }>(
-      `SELECT product_sku, physical_quantity::text FROM app_inventory_stock_balances`,
+      `SELECT product_sku, physical_quantity::text FROM app_inventory_stock_balances
+       WHERE warehouse_id = $1::uuid`,
+      [DEFAULT_WAREHOUSE_ID],
     );
     const balanceBySku = new Map(
       balances.map((balance) => [balance.product_sku.toUpperCase(), Number(balance.physical_quantity)]),
@@ -606,25 +609,56 @@ export class ProductsService implements OnModuleInit {
       });
     }
 
-    // 2. Lọc theo nhóm hàng cấp 1 (parentCategory)
+    // 2. Lọc theo nhóm hàng cấp 1 (parentCategory - hỗ trợ tên tiếng Việt, code hoặc ID)
     if (parentCategory && parentCategory !== 'ALL') {
-      const parentLower = parentCategory.trim().toLowerCase();
-      items = items.filter(
-        (p) =>
-          (p.parentCategory &&
-            p.parentCategory.toLowerCase() === parentLower) ||
-          (p.category && p.category.toLowerCase().includes(parentLower)),
-      );
+      const parentTrim = parentCategory.trim();
+      const parentLower = parentTrim.toLowerCase();
+      const matchSet = new Set<string>([parentLower]);
+
+      if (this.categoriesService) {
+        const cat = this.categoriesService.findCategoryInternal(parentTrim);
+        if (cat) {
+          if (cat.name) matchSet.add(cat.name.trim().toLowerCase());
+          if (cat.code) matchSet.add(cat.code.trim().toLowerCase());
+          if (cat.id) matchSet.add(cat.id.trim().toLowerCase());
+        }
+      }
+
+      items = items.filter((p) => {
+        const pParent = p.parentCategory?.trim().toLowerCase();
+        const pCat = p.category?.trim().toLowerCase();
+        for (const target of matchSet) {
+          if (pParent && pParent === target) return true;
+          if (pCat && pCat.includes(target)) return true;
+        }
+        return false;
+      });
     }
 
-    // 3. Lọc theo nhóm hàng cấp 2 (subCategory)
+    // 3. Lọc theo nhóm hàng cấp 2 (subCategory - hỗ trợ tên tiếng Việt, code hoặc ID)
     if (subCategory && subCategory !== 'ALL') {
-      const subLower = subCategory.trim().toLowerCase();
-      items = items.filter(
-        (p) =>
-          (p.subCategory && p.subCategory.toLowerCase() === subLower) ||
-          (p.category && p.category.toLowerCase().includes(subLower)),
-      );
+      const subTrim = subCategory.trim();
+      const subLower = subTrim.toLowerCase();
+      const matchSet = new Set<string>([subLower]);
+
+      if (this.categoriesService) {
+        const cat = this.categoriesService.findCategoryInternal(subTrim);
+        if (cat) {
+          if (cat.name) matchSet.add(cat.name.trim().toLowerCase());
+          if (cat.code) matchSet.add(cat.code.trim().toLowerCase());
+          if (cat.id) matchSet.add(cat.id.trim().toLowerCase());
+        }
+      }
+
+      items = items.filter((p) => {
+        const pSub = p.subCategory?.trim().toLowerCase();
+        const pCat = p.category?.trim().toLowerCase();
+        for (const target of matchSet) {
+          if (pSub && pSub === target) return true;
+          if (pCat && pCat.includes(target)) return true;
+        }
+        return false;
+      });
     }
 
     // 4. Lọc theo ngành hàng (category)
@@ -637,7 +671,8 @@ export class ProductsService implements OnModuleInit {
 
     // 5. Lọc theo trạng thái hoạt động (ACTIVE / INACTIVE)
     if (status && (status as string) !== 'ALL') {
-      items = items.filter((p) => p.status === status);
+      const statusUpper = String(status).toUpperCase();
+      items = items.filter((p) => String(p.status).toUpperCase() === statusUpper);
     }
 
     const total = items.length;

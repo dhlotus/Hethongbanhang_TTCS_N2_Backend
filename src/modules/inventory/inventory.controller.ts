@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -17,7 +20,15 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
+import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
 import { InventoryService, StockAdjustmentResult } from './inventory.service';
+import { InventoryAuditEntity } from './entities/inventory-audit.entity';
+import {
+  CreateInventoryAuditDto,
+  UpdateAuditItemsDto,
+  CompleteAuditDto,
+  QueryAuditsDto,
+} from './dto';
 
 /**
  * Controller Quản lý Tồn kho & Sổ kho (SN-10, EP-04 & SN-23):
@@ -37,31 +48,48 @@ export class InventoryController {
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
   @Get('stock')
-  async getStockOverview(): Promise<
-    Array<{
-      sku: string;
-      productId: string;
-      name: string;
-      productName: string;
-      stockQuantity: number;
-      physicalStockQuantity: number;
-      physicalQuantity: number;
-      reservedQuantity: number;
-      availableQuantity: number;
-      baseUnit: string;
-      units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
-      warehouse: string;
-      activeReservations: Array<{
-        id: string;
-        orderId: string;
-        orderCode?: string;
-        quantity: number;
-        expiredAt: string;
-        createdAt: string;
-      }>;
-    }>
-  > {
-    return this.inventoryService.getStockOverview();
+async getStockOverview(@Query('warehouseId') warehouseId?: string): Promise<StockBalance[]> {
+    return this.inventoryService.getStockOverview(warehouseId);
+  }
+
+  /**
+   * Khai báo tồn tối thiểu theo SKU tại kho (SN-183)
+   * PATCH /inventory/stock-balances/warehouses/:warehouseId/sku/:sku/min-stock
+   */
+  @Patch('stock-balances/warehouses/:warehouseId/sku/:sku/min-stock')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  async setMinStockLevel(
+    @Param('warehouseId') warehouseId: string,
+    @Param('sku') sku: string,
+    @Body() body: { minStock: number },
+  ): Promise<StockBalance> {
+    return this.inventoryService.setMinStockLevel(warehouseId, sku, Number(body?.minStock));
+  }
+
+  /**
+   * Danh sách SKU dưới mức tồn tối thiểu (SN-183)
+   * GET /inventory/alerts/low-stock?warehouseId=...
+   */
+  @Get('alerts/low-stock')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getLowStockAlerts(
+    @Query('warehouseId') warehouseId?: string,
+  ): Promise<LowStockAlert[]> {
+    return this.inventoryService.getLowStockAlerts(warehouseId);
   }
 
   @Get('stocks')
@@ -89,7 +117,22 @@ export class InventoryController {
       }>;
     }>
   > {
-    return this.inventoryService.getStockOverview();
+    const list = await this.inventoryService.getStockOverview();
+    return list.map((item) => ({
+      sku: item.sku,
+      productId: item.productId || item.sku,
+      name: item.name,
+      productName: item.productName || item.name,
+      stockQuantity: item.stockQuantity,
+      physicalStockQuantity: item.physicalStockQuantity,
+      physicalQuantity: item.physicalQuantity ?? item.physicalStockQuantity,
+      reservedQuantity: item.reservedQuantity,
+      availableQuantity: item.availableQuantity ?? item.stockQuantity,
+      baseUnit: item.baseUnit,
+      units: item.units,
+      warehouse: item.warehouse,
+      activeReservations: item.activeReservations || [],
+    }));
   }
 
   /**
@@ -169,4 +212,142 @@ export class InventoryController {
   ): Promise<StockAdjustmentResult> {
     return this.inventoryService.adjustStock(dto, user?.userId || 'unknown');
   }
+
+  // =========================================================================
+  // KIỂM KÊ KHO HÀNG (SN-182 / EP-SN-229)
+  // =========================================================================
+
+  /**
+   * Tạo phiếu kiểm kê theo kho hoặc nhóm hàng (SN-182)
+   * POST /inventory/audits
+   */
+  @Post('audits')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  async createAudit(
+    @Body() dto: CreateInventoryAuditDto,
+    @CurrentUser() user: ICurrentUser,
+  ): Promise<InventoryAuditEntity> {
+    return this.inventoryService.createAudit(dto, user);
+  }
+
+  /**
+   * Danh sách phiếu kiểm kê có lọc (SN-182)
+   * GET /inventory/audits
+   */
+  @Get('audits')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getAudits(@Query() query: QueryAuditsDto): Promise<InventoryAuditEntity[]> {
+    return this.inventoryService.getAudits(query);
+  }
+
+  /**
+   * Chi tiết phiếu kiểm kê (SN-182)
+   * GET /inventory/audits/:id
+   */
+  @Get('audits/:id')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getAuditById(@Param('id') id: string): Promise<InventoryAuditEntity> {
+    return this.inventoryService.getAuditById(id);
+  }
+
+  /**
+   * Nhập số đếm thực tế (SN-182)
+   * PUT /inventory/audits/:id/items
+   */
+  @Put('audits/:id/items')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  async updateAuditItems(
+    @Param('id') id: string,
+    @Body() dto: UpdateAuditItemsDto,
+    @CurrentUser() user: ICurrentUser,
+  ): Promise<InventoryAuditEntity> {
+    return this.inventoryService.updateAuditItems(id, dto, user);
+  }
+
+  /**
+   * Chốt kiểm kê điều chỉnh tồn về số thực đếm (SN-182)
+   * POST /inventory/audits/:id/complete
+   * Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN) mới có quyền chốt
+   */
+  @Post('audits/:id/complete')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+  )
+  async completeAudit(
+    @Param('id') id: string,
+    @Body() dto: CompleteAuditDto,
+    @CurrentUser() user: ICurrentUser,
+  ): Promise<InventoryAuditEntity> {
+    return this.inventoryService.completeAudit(id, dto, user);
+  }
+
+  /**
+   * Hủy phiếu kiểm kê (SN-182)
+   * POST /inventory/audits/:id/cancel
+   */
+  @Post('audits/:id/cancel')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  async cancelAuditPost(
+    @Param('id') id: string,
+    @Body('reason') reason?: string,
+    @CurrentUser() user?: ICurrentUser,
+  ): Promise<InventoryAuditEntity> {
+    return this.inventoryService.cancelAudit(id, reason, user);
+  }
+
+  /**
+   * Hủy phiếu kiểm kê (Hỗ trợ cả DELETE)
+   * DELETE /inventory/audits/:id
+   */
+  @Delete('audits/:id')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  async cancelAuditDelete(
+    @Param('id') id: string,
+    @CurrentUser() user?: ICurrentUser,
+  ): Promise<InventoryAuditEntity> {
+    return this.inventoryService.cancelAudit(id, undefined, user);
+  }
 }
+

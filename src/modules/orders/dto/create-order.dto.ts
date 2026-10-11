@@ -108,6 +108,33 @@ export class CreateOrderLineDto {
 }
 
 /**
+ * DTO cho sản phẩm đặt hàng từ Agency Portal
+ */
+export class CreateOrderItemDto {
+  @IsNotEmpty({ message: 'ID sản phẩm không được để trống' })
+  @IsString()
+  productId: string;
+
+  @IsNumber({}, { message: 'Số lượng phải là số' })
+  @Min(1, { message: 'Số lượng phải ≥ 1' })
+  quantity: number;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Đơn giá phải là số' })
+  @Min(0, { message: 'Đơn giá không được âm' })
+  price?: number;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Chiết khấu phải là số' })
+  @Min(0)
+  discountPercent?: number;
+
+  @IsOptional()
+  @IsString()
+  unit?: string;
+}
+
+/**
  * DTO tạo đơn hàng mới (SN-38 & SN-39)
  */
 export class CreateOrderDto {
@@ -122,12 +149,23 @@ export class CreateOrderDto {
 
   @IsOptional()
   @IsString()
+  deliveryAddress?: string;
+
+  @IsOptional()
+  @IsString()
   deliveryDate?: string;
 
+  @IsOptional()
   @IsArray({ message: 'Danh sách dòng hàng phải là mảng' })
   @ValidateNested({ each: true })
   @Type(() => CreateOrderLineDto)
-  lines: CreateOrderLineDto[];
+  lines?: CreateOrderLineDto[];
+
+  @IsOptional()
+  @IsArray({ message: 'Danh sách sản phẩm phải là mảng' })
+  @ValidateNested({ each: true })
+  @Type(() => CreateOrderItemDto)
+  items?: CreateOrderItemDto[];
 
   @IsOptional()
   @IsString()
@@ -140,6 +178,10 @@ export class CreateOrderDto {
   @IsOptional()
   @IsEnum(OrderStatus, { message: 'Trạng thái đơn hàng không hợp lệ' })
   status?: OrderStatus;
+
+  @IsOptional()
+  @IsString()
+  createdSource?: string;
 }
 
 /**

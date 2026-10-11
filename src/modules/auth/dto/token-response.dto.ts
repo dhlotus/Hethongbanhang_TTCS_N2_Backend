@@ -15,12 +15,12 @@ export class TokenResponseDto {
   tokenType!: string;
   expiresIn!: string;
   refreshToken?: string;
+  access_token?: string;
+  refresh_token?: string;
 }
 
 export class LoginResponseDto extends TokenResponseDto {
   user!: IAuthUserInfo;
-  access_token?: string;
-  refresh_token?: string;
 }
 
 export class LogoutResponseDto {

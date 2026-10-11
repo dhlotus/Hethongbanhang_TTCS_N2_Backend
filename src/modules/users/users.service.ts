@@ -12,6 +12,7 @@ import * as path from 'path';
 import { BCRYPT_SALT_ROUNDS } from '../../common/constants/auth.constant';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
+import { DatabaseService } from '../../database/database.service';
 import { MailService } from '../mail/mail.service';
 import {
   AVATAR_MESSAGES,
@@ -134,13 +135,19 @@ export class UsersService implements OnModuleInit {
     ],
   ]);
 
-  constructor(@Optional() private readonly mailService?: MailService) {
+  constructor(
+    @Optional() private readonly mailService?: MailService,
+    @Optional() private readonly dbService?: DatabaseService,
+  ) {
     this.seedInitialUsersSync();
   }
 
   async onModuleInit(): Promise<void> {
     if (this.users.size === 0) {
       this.seedInitialUsersSync();
+    }
+    if (this.dbService?.isConnected()) {
+      await this.loadUsersFromDatabase();
     }
   }
 
@@ -318,6 +325,95 @@ export class UsersService implements OnModuleInit {
       fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
     } catch (err) {
       console.warn('[USERS_SERVICE] Lỗi khi lưu dữ liệu người dùng ra đĩa:', err);
+    }
+  }
+
+  private async loadUsersFromDatabase(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      const rows = await this.dbService.query<{
+        id: string;
+        username: string;
+        email: string;
+        password_hash: string;
+        full_name: string;
+        phone: string | null;
+        role_code: string;
+        status: string;
+        failed_attempts: number;
+        locked_until: Date | null;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT u.id, u.username, u.email, u.password_hash, u.full_name, u.phone,
+                r.code as role_code, u.status, u.failed_attempts, u.locked_until,
+                u.created_at, u.updated_at
+         FROM users u
+         JOIN roles r ON u.role_id = r.id;`,
+      );
+
+      for (const row of rows) {
+        const entity = new UserEntity({
+          id: row.id,
+          username: row.username,
+          email: row.email,
+          fullName: row.full_name,
+          phone: row.phone || undefined,
+          role: (row.role_code as UserRole) || UserRole.SALES_REP,
+          roles: [(row.role_code as UserRole) || UserRole.SALES_REP],
+          status: (row.status as UserStatus) || UserStatus.ACTIVE,
+          passwordHash: row.password_hash,
+          failedAttempts: row.failed_attempts || 0,
+          lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
+          createdAt: new Date(row.created_at),
+          updatedAt: new Date(row.updated_at),
+        });
+        this.users.set(entity.id, entity);
+      }
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi nạp users từ PostgreSQL:', err);
+    }
+  }
+
+  public async saveUserToDatabase(user: UserEntity): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      const roleIdMap: Record<string, number> = {
+        ADMIN: 1,
+        SALES_MANAGER: 2,
+        SALES_REP: 3,
+        WAREHOUSE_MANAGER: 4,
+        WAREHOUSE_KEEPER: 5,
+        ACCOUNTANT: 6,
+        CUSTOMER: 7,
+      };
+      const roleId = roleIdMap[user.role] || 3;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
+      const userId = isUuid ? user.id : crypto.randomUUID();
+
+      await this.dbService.query(
+        `INSERT INTO users (id, username, email, password_hash, full_name, phone, role_id, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (username) DO UPDATE
+         SET email = EXCLUDED.email,
+             full_name = EXCLUDED.full_name,
+             phone = EXCLUDED.phone,
+             role_id = EXCLUDED.role_id,
+             status = EXCLUDED.status,
+             updated_at = CURRENT_TIMESTAMP`,
+        [
+          userId,
+          user.username,
+          user.email,
+          user.passwordHash,
+          user.fullName,
+          user.phone || null,
+          roleId,
+          user.status,
+        ],
+      );
+    } catch (dbErr) {
+      console.warn('[USERS_SERVICE] Lỗi lưu user vào PostgreSQL:', dbErr);
     }
   }
 
@@ -597,6 +693,7 @@ export class UsersService implements OnModuleInit {
     this.users.set(newUser.id, newUser);
     if (!options?.skipDiskSync) {
       this.saveUsersToDisk();
+      await this.saveUserToDatabase(newUser);
     }
 
     // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
@@ -632,10 +729,15 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Lưu toàn bộ dữ liệu người dùng ra đĩa (Dùng sau khi hoàn thành batch import)
+   * Lưu toàn bộ dữ liệu người dùng ra đĩa và cơ sở dữ liệu PostgreSQL (Dùng sau khi hoàn thành batch import)
    */
-  public flushUsersToDisk(): void {
+  public async flushUsersToDisk(): Promise<void> {
     this.saveUsersToDisk();
+    if (this.dbService?.isConnected()) {
+      for (const user of this.users.values()) {
+        await this.saveUserToDatabase(user);
+      }
+    }
   }
 
 
@@ -768,8 +870,9 @@ export class UsersService implements OnModuleInit {
     user.updatedAt = new Date();
     this.users.set(user.id, user);
 
-    // Lưu dữ liệu cập nhật ra đĩa vĩnh viễn
+    // Lưu dữ liệu cập nhật ra đĩa và PostgreSQL vĩnh viễn
     this.saveUsersToDisk();
+    await this.saveUserToDatabase(user);
 
     return user.toSafeUser();
   }
@@ -867,6 +970,7 @@ export class UsersService implements OnModuleInit {
 
     this.users.set(user.id, user);
     this.saveUsersToDisk();
+    await this.saveUserToDatabase(user);
 
     // 3. Kiểm tra đại lý do nhân sự phụ trách khi khóa (SN-15)
     const assignedCustomers = this.getAssignedCustomers(user.id);

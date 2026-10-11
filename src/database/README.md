@@ -101,6 +101,8 @@ psql -U postgres -d htbh_db -f src/database/migrations/007_functions_triggers_an
 psql -U postgres -d htbh_db -f src/database/migrations/008_app_order_records.sql
 psql -U postgres -d htbh_db -f src/database/migrations/009_order_approval_workflow.sql
 psql -U postgres -d htbh_db -f src/database/migrations/010_persistent_inventory_stock_balances.sql
+psql -U postgres -d htbh_db -f src/database/migrations/011_sn175_warehouse_defaults.sql
+psql -U postgres -d htbh_db -f src/database/migrations/012_builtin_uuid_defaults.sql
 psql -U postgres -d htbh_db -f src/database/seeders/001_seed_initial_data.sql
 ```
 

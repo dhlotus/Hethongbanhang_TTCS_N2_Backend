@@ -31,6 +31,26 @@ export class QueryAuditLogsDto {
   searchUser?: string;
 
   @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  @IsOptional()
+  @IsString()
+  date_from?: string; // Hỗ trợ tham số date_from từ URL Frontend
+
+  @IsOptional()
+  @IsString()
+  date_to?: string; // Hỗ trợ tham số date_to từ URL Frontend
+
+  @IsOptional()
+  @IsString()
+  module?: string; // Hỗ trợ tham số module từ URL Frontend
+
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   page?: number = 1;

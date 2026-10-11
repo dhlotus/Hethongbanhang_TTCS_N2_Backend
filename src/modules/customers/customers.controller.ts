@@ -158,6 +158,7 @@ export class CustomersController {
    * GET /api/customers/:id/delivery-points
    */
   @Get(':id/delivery-points')
+  @Public()
   async getDeliveryPoints(
     @Param('id') customerId: string,
   ): Promise<DeliveryPointEntity[]> {
@@ -268,5 +269,39 @@ export class CustomersController {
       throw new Error('OrdersService chưa được khởi tạo');
     }
     return this.ordersService.getLatestCustomerOrder(customerId, currentUser);
+  }
+
+  /**
+   * Xóa hồ sơ đại lý (SN-30 AC4)
+   * Chặn xóa nếu đại lý đã phát sinh giao dịch hoặc còn công nợ, chỉ cho phép chuyển sang trạng thái Ngừng giao dịch.
+   * DELETE /api/customers/:id
+   */
+  @Delete(':id')
+  @Public()
+  async deleteCustomer(
+    @Param('id') id: string,
+  ): Promise<{ success: boolean; message: string; customerId: string }> {
+    let hasOrders = false;
+    if (this.ordersService) {
+      try {
+        const history = await this.ordersService.getPurchaseHistorySuggestions(id);
+        if (history && ((history.totalOrdersInPeriod || 0) > 0 || history.latestOrder)) {
+          hasOrders = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return this.customersService.deleteCustomer(id, hasOrders);
+  }
+
+  /**
+   * Ngừng giao dịch với đại lý (SN-30 AC4: Chuyển sang trạng thái INACTIVE)
+   * PATCH /api/customers/:id/deactivate
+   */
+  @Patch(':id/deactivate')
+  @Public()
+  async deactivateCustomer(@Param('id') id: string): Promise<CustomerEntity> {
+    return this.customersService.deactivateCustomer(id);
   }
 }

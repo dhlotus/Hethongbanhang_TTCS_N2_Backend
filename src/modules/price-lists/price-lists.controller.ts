@@ -16,6 +16,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { Public } from '../../common/decorators/public.decorator';
 import { ClonePriceListDto } from './dto/clone-price-list.dto';
 import { CreatePriceListDto } from './dto/create-price-list.dto';
 import { GetPriceListsFilterDto } from './dto/get-price-lists-filter.dto';
@@ -39,6 +40,7 @@ export class PriceListsController {
    * GET /api/price-lists
    */
   @Get()
+  @Public()
   async findAll(
     @Query() filterDto: GetPriceListsFilterDto,
   ): Promise<PaginatedPriceListsResponse> {
@@ -50,6 +52,7 @@ export class PriceListsController {
    * GET /api/price-lists/:id
    */
   @Get(':id')
+  @Public()
   async findById(@Param('id') id: string): Promise<PriceListEntity> {
     return this.priceListsService.findById(id);
   }
