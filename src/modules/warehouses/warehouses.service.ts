@@ -22,6 +22,40 @@ export class WarehousesService {
   ) {}
 
   async findAll(): Promise<WarehouseEntity[]> {
+    if (!this.databaseService?.isConnected()) {
+      return [
+        {
+          id: DEFAULT_WAREHOUSE_ID,
+          code: 'KHO-MN-01',
+          name: 'Kho Tổng Miền Nam',
+          address: 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương',
+          phone: '02743790001',
+          managerId: null,
+          status: 'ACTIVE',
+          locationCount: 3,
+        },
+        {
+          id: '11111111-0000-0000-0000-000000000002',
+          code: 'KHO-MB-01',
+          name: 'Kho Phân Phối Hà Nội',
+          address: 'Lô CN-05 KCN Ninh Hiệp, Gia Lâm, Hà Nội',
+          phone: '02438890002',
+          managerId: null,
+          status: 'ACTIVE',
+          locationCount: 2,
+        },
+        {
+          id: '11111111-0000-0000-0000-000000000003',
+          code: 'KHO-MT-01',
+          name: 'Kho Vùng Tây Nam Bộ',
+          address: 'Đường số 3 KCN Trà Nóc 1, Bình Thủy, Cần Thơ',
+          phone: '02923890003',
+          managerId: null,
+          status: 'ACTIVE',
+          locationCount: 1,
+        },
+      ];
+    }
     return this.databaseService.query<WarehouseEntity>(`
       SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
              w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
@@ -29,6 +63,11 @@ export class WarehousesService {
       FROM warehouses w LEFT JOIN warehouse_locations l ON l.warehouse_id = w.id
       GROUP BY w.id ORDER BY w.name
     `);
+  }
+
+  async findById(id: string): Promise<WarehouseEntity | null> {
+    const list = await this.findAll();
+    return list.find((w) => w.id === id || w.code === id) || null;
   }
 
   async listManagers(): Promise<WarehouseManagerEntity[]> {
