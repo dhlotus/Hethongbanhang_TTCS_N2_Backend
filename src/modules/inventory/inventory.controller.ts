@@ -107,6 +107,9 @@ async getStockOverview(@Query('warehouseId') warehouseId?: string): Promise<Stoc
       baseUnit: string;
       units: Array<{ unitName: string; conversionRate: number; isBaseUnit: boolean }>;
       warehouse: string;
+      warehouseId?: string;
+      minStockLevel?: number;
+      isBelowMinStock?: boolean;
       activeReservations: Array<{
         id: string;
         orderId: string;
@@ -131,6 +134,9 @@ async getStockOverview(@Query('warehouseId') warehouseId?: string): Promise<Stoc
       baseUnit: item.baseUnit,
       units: item.units,
       warehouse: item.warehouse,
+      warehouseId: item.warehouseId,
+      minStockLevel: item.minStockLevel ?? 0,
+      isBelowMinStock: Boolean(item.isBelowMinStock),
       activeReservations: item.activeReservations || [],
     }));
   }

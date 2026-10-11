@@ -909,3 +909,28 @@ est build -> 0 lỗi.
 - **Trạng thái kiểm thử:**
   - Backend Test Suites: 6/6 test cases passed (100%) tại test/inventory-reservation-sn180.spec.ts.
   - Backend Build: nest build -> 0 lỗi, compile thành công 100%.
+
+### [Sprint 5] - [SN-183]: Cảnh Báo Tồn Kho Dưới Mức Tối Thiểu (Min Stock Level & Low Stock Alerts)
+- **Thời gian hoàn thành:** 2026-10-11
+- **Mã Jira / Task:** SN-183 (Parent SN-229 Kho & Tồn kho / S5-08 - Sprint 5)
+- **Tiêu đề:** "Là Quản lý kho, tôi muốn được cảnh báo khi tồn xuống dưới mức tối thiểu, để đặt hàng nhà cung cấp trước khi đứt hàng chứ không phải sau."
+- **Tiêu chí chấp nhận (ACs):**
+  - **AC1:** Khai báo mức tồn tối thiểu theo SKU và theo từng kho (`min_stock_level`).
+  - **AC2:** Hàng dưới ngưỡng hiển thị nổi bật trong sổ tồn kho (dòng highlight viền đỏ, badge cảnh báo mức thiếu hụt, tab lọc nhanh).
+  - **AC3:** Cảnh báo hiển thị trực quan trên Dashboard kho (Card metric có link điều hướng và Widget danh sách SKU sắp đứt hàng).
+  - **AC4:** Tích hợp liền mạch, bảo toàn 100% tính năng SN-180 (Giữ chỗ 3 cột ACID Transaction: Thực tế, Đang giữ chỗ, Khả dụng).
+- **Danh sách file thay đổi:**
+  - **Backend:**
+    - `src/modules/inventory/inventory.controller.ts` (Cập nhật endpoint `GET /inventory/stocks`: trả về `warehouseId`, `minStockLevel`, `isBelowMinStock`).
+  - **Frontend:**
+    - `src/types/inventory.types.ts` (Bổ sung `warehouseId?: string` vào `StockItem`).
+    - `src/services/inventory.service.ts` (Đồng bộ mapping `minStockLevel`, `isBelowMinStock`, lưu/đọc cấu hình tồn tối thiểu và fallback cảnh báo).
+    - `src/pages/inventory/stock-list-page.tsx` (Bổ sung cột `Tồn tối thiểu (Min)`, nút thiết lập mở `MinStockModal`, highlight dòng hàng dưới ngưỡng, badge trạng thái cảnh báo, tab lọc `Cảnh báo dưới tồn ({count})`, thẻ metric tổng số SKU hụt tồn, hỗ trợ query param `?filter=BELOW_MIN_STOCK`).
+    - `src/pages/dashboard-page.tsx` (Card "Sản phẩm cảnh báo tồn" điều hướng nhanh tới `/inventory/stock?filter=BELOW_MIN_STOCK`, nhúng `LowStockAlertsWidget` cho Quản lý kho / Thủ kho).
+- **Chi tiết kỹ thuật:**
+  - **Công thức xác định ngưỡng cảnh báo:** `isBelowMinStock = minStockLevel > 0 && availableQuantity <= minStockLevel`.
+  - **Số lượng thiếu hụt (Shortage):** `shortage = Math.max(0, minStockLevel - availableQuantity)`.
+  - **Bảo toàn tính toàn vẹn:** Lưu trữ tồn tối thiểu qua API `PATCH /inventory/stock-balances/warehouses/:warehouseId/sku/:sku/min-stock`, bảo toàn đồng thời dữ liệu giữ chỗ của SN-180.
+- **Trạng thái kiểm thử & Build:**
+  - Backend Build: `nest build` -> 0 lỗi, compile thành công 100%.
+  - Frontend Build: `tsc -b && vite build` -> 0 lỗi, compile thành công 100%.
