@@ -25,6 +25,7 @@ import {
 } from './dto/import-product.dto';
 import { ProductUnitDto } from './dto/product-unit.dto';
 import { OrdersService } from '../orders/orders.service';
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -132,7 +133,9 @@ export class ProductsService implements OnModuleInit {
       product_sku: string;
       physical_quantity: string;
     }>(
-      `SELECT product_sku, physical_quantity::text FROM app_inventory_stock_balances`,
+      `SELECT product_sku, physical_quantity::text FROM app_inventory_stock_balances
+       WHERE warehouse_id = $1::uuid`,
+      [DEFAULT_WAREHOUSE_ID],
     );
     const balanceBySku = new Map(
       balances.map((balance) => [balance.product_sku.toUpperCase(), Number(balance.physical_quantity)]),

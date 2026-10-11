@@ -40,6 +40,7 @@ export class AgencyEntity {
    */
   assignedUser: string;
 
+
   /**
    * Trạng thái hồ sơ đại lý: ACTIVE (hoạt động) | INACTIVE (ngừng giao dịch)
    */
