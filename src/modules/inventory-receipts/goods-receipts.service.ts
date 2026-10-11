@@ -12,6 +12,10 @@ export class GoodsReceiptsService implements OnModuleInit {
   constructor(private readonly db: DatabaseService) {}
 
   async onModuleInit() {
+    if (!this.db?.isConnected()) {
+      this.logger.warn('CSDL PostgreSQL chưa kết nối, bỏ qua khởi tạo bảng goods_receipts.');
+      return;
+    }
     this.logger.log('Khởi tạo bảng goods_receipts và goods_receipt_items...');
     await this.db.query(`
       CREATE TABLE IF NOT EXISTS goods_receipts (
