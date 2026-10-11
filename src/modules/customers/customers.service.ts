@@ -631,10 +631,14 @@ export class CustomersService implements OnModuleInit {
       list = list.filter((c) => c.status && c.status.toUpperCase().trim() === st);
     }
 
-    // 7. Phân trang kết quả
+    // 7. Phân trang kết quả & Thống kê tổng hợp toàn bộ danh sách
+    const total = list.length;
+    const activeCount = list.filter((c) => c.status === CustomerStatus.ACTIVE).length;
+    const totalCreditLimit = list.reduce((sum, c) => sum + (c.creditLimit || 0), 0);
+    const totalCurrentDebt = list.reduce((sum, c) => sum + (c.currentDebt || 0), 0);
+
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
-    const total = list.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const startIndex = (page - 1) * limit;
     const data = list.slice(startIndex, startIndex + limit);
@@ -645,6 +649,9 @@ export class CustomersService implements OnModuleInit {
       page,
       limit,
       totalPages,
+      activeCount,
+      totalCreditLimit,
+      totalCurrentDebt,
     };
   }
 
