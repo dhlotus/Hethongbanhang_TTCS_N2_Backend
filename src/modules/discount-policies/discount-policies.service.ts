@@ -260,6 +260,7 @@ export class DiscountPoliciesService implements OnModuleInit {
     categoryId: string,
     quantity: number,
     productSku?: string,
+    productName?: string,
   ): number {
     if (quantity <= 0) return 0;
 
@@ -274,7 +275,7 @@ export class DiscountPoliciesService implements OnModuleInit {
         if (p.startDate && p.startDate.split('T')[0] > today) return false;
         if (p.endDate && p.endDate.split('T')[0] < today) return false;
 
-        return this.isProductMatchingPolicy(p, productId, productSku, categoryId);
+        return this.isProductMatchingPolicy(p, productId, productSku, categoryId, productName);
       },
     );
 
@@ -331,6 +332,7 @@ export class DiscountPoliciesService implements OnModuleInit {
     productId: string,
     productSku?: string,
     categoryId?: string,
+    productName?: string,
   ): boolean {
     // Thu thập toàn bộ targets được chỉ định trong chính sách
     const targets = new Set<string>();
@@ -351,17 +353,27 @@ export class DiscountPoliciesService implements OnModuleInit {
     if (productId) productKeys.add(productId.trim().toUpperCase());
     if (productSku) productKeys.add(productSku.trim().toUpperCase());
     if (categoryId) productKeys.add(categoryId.trim().toUpperCase());
+    if (productName) productKeys.add(productName.trim().toUpperCase());
 
-    // Nhận diện phân loại ngành hàng theo SKU và tên đặc trưng
-    const sku = (productSku || productId || '').toUpperCase();
-    if (sku.includes('MILK') || sku.includes('SỮA')) {
+    // Nhận diện phân loại ngành hàng theo chuỗi đa chiều: SKU + ID + Ngành hàng + Tên sản phẩm
+    const searchStr = `${productSku || ''} ${productId || ''} ${categoryId || ''} ${productName || ''}`.toUpperCase();
+
+    if (searchStr.includes('MILK') || searchStr.includes('SỮA')) {
       productKeys.add('MILK');
       productKeys.add('MILK_POWDER');
       productKeys.add('CAT-MILK-POWDER');
       productKeys.add('MILK_READY');
       productKeys.add('MILK_NUT');
+      productKeys.add('CAT-MILK-NUT');
     }
-    if (sku.includes('NUT') || sku.includes('HẠT')) {
+    if (
+      searchStr.includes('NUT') ||
+      searchStr.includes('HẠT') ||
+      searchStr.includes('ÓC CHÓ') ||
+      searchStr.includes('HẠNH NHÂN') ||
+      searchStr.includes('MACCA') ||
+      searchStr.includes('ĐẬU')
+    ) {
       productKeys.add('MILK_NUT');
       productKeys.add('MILK');
       productKeys.add('CEREAL_NUTS');
@@ -369,35 +381,42 @@ export class DiscountPoliciesService implements OnModuleInit {
       productKeys.add('CAT-MILK-NUT');
       productKeys.add('CAT-CEREAL-NUTS');
     }
-    if (sku.includes('NEST') || sku.includes('YẾN')) {
+    if (searchStr.includes('NEST') || searchStr.includes('YẾN')) {
       productKeys.add('NEST');
       productKeys.add('NEST_READY');
       productKeys.add('NEST_PURE');
       productKeys.add('CAT-NEST-READY');
       productKeys.add('CAT-NEST-PURE');
     }
-    if (sku.includes('CEREAL') || sku.includes('NGŨ CỐC')) {
+    if (searchStr.includes('CEREAL') || searchStr.includes('NGŨ CỐC')) {
       productKeys.add('CEREAL');
       productKeys.add('CEREAL_SPROUT');
       productKeys.add('CEREAL_NUTS');
       productKeys.add('CAT-CEREAL-SPROUT');
       productKeys.add('CAT-CEREAL-NUTS');
     }
-    if (sku.includes('COLLAGEN') || sku.includes('SUPP') || sku.includes('ĐÔNG TRÙNG')) {
+    if (
+      searchStr.includes('COLLAGEN') ||
+      searchStr.includes('SUPP') ||
+      searchStr.includes('ĐÔNG TRÙNG') ||
+      searchStr.includes('THỰC PHẨM CHỨC NĂNG')
+    ) {
       productKeys.add('SUPP');
       productKeys.add('SUPP_COLLAGEN');
       productKeys.add('SUPP_HERB');
       productKeys.add('CAT-SUPP-COLLAGEN');
     }
     if (
-      sku.includes('TEA') ||
-      sku.includes('WATER') ||
-      sku.includes('COLA') ||
-      sku.includes('ORANGE') ||
-      sku.includes('BEVERAGE') ||
-      sku.includes('COFFEE') ||
-      sku.includes('TRÀ') ||
-      sku.includes('KHOÁNG')
+      searchStr.includes('TEA') ||
+      searchStr.includes('WATER') ||
+      searchStr.includes('COLA') ||
+      searchStr.includes('ORANGE') ||
+      searchStr.includes('BEVERAGE') ||
+      searchStr.includes('COFFEE') ||
+      searchStr.includes('TRÀ') ||
+      searchStr.includes('KHOÁNG') ||
+      searchStr.includes('NƯỚC') ||
+      searchStr.includes('NƯỚC GIẢI KHÁT')
     ) {
       productKeys.add('BEVERAGE');
       productKeys.add('CARBONATED');
@@ -412,6 +431,13 @@ export class DiscountPoliciesService implements OnModuleInit {
     // 3. Khớp nếu có bất kỳ giao điểm nào giữa policy targets và productKeys
     for (const key of productKeys) {
       if (targets.has(key)) return true;
+    }
+
+    // 4. Khớp từng từ khóa trong targets nếu xuất hiện trong searchStr
+    for (const target of targets) {
+      if (target && target.length >= 3 && searchStr.includes(target)) {
+        return true;
+      }
     }
 
     return false;
