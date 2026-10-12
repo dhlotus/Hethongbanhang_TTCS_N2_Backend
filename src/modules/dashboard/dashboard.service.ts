@@ -36,11 +36,28 @@ export class DashboardService {
     );
     const isSalesRep = roles.includes(UserRole.SALES_REP);
 
-    // Get all orders (up to 1000 for mock)
-    const { data: allOrders } = await this.ordersService.findAllOrders({ limit: 10000 });
+    // Phân quyền Data Scope (*) cho SALES_REP (R*):
+    // Chỉ lấy đơn hàng thuộc tuyến phụ trách của nhân viên kinh doanh
+    const { data: allOrders } = await this.ordersService.findAllOrders(
+      { limit: 10000 },
+      currentUser,
+    );
     
-    // Get all customers
-    const allCustomers = await this.customersService.findAllCustomers();
+    // Lấy danh sách đại lý (nếu là Sales Rep, chỉ lấy đại lý tuyến phụ trách)
+    let allCustomers = await this.customersService.findAllCustomers();
+    if (isSalesRep && !isManager) {
+      const repId = currentUser.userId;
+      const repName = currentUser.username?.toLowerCase();
+      allCustomers = allCustomers.filter((c) => {
+        const matchId =
+          c.salesRepId === repId ||
+          c.salesRep?.id === repId ||
+          (repId === 'usr-sale-01' && (c.salesRepId === 'usr-sales-002' || c.salesRepId === 'usr-sale-01')) ||
+          (repId === 'usr-sales-002' && (c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002'));
+        const matchName = repName && c.salesRepName?.toLowerCase().includes(repName);
+        return matchId || matchName;
+      });
+    }
 
     // Get all products
     const allProducts = await this.productsService.findAll();

@@ -51,7 +51,7 @@ import { EXCEL_IMPORT_MAX_FILE_SIZE } from './constants/excel-import.constant';
  */
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
@@ -152,6 +152,7 @@ export class UsersController {
    * POST /api/users
    */
   @Post()
+  @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateUserDto): Promise<CreateUserResult> {
     return this.usersService.create(dto);
@@ -175,6 +176,7 @@ export class UsersController {
    * PATCH /api/users/:id
    */
   @Patch(':id')
+  @Roles(UserRole.ADMIN)
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
@@ -202,6 +204,7 @@ export class UsersController {
    * PATCH /api/users/:id/status
    */
   @Patch(':id/status')
+  @Roles(UserRole.ADMIN)
   async updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateUserStatusDto,
@@ -215,6 +218,7 @@ export class UsersController {
    * POST /api/users/:id/reset-code
    */
   @Post(':id/reset-code')
+  @Roles(UserRole.ADMIN)
   async generateResetCode(
     @Param('id') id: string,
   ): Promise<{ resetCode: string; user: SafeUser }> {

@@ -71,10 +71,15 @@ export class GoodsReceiptsService implements OnModuleInit {
     await client.query('BEGIN');
     try {
       // 1. Generate code
-      const codeRes = await client.query(`SELECT 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || LPAD(COALESCE(MAX(SUBSTRING(code FROM 9)), '0')::INT + 1, 4, '0') AS next_code FROM goods_receipts WHERE code LIKE 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '%'`);
+      const codeRes = await client.query(`SELECT 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || LPAD((COALESCE(MAX(SUBSTRING(code FROM 9)), '0')::INT + 1)::TEXT, 4, '0') AS next_code FROM goods_receipts WHERE code LIKE 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '%'`);
       const code = codeRes.rows[0].next_code;
 
       const totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
+
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const creatorId = user?.userId && uuidRegex.test(user.userId)
+        ? user.userId
+        : '00000000-0000-0000-0000-000000000004';
 
       const receiptRes = await client.query(
         `INSERT INTO goods_receipts (
@@ -84,7 +89,7 @@ export class GoodsReceiptsService implements OnModuleInit {
         [
           code, dto.warehouseId, dto.supplierId || null, ReceiptType.PURCHASE_RECEIPT, 
           dto.referenceDocument, GoodsReceiptStatus.DRAFT, totalCost, 
-          dto.notes, user.userId, dto.receiptDate || null
+          dto.notes, creatorId, dto.receiptDate || null
         ]
       );
       
