@@ -35,8 +35,10 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { UserRole } from '../../common/enums/user-role.enum';
+import { Role, UserRole } from '../../common/enums/user-role.enum';
 import { OrdersService } from '../orders/orders.service';
+import { CreditLimitService } from '../credit-limit/credit-limit.service';
+import { UpdateCreditLimitDto } from '../credit-limit/dto/update-credit-limit.dto';
 import {
   CustomerPurchaseHistoryResponse,
   LatestOrderSummary,
@@ -52,6 +54,9 @@ export class CustomersController {
     @Optional()
     @Inject(forwardRef(() => OrdersService))
     private readonly ordersService?: OrdersService,
+    @Optional()
+    @Inject(forwardRef(() => CreditLimitService))
+    private readonly creditLimitService?: CreditLimitService,
   ) {}
 
   /**
@@ -303,5 +308,44 @@ export class CustomersController {
   @Public()
   async deactivateCustomer(@Param('id') id: string): Promise<CustomerEntity> {
     return this.customersService.deactivateCustomer(id);
+  }
+
+  /**
+   * Cập nhật hạn mức công nợ cho đại lý (SN-34)
+   * Phân quyền: CHỈ ACCOUNTANT và SALES_MANAGER
+   * PUT /api/customers/:id/credit-limit
+   */
+  @Put(':id/credit-limit')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async updateCreditLimit(
+    @Param('id') id: string,
+    @Body() dto: UpdateCreditLimitDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    if (this.creditLimitService) {
+      return this.creditLimitService.updateCreditLimit(id, dto, currentUser);
+    }
+    return this.customersService.updateCustomerCredit(id, dto);
+  }
+
+  /**
+   * Alias cập nhật hạn mức công nợ cho đại lý (SN-34)
+   * PATCH /api/customers/:id/credit-limit
+   */
+  @Patch(':id/credit-limit')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async patchCreditLimit(
+    @Param('id') id: string,
+    @Body() dto: UpdateCreditLimitDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    if (this.creditLimitService) {
+      return this.creditLimitService.updateCreditLimit(id, dto, currentUser);
+    }
+    return this.customersService.updateCustomerCredit(id, dto);
   }
 }

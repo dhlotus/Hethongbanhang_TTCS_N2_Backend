@@ -41,7 +41,7 @@ export class CreditLimitController {
    * GET /api/credit-limit/stats
    */
   @Get('stats')
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
   async getCreditLimitStats(): Promise<CreditLimitStatsDto> {
     return this.creditLimitService.getCreditLimitStats();
   }
@@ -51,7 +51,7 @@ export class CreditLimitController {
    * GET /api/credit-limit
    */
   @Get()
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
   async getCreditLimits(
     @Query() query: QueryCreditLimitDto,
   ): Promise<PaginatedCreditLimitResult> {
@@ -63,7 +63,7 @@ export class CreditLimitController {
    * GET /api/credit-limit/:agencyId
    */
   @Get(':agencyId')
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
   async getAgencyCreditLimitById(
     @Param('agencyId') agencyId: string,
   ): Promise<AgencyCreditLimit> {
@@ -75,7 +75,7 @@ export class CreditLimitController {
    * GET /api/credit-limit/:agencyId/logs
    */
   @Get(':agencyId/logs')
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
   async getCreditLimitLogs(
     @Param('agencyId') agencyId: string,
   ): Promise<CreditLimitLog[]> {
@@ -87,7 +87,7 @@ export class CreditLimitController {
    * GET /api/credit-limit/:agencyId/history
    */
   @Get(':agencyId/history')
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
   async getCreditLimitHistory(
     @Param('agencyId') agencyId: string,
   ): Promise<CreditLimitLog[]> {
@@ -96,11 +96,11 @@ export class CreditLimitController {
 
   /**
    * Cập nhật hạn mức công nợ cho đại lý (SN-34)
-   * Phân quyền: CHỈ ACCOUNTANT_DEBT (Kế toán công nợ) và BUSINESS_MANAGER (Quản lý kinh doanh)
+   * Phân quyền: CHỈ ACCOUNTANT (Kế toán công nợ) và SALES_MANAGER (Quản lý kinh doanh)
    * PUT /api/credit-limit/:agencyId
    */
   @Put(':agencyId')
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER)
   @HttpCode(HttpStatus.OK)
   async updateCreditLimit(
     @Param('agencyId') agencyId: string,
@@ -115,12 +115,31 @@ export class CreditLimitController {
   }
 
   /**
+   * Alias cập nhật hạn mức công nợ (hỗ trợ PATCH) (SN-34)
+   * PATCH /api/credit-limit/:agencyId
+   */
+  @Patch(':agencyId')
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async patchCreditLimit(
+    @Param('agencyId') agencyId: string,
+    @Body() dto: UpdateCreditLimitDto,
+    @CurrentUser() user?: ICurrentUser,
+  ): Promise<AgencyCreditLimit> {
+    return this.creditLimitService.updateCreditLimit(
+      agencyId,
+      dto,
+      user,
+    );
+  }
+
+  /**
    * Khóa / Mở khóa hạn mức công nợ của đại lý (SN-34)
-   * Phân quyền: CHỈ ACCOUNTANT_DEBT và BUSINESS_MANAGER
+   * Phân quyền: CHỈ ACCOUNTANT và SALES_MANAGER
    * PATCH /api/credit-limit/:agencyId/status
    */
   @Patch(':agencyId/status')
-  @Roles(Role.ACCOUNTANT_DEBT, Role.BUSINESS_MANAGER)
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER)
   @HttpCode(HttpStatus.OK)
   async updateCreditStatus(
     @Param('agencyId') agencyId: string,
