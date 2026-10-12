@@ -22,8 +22,8 @@ export class CreateCustomerDto {
 
   @IsNotEmpty({ message: 'Mã số thuế không được để trống' })
   @IsString({ message: 'Mã số thuế phải là chuỗi' })
-  @Matches(/^[0-9]{10}(-[0-9]{3})?$|^[0-9]{13}$/, {
-    message: 'Mã số thuế phải gồm 10 chữ số (hoặc 13 chữ số / 10 số kèm mã chi nhánh 3 số, ví dụ 0312345678-001)',
+  @Matches(/^[0-9]{10,13}(-[0-9]{3})?$/, {
+    message: 'Mã số thuế phải gồm chữ số (từ 10 đến 13 chữ số, ví dụ 12 chữ số)',
   })
   taxCode: string;
 

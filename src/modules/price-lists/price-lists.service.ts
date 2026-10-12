@@ -20,12 +20,35 @@ import { PaginatedPriceListsResponse } from './interfaces/paginated-price-lists.
 import { DatabaseService } from '../../database/database.service';
 
 /**
+ * Lấy tiền tố mã định danh theo nhóm khách hàng:
+ * - AGENT_LEVEL_1 -> C1 (Đại lý cấp 1)
+ * - AGENT_LEVEL_2 -> C2 (Đại lý cấp 2)
+ * - RETAIL -> C3 (Bán lẻ Niêm yết)
+ */
+export function getCustomerGroupPrefix(group: CustomerGroup | string): string {
+  switch (group) {
+    case CustomerGroup.AGENT_LEVEL_1:
+    case 'AGENT_LEVEL_1':
+      return 'C1';
+    case CustomerGroup.AGENT_LEVEL_2:
+    case 'AGENT_LEVEL_2':
+      return 'C2';
+    case CustomerGroup.RETAIL:
+    case 'RETAIL':
+      return 'C3';
+    default:
+      return 'C1';
+  }
+}
+
+/**
  * Service Quản lý Bảng giá & Chiết khấu B2B (SN-27 / EP-02):
  * - Hỗ trợ lưu trữ bền vững cơ sở dữ liệu PostgreSQL (app_price_lists) và đĩa (price_lists.json)
+ * - Chuẩn hóa mã bảng giá đọc được và hiểu được: BG-C1-0001, BG-C2-0001, BG-C3-0001
+ * - Tự động đánh phiên bản nhân bản: -V2, -V3,... (ví dụ BG-C1-0001-V2)
  * - Validation giá sàn nghiêm ngặt: Giá bán (price) >= Giá sàn (minPrice)
  * - Khóa Sửa/Xóa khi bảng giá đã phát sinh đơn hàng (hasOrders = true)
  * - Nhân bản phiên bản mới (Clone Version: tăng version, DRAFT, hasOrders = false)
- * - Nạp sẵn 5 bảng giá mẫu chuẩn hóa ngay khi khởi động
  */
 @Injectable()
 export class PriceListsService implements OnModuleInit {
@@ -44,6 +67,8 @@ export class PriceListsService implements OnModuleInit {
     if (this.databaseService?.isConnected()) {
       await this.initDatabaseSchemaAndLoad();
     }
+    // Tự động đồng bộ chuẩn hóa toàn bộ mã cũ còn tồn tại
+    await this.syncLegacyPriceListCodes();
   }
 
   private getStorageFilePath(): string {
@@ -188,7 +213,7 @@ export class PriceListsService implements OnModuleInit {
       // 1. Bảng giá Bán lẻ Niêm yết 2026: RETAIL, ACTIVE, hasOrders: false -> Sửa/Xóa tự do
       new PriceListEntity({
         id: 'pl-001',
-        code: 'DL-0001',
+        code: 'BG-C3-0001',
         name: 'Bảng giá Bán lẻ Niêm yết 2026',
         customerGroup: CustomerGroup.RETAIL,
         startDate: '2026-01-01',
@@ -257,7 +282,7 @@ export class PriceListsService implements OnModuleInit {
       // 2. Bảng giá Đại lý Cấp 1 - Q4/2026: AGENT_LEVEL_1, ACTIVE, hasOrders: true -> Khóa Sửa/Xóa, bật Clone Version
       new PriceListEntity({
         id: 'pl-002',
-        code: 'DL-0002',
+        code: 'BG-C1-0001',
         name: 'Bảng giá Đại lý Cấp 1 - Q4/2026',
         customerGroup: CustomerGroup.AGENT_LEVEL_1,
         startDate: '2026-10-01',
@@ -326,7 +351,7 @@ export class PriceListsService implements OnModuleInit {
       // 3. Bảng giá Đại lý Cấp 2 - Mùa Tết: AGENT_LEVEL_2, ACTIVE, hasOrders: false -> Dùng kiểm thử nhập Giá bán < Giá sàn
       new PriceListEntity({
         id: 'pl-003',
-        code: 'DL-0003',
+        code: 'BG-C2-0001',
         name: 'Bảng giá Đại lý Cấp 2 - Mùa Tết',
         customerGroup: CustomerGroup.AGENT_LEVEL_2,
         startDate: '2026-01-01',
@@ -395,7 +420,7 @@ export class PriceListsService implements OnModuleInit {
       // 4. Bảng giá Đại lý Cấp 1 - v2.0: AGENT_LEVEL_1, DRAFT, parentVersionId = pl-002 -> Mô phỏng kết quả sau khi Clone Version
       new PriceListEntity({
         id: 'pl-004',
-        code: 'DL-0002-v2',
+        code: 'BG-C1-0001-V2',
         name: 'Bảng giá Đại lý Cấp 1 - v2.0',
         customerGroup: CustomerGroup.AGENT_LEVEL_1,
         startDate: '2026-10-01',
@@ -404,7 +429,7 @@ export class PriceListsService implements OnModuleInit {
         version: 2,
         parentVersionId: 'pl-002',
         hasOrders: false,
-        description: 'Bản nháp phiên bản 2.0 nhân bản từ DL-0002, chuẩn bị cập nhật mức giá mới',
+        description: 'Bản nháp phiên bản 2.0 nhân bản từ BG-C1-0001, chuẩn bị cập nhật mức giá mới',
         createdAt: new Date('2026-10-02T14:15:00.000Z'),
         updatedAt: new Date('2026-10-02T14:15:00.000Z'),
         items: [
@@ -464,7 +489,7 @@ export class PriceListsService implements OnModuleInit {
       // 5. Khuyến mãi Mùa Hè 2026: RETAIL, EXPIRED (ngày trong quá khứ) -> Dùng kiểm thử bộ lọc thời gian & hết hạn
       new PriceListEntity({
         id: 'pl-005',
-        code: 'DL-0005',
+        code: 'BG-C3-0002',
         name: 'Khuyến mãi Mùa Hè 2026',
         customerGroup: CustomerGroup.RETAIL,
         startDate: '2026-06-01',
@@ -683,6 +708,30 @@ export class PriceListsService implements OnModuleInit {
   }
 
   /**
+   * Tự sinh mã bảng giá chuẩn đọc được và hiểu được theo quy tắc:
+   * Định dạng: BG-<Cấp>-<STT 4 số> (Ví dụ: BG-C1-0001, BG-C2-0001, BG-C3-0001)
+   */
+  generateNextPriceListCode(customerGroup: CustomerGroup | string): string {
+    const cGroup = getCustomerGroupPrefix(customerGroup);
+    const prefix = `BG-${cGroup}`;
+    const pattern = new RegExp(`^${prefix}-(\\d{4})(?:-V\\d+)?$`, 'i');
+
+    let maxSeq = 0;
+    for (const pl of this.priceLists.values()) {
+      const match = pl.code.match(pattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxSeq) {
+          maxSeq = num;
+        }
+      }
+    }
+
+    const nextSeq = maxSeq + 1;
+    return `${prefix}-${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  /**
    * Tạo mới bảng giá + validate Giá bán >= Giá sàn
    * POST /api/price-lists
    */
@@ -690,10 +739,10 @@ export class PriceListsService implements OnModuleInit {
     // 1. Validate giá bán >= giá sàn
     this.validateItemsPricing(createDto.items);
 
-    // 2. Chuẩn hóa mã bảng giá
-    const code = createDto.code
+    // 2. Chuẩn hóa mã bảng giá: sinh tự động BG-C*-000X nếu để trống
+    const code = createDto.code && createDto.code.trim()
       ? createDto.code.trim().toUpperCase()
-      : `BG-${createDto.customerGroup}-${Date.now().toString(36).toUpperCase()}`;
+      : this.generateNextPriceListCode(createDto.customerGroup);
 
     // Kiểm tra trùng mã
     const existing = Array.from(this.priceLists.values()).find(
@@ -851,10 +900,12 @@ export class PriceListsService implements OnModuleInit {
     const nextVersion = source.version + 1;
     const newId = `pl-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
 
-    // Tự sinh mã mới chuẩn hóa (VD: DL-0001-v2, DL-0001-v3)
-    const baseCode = source.code.replace(/-v\d+$/i, '');
-    const defaultCode = `${baseCode}-v${nextVersion}`;
-    const newCode = cloneDto?.code ? cloneDto.code.trim() : defaultCode;
+    // Tự sinh mã mới chuẩn hóa theo quy tắc: ${baseCode}-V${nextVersion} (VD: BG-C1-0001-V2, BG-C1-0001-V3)
+    const baseCode = source.code.replace(/-V\d+$/i, '');
+    const defaultCode = `${baseCode}-V${nextVersion}`;
+    const newCode = cloneDto?.code && cloneDto.code.trim()
+      ? cloneDto.code.trim().toUpperCase()
+      : defaultCode;
 
     // Tự sinh tên mới
     const defaultName = `${source.name} (Bản sao v${nextVersion}.0)`;
@@ -937,4 +988,56 @@ export class PriceListsService implements OnModuleInit {
         pl.id.toLowerCase() === lower || pl.code.toLowerCase() === lower,
     );
   }
+
+  /**
+   * Ánh xạ và đồng bộ tự động toàn bộ mã cũ sang chuẩn mới:
+   * BG-C1-0001, BG-C2-0001, BG-C3-0001, BG-C1-0001-V2,...
+   */
+  private async syncLegacyPriceListCodes(): Promise<void> {
+    const legacyMap: Record<string, string> = {
+      'DL-0001': 'BG-C3-0001',
+      'DL-0002': 'BG-C1-0001',
+      'DL-0002-V2': 'BG-C1-0001-V2',
+      'DL-0002-v2': 'BG-C1-0001-V2',
+      'DL-0003': 'BG-C2-0001',
+      'DL-0005': 'BG-C3-0002',
+      'BG-AGENT_LEVEL_1-MV51RVZ2': 'BG-C1-0002',
+    };
+
+    let hasChanged = false;
+
+    for (const [id, pl] of this.priceLists.entries()) {
+      let targetCode = legacyMap[pl.code];
+
+      // Đổi đuôi -v2 thành -V2 nếu có
+      if (!targetCode && /-v\d+$/i.test(pl.code)) {
+        targetCode = pl.code.replace(/-v(\d+)$/i, '-V$1');
+      }
+
+      // Xử lý các mã cũ tự sinh dạng BG-AGENT_LEVEL_1-...
+      if (!targetCode && pl.code.startsWith('BG-AGENT_LEVEL_')) {
+        targetCode = 'BG-C1-0002';
+      }
+
+      if (targetCode && targetCode !== pl.code) {
+        console.log(`[PRICE_LISTS] Đồng bộ mã bảng giá: ${pl.code} -> ${targetCode}`);
+        pl.code = targetCode;
+        if (pl.description && pl.description.includes('DL-0002')) {
+          pl.description = pl.description.replace(/DL-0002/g, 'BG-C1-0001');
+        }
+        this.priceLists.set(id, pl);
+        hasChanged = true;
+      }
+    }
+
+    if (hasChanged) {
+      this.savePriceListsToDisk();
+      if (this.databaseService?.isConnected()) {
+        for (const pl of this.priceLists.values()) {
+          await this.savePriceListToDb(pl);
+        }
+      }
+    }
+  }
 }
+
