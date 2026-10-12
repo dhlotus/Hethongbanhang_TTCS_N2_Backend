@@ -3,7 +3,10 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CustomerGroup } from '../../common/enums/customer-group.enum';
 import { PriceListStatus } from '../../common/enums/price-list-status.enum';
 import { ClonePriceListDto } from './dto/clone-price-list.dto';
@@ -14,10 +17,11 @@ import { UpdatePriceListDto } from './dto/update-price-list.dto';
 import { PriceListItemEntity } from './entities/price-list-item.entity';
 import { PriceListEntity } from './entities/price-list.entity';
 import { PaginatedPriceListsResponse } from './interfaces/paginated-price-lists.interface';
+import { DatabaseService } from '../../database/database.service';
 
 /**
  * Service Quản lý Bảng giá & Chiết khấu B2B (SN-27 / EP-02):
- * - Quản lý In-Memory Storage (Map JS trên RAM)
+ * - Hỗ trợ lưu trữ bền vững cơ sở dữ liệu PostgreSQL (app_price_lists) và đĩa (price_lists.json)
  * - Validation giá sàn nghiêm ngặt: Giá bán (price) >= Giá sàn (minPrice)
  * - Khóa Sửa/Xóa khi bảng giá đã phát sinh đơn hàng (hasOrders = true)
  * - Nhân bản phiên bản mới (Clone Version: tăng version, DRAFT, hasOrders = false)
@@ -27,13 +31,152 @@ import { PaginatedPriceListsResponse } from './interfaces/paginated-price-lists.
 export class PriceListsService implements OnModuleInit {
   private priceLists = new Map<string, PriceListEntity>();
 
-  constructor() {
+  constructor(@Optional() private readonly databaseService?: DatabaseService) {
     this.seedInitialPriceLists();
+    this.loadPriceListsFromDisk();
   }
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     if (this.priceLists.size === 0) {
       this.seedInitialPriceLists();
+    }
+    this.loadPriceListsFromDisk();
+    if (this.databaseService?.isConnected()) {
+      await this.initDatabaseSchemaAndLoad();
+    }
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'price_lists.json');
+  }
+
+  private loadPriceListsFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<PriceListEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const entity = new PriceListEntity({
+          ...item,
+          createdAt: item.createdAt ? new Date(item.createdAt) : new Date(),
+          updatedAt: item.updatedAt ? new Date(item.updatedAt) : new Date(),
+          items: (item.items || []).map((it) => new PriceListItemEntity(it as any)),
+        });
+        this.priceLists.set(item.id, entity);
+      }
+    } catch (err) {
+      console.warn('[PRICE_LISTS] Lỗi khi nạp bảng giá từ đĩa:', err);
+    }
+  }
+
+  private savePriceListsToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.priceLists.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[PRICE_LISTS] Lỗi khi lưu bảng giá ra đĩa:', err);
+    }
+  }
+
+  private async initDatabaseSchemaAndLoad(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS app_price_lists (
+          id TEXT PRIMARY KEY,
+          code TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          customer_group TEXT NOT NULL,
+          status TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_price_lists_created_at
+          ON app_price_lists(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_app_price_lists_code
+          ON app_price_lists(code);
+      `);
+
+      const countRes = await this.databaseService.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM app_price_lists;`,
+      );
+      const totalCount = parseInt(countRes[0]?.count || '0', 10);
+
+      if (totalCount === 0) {
+        // Nạp 5 bảng giá mẫu vào PostgreSQL
+        for (const pl of this.priceLists.values()) {
+          await this.savePriceListToDb(pl);
+        }
+      } else {
+        // Tải các bảng giá từ PostgreSQL lên memory
+        const rows = await this.databaseService.query<{ payload: any }>(
+          `SELECT payload FROM app_price_lists ORDER BY created_at ASC;`,
+        );
+        for (const row of rows) {
+          if (row.payload && row.payload.id) {
+            const entity = new PriceListEntity({
+              ...row.payload,
+              createdAt: row.payload.createdAt ? new Date(row.payload.createdAt) : new Date(),
+              updatedAt: row.payload.updatedAt ? new Date(row.payload.updatedAt) : new Date(),
+              items: (row.payload.items || []).map((it: any) => new PriceListItemEntity(it)),
+            });
+            this.priceLists.set(entity.id, entity);
+          }
+        }
+        this.savePriceListsToDisk();
+      }
+    } catch (err) {
+      console.warn('[PRICE_LISTS] Lỗi khởi tạo bảng PostgreSQL:', err);
+    }
+  }
+
+  private async savePriceListToDb(pl: PriceListEntity): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(
+        `INSERT INTO app_price_lists (id, code, name, customer_group, status, payload, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+         ON CONFLICT (id) DO UPDATE
+         SET code = EXCLUDED.code,
+             name = EXCLUDED.name,
+             customer_group = EXCLUDED.customer_group,
+             status = EXCLUDED.status,
+             payload = EXCLUDED.payload,
+             updated_at = EXCLUDED.updated_at;`,
+        [
+          pl.id,
+          pl.code,
+          pl.name,
+          pl.customerGroup,
+          pl.status,
+          JSON.stringify(pl),
+          pl.createdAt || new Date(),
+          pl.updatedAt || new Date(),
+        ],
+      );
+    } catch (err) {
+      console.warn('[PRICE_LISTS] Lỗi khi lưu bảng giá vào DB:', err);
+    }
+  }
+
+  private async deletePriceListFromDb(id: string): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(
+        `DELETE FROM app_price_lists WHERE id = $1;`,
+        [id],
+      );
+    } catch (err) {
+      console.warn('[PRICE_LISTS] Lỗi khi xóa bảng giá khỏi DB:', err);
     }
   }
 
@@ -595,6 +738,8 @@ export class PriceListsService implements OnModuleInit {
     });
 
     this.priceLists.set(newPriceList.id, newPriceList);
+    this.savePriceListsToDisk();
+    await this.savePriceListToDb(newPriceList);
     return newPriceList;
   }
 
@@ -670,6 +815,8 @@ export class PriceListsService implements OnModuleInit {
 
     existing.updatedAt = new Date();
     this.priceLists.set(existing.id, existing);
+    this.savePriceListsToDisk();
+    await this.savePriceListToDb(existing);
     return existing;
   }
 
@@ -685,6 +832,8 @@ export class PriceListsService implements OnModuleInit {
     existing.status = newStatus;
     existing.updatedAt = new Date();
     this.priceLists.set(existing.id, existing);
+    this.savePriceListsToDisk();
+    await this.savePriceListToDb(existing);
     return existing;
   }
 
@@ -744,6 +893,8 @@ export class PriceListsService implements OnModuleInit {
     });
 
     this.priceLists.set(clonedPriceList.id, clonedPriceList);
+    this.savePriceListsToDisk();
+    await this.savePriceListToDb(clonedPriceList);
     return clonedPriceList;
   }
 
@@ -763,6 +914,8 @@ export class PriceListsService implements OnModuleInit {
     }
 
     this.priceLists.delete(existing.id);
+    this.savePriceListsToDisk();
+    await this.deletePriceListFromDb(existing.id);
 
     return {
       success: true,

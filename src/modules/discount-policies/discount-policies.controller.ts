@@ -8,7 +8,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { Public } from '../../common/decorators/public.decorator';
 
-@Controller('api/v1/discount-policies')
+@Controller(['api/v1/discount-policies', 'v1/discount-policies', 'discount-policies'])
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class DiscountPoliciesController {
   constructor(private readonly discountPoliciesService: DiscountPoliciesService) {}
@@ -39,8 +39,8 @@ export class DiscountPoliciesController {
 
   @Delete(':id')
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
-  remove(@Param('id') id: string) {
-    this.discountPoliciesService.remove(id);
+  async remove(@Param('id') id: string) {
+    await this.discountPoliciesService.remove(id);
     return { success: true };
   }
 

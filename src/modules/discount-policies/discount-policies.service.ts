@@ -1,16 +1,154 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional, OnModuleInit } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DiscountTier } from './entities/discount-tier.entity';
 import { DiscountPolicyEntity } from './entities/discount-policy.entity';
 import { CreateDiscountPolicyDto } from './dto/create-discount-policy.dto';
 import { UpdateDiscountPolicyDto } from './dto/update-discount-policy.dto';
 import { DiscountPolicyStatus } from './enums/discount.enum';
+import { DatabaseService } from '../../database/database.service';
 
 @Injectable()
-export class DiscountPoliciesService {
+export class DiscountPoliciesService implements OnModuleInit {
   private discountPolicies = new Map<string, DiscountPolicyEntity>();
 
-  constructor() {
+  constructor(@Optional() private readonly databaseService?: DatabaseService) {
     this.seed();
+    this.loadPoliciesFromDisk();
+  }
+
+  async onModuleInit(): Promise<void> {
+    if (this.discountPolicies.size === 0) {
+      this.seed();
+    }
+    this.loadPoliciesFromDisk();
+    if (this.databaseService?.isConnected()) {
+      await this.initDatabaseSchemaAndLoad();
+    }
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'discount_policies.json');
+  }
+
+  private loadPoliciesFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<DiscountPolicyEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const existing = this.discountPolicies.get(item.id);
+        if (existing) {
+          Object.assign(existing, item);
+        } else {
+          this.discountPolicies.set(item.id, new DiscountPolicyEntity(item as any));
+        }
+      }
+    } catch (err) {
+      console.warn('[DISCOUNT_POLICIES] Lỗi khi nạp chính sách chiết khấu từ đĩa:', err);
+    }
+  }
+
+  private savePoliciesToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.discountPolicies.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[DISCOUNT_POLICIES] Lỗi khi lưu chính sách chiết khấu ra đĩa:', err);
+    }
+  }
+
+  private async initDatabaseSchemaAndLoad(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS app_discount_policies (
+          id TEXT PRIMARY KEY,
+          code TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_discount_policies_created_at
+          ON app_discount_policies(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_app_discount_policies_code
+          ON app_discount_policies(code);
+      `);
+
+      const countRes = await this.databaseService.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM app_discount_policies;`,
+      );
+      const totalCount = parseInt(countRes[0]?.count || '0', 10);
+
+      if (totalCount === 0) {
+        // Nạp toàn bộ dữ liệu ban đầu từ memory vào PostgreSQL
+        for (const policy of this.discountPolicies.values()) {
+          await this.savePolicyToDb(policy);
+        }
+      } else {
+        // Tải các chính sách từ PostgreSQL lên Map
+        const rows = await this.databaseService.query<{ payload: any }>(
+          `SELECT payload FROM app_discount_policies ORDER BY created_at ASC;`,
+        );
+        for (const row of rows) {
+          if (row.payload && row.payload.id) {
+            this.discountPolicies.set(
+              row.payload.id,
+              new DiscountPolicyEntity(row.payload),
+            );
+          }
+        }
+        this.savePoliciesToDisk();
+      }
+    } catch (err) {
+      console.warn('[DISCOUNT_POLICIES] Lỗi khởi tạo bảng PostgreSQL:', err);
+    }
+  }
+
+  private async savePolicyToDb(policy: DiscountPolicyEntity): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(
+        `INSERT INTO app_discount_policies (id, code, name, payload, created_at, updated_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+         ON CONFLICT (id) DO UPDATE
+         SET code = EXCLUDED.code,
+             name = EXCLUDED.name,
+             payload = EXCLUDED.payload,
+             updated_at = EXCLUDED.updated_at;`,
+        [
+          policy.id,
+          policy.code,
+          policy.name,
+          JSON.stringify(policy),
+          policy.createdAt || new Date(),
+          policy.updatedAt || new Date(),
+        ],
+      );
+    } catch (err) {
+      console.warn('[DISCOUNT_POLICIES] Lỗi khi lưu chính sách vào DB:', err);
+    }
+  }
+
+  private async deletePolicyFromDb(id: string): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(
+        `DELETE FROM app_discount_policies WHERE id = $1;`,
+        [id],
+      );
+    } catch (err) {
+      console.warn('[DISCOUNT_POLICIES] Lỗi khi xóa chính sách khỏi DB:', err);
+    }
   }
 
   private seed() {
@@ -67,16 +205,18 @@ export class DiscountPoliciesService {
     return policy;
   }
 
-  create(dto: CreateDiscountPolicyDto): DiscountPolicyEntity {
+  async create(dto: CreateDiscountPolicyDto): Promise<DiscountPolicyEntity> {
     const policy = new DiscountPolicyEntity({
       ...dto,
       tiers: dto.tiers.map((t) => new DiscountTier(t as any)),
     });
     this.discountPolicies.set(policy.id, policy);
+    this.savePoliciesToDisk();
+    await this.savePolicyToDb(policy);
     return policy;
   }
 
-  update(id: string, dto: UpdateDiscountPolicyDto): DiscountPolicyEntity {
+  async update(id: string, dto: UpdateDiscountPolicyDto): Promise<DiscountPolicyEntity> {
     const policy = this.findById(id);
     
     if (dto.code) policy.code = dto.code;
@@ -102,13 +242,17 @@ export class DiscountPoliciesService {
       }));
     }
     policy.updatedAt = new Date();
+    this.savePoliciesToDisk();
+    await this.savePolicyToDb(policy);
     
     return policy;
   }
 
-  remove(id: string): void {
+  async remove(id: string): Promise<void> {
     const policy = this.findById(id);
     this.discountPolicies.delete(policy.id);
+    this.savePoliciesToDisk();
+    await this.deletePolicyFromDb(policy.id);
   }
 
   calculateBestDiscount(
