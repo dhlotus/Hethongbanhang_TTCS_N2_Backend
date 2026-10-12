@@ -969,8 +969,8 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    // 6. Lọc theo khoảng thời gian (fromDate, toDate)
-    // Chuẩn hóa ngày dạng YYYY-MM-DD độc lập với múi giờ, hỗ trợ cả ngày tạo (createdAt) và ngày giao (deliveryDate)
+    // 6. Lọc theo khoảng thời gian (fromDate, toDate, dateType)
+    // Chuẩn hóa ngày dạng YYYY-MM-DD độc lập với múi giờ
     const toDateKey = (val: string | Date | undefined): string => {
       if (!val) return '';
       if (typeof val === 'string') {
@@ -987,26 +987,22 @@ export class OrdersService implements OnModuleInit {
 
     const fromKey = query.fromDate?.trim();
     const toKey = query.toDate?.trim();
+    const dateType = query.dateType?.toUpperCase() || 'CREATED'; // CREATED (mặc định: Ngày tạo/đặt đơn) | DELIVERY (Ngày giao)
 
-    if (fromKey && toKey) {
+    if (fromKey || toKey) {
       list = list.filter((o) => {
         const cKey = toDateKey(o.createdAt);
         const dKey = toDateKey(o.deliveryDate);
-        const cMatch = Boolean(cKey && cKey >= fromKey && cKey <= toKey);
-        const dMatch = Boolean(dKey && dKey >= fromKey && dKey <= toKey);
-        return cMatch || dMatch;
-      });
-    } else if (fromKey) {
-      list = list.filter((o) => {
-        const cKey = toDateKey(o.createdAt);
-        const dKey = toDateKey(o.deliveryDate);
-        return Boolean((cKey && cKey >= fromKey) || (dKey && dKey >= fromKey));
-      });
-    } else if (toKey) {
-      list = list.filter((o) => {
-        const cKey = toDateKey(o.createdAt);
-        const dKey = toDateKey(o.deliveryDate);
-        return Boolean((cKey && cKey <= toKey) || (dKey && dKey <= toKey));
+        const targetKey = dateType === 'DELIVERY' ? dKey : cKey;
+
+        if (fromKey && toKey) {
+          return Boolean(targetKey && targetKey >= fromKey && targetKey <= toKey);
+        } else if (fromKey) {
+          return Boolean(targetKey && targetKey >= fromKey);
+        } else if (toKey) {
+          return Boolean(targetKey && targetKey <= toKey);
+        }
+        return true;
       });
     }
 

@@ -51,4 +51,8 @@ export class QueryOrdersDto {
   @IsOptional()
   @IsString()
   toDate?: string;
+
+  @IsOptional()
+  @IsString()
+  dateType?: 'CREATED' | 'DELIVERY' | string;
 }
