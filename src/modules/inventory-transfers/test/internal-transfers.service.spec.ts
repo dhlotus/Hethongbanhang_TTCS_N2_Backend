@@ -8,6 +8,7 @@ import { TransferStatus } from '../entities/transfer-status.enum';
 import { BadRequestException } from '@nestjs/common';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { ICurrentUser } from '../../auth/interfaces/current-user.interface';
+import { PoolClient } from 'pg';
 
 describe('InternalTransfersService (SN-181)', () => {
   let service: InternalTransfersService;
@@ -15,6 +16,7 @@ describe('InternalTransfersService (SN-181)', () => {
   let productsServiceMock: Partial<ProductsService>;
   let warehousesServiceMock: Partial<WarehousesService>;
   let databaseServiceMock: Partial<DatabaseService>;
+  let mockClient: Partial<PoolClient>;
 
   const mockUser: ICurrentUser = {
     userId: 'user-001',
@@ -56,9 +58,124 @@ describe('InternalTransfersService (SN-181)', () => {
   };
 
   beforeEach(async () => {
+    // Lưu trữ các bản ghi mock mô phỏng bảng database
+    const storedTransfers = new Map<string, any>();
+    const storedItems = new Map<string, any[]>();
+
+    mockClient = {
+      query: jest.fn().mockImplementation(async (text: string, params?: any[]) => {
+        if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') {
+          return { rows: [] };
+        }
+
+        if (text.includes("SELECT 'CK-'")) {
+          return { rows: [{ next_code: 'CK-261012-0001' }] };
+        }
+
+        if (text.includes('INSERT INTO internal_transfers')) {
+          const row = {
+            id: 'itf-test-001',
+            code: params?.[0] || 'CK-261012-0001',
+            from_warehouse_id: params?.[1],
+            from_warehouse_name: params?.[2],
+            to_warehouse_id: params?.[3],
+            to_warehouse_name: params?.[4],
+            status: params?.[5],
+            notes: params?.[6],
+            created_by: params?.[7],
+            created_by_name: params?.[8],
+            transferred_at: params?.[9] || new Date(),
+            received_by: null,
+            received_by_name: null,
+            received_at: null,
+            discrepancy_reason: null,
+            created_at: new Date(),
+            updated_at: new Date(),
+          };
+          storedTransfers.set(row.id, row);
+          return { rows: [row] };
+        }
+
+        if (text.includes('INSERT INTO internal_transfer_items')) {
+          const itemRow = {
+            id: 'iti-test-001',
+            transfer_id: params?.[0],
+            product_id: params?.[1],
+            sku: params?.[2],
+            product_name: params?.[3],
+            unit: params?.[4],
+            conversion_rate: params?.[5],
+            base_unit: params?.[6],
+            transfer_quantity: params?.[7],
+            base_transfer_quantity: params?.[8],
+            received_quantity: null,
+            base_received_quantity: null,
+            discrepancy_quantity: 0,
+            discrepancy_reason: null,
+            notes: params?.[9],
+            created_at: new Date(),
+          };
+          const list = storedItems.get(itemRow.transfer_id) || [];
+          list.push(itemRow);
+          storedItems.set(itemRow.transfer_id, list);
+          return { rows: [itemRow] };
+        }
+
+        if (text.includes('UPDATE internal_transfer_items')) {
+          const actualReceived = params?.[0];
+          const baseReceived = params?.[1];
+          const discrepancy = params?.[2];
+          const reason = params?.[3];
+          const itemId = params?.[4];
+          for (const list of storedItems.values()) {
+            const item = list.find((i) => i.id === itemId);
+            if (item) {
+              item.received_quantity = actualReceived;
+              item.base_received_quantity = baseReceived;
+              item.discrepancy_quantity = discrepancy;
+              item.discrepancy_reason = reason;
+            }
+          }
+          return { rows: [] };
+        }
+
+        if (text.includes('UPDATE internal_transfers')) {
+          const transfer = storedTransfers.get(params?.[4]);
+          if (transfer) {
+            transfer.status = params?.[0];
+            transfer.received_by = params?.[1];
+            transfer.received_by_name = params?.[2];
+            transfer.discrepancy_reason = params?.[3];
+            transfer.received_at = new Date();
+          }
+          return { rows: [transfer] };
+        }
+
+        if (text.includes('SELECT * FROM internal_transfer_items')) {
+          const transferId = params?.[0];
+          return { rows: storedItems.get(transferId) || [] };
+        }
+
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
     databaseServiceMock = {
-      isConnected: jest.fn().mockReturnValue(false),
-      query: jest.fn().mockResolvedValue([]),
+      isConnected: jest.fn().mockReturnValue(true),
+      getClient: jest.fn().mockResolvedValue(mockClient as PoolClient),
+      query: jest.fn().mockImplementation(async (text: string, params?: any[]) => {
+        if (text.includes('SELECT * FROM internal_transfers')) {
+          const id = params?.[0];
+          const transfer = storedTransfers.get(id);
+          return transfer ? [transfer] : [];
+        }
+        if (text.includes('SELECT * FROM internal_transfer_items')) {
+          const id = params?.[0];
+          return storedItems.get(id) || [];
+        }
+        return [];
+      }),
     };
 
     warehousesServiceMock = {

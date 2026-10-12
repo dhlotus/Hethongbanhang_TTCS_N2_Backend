@@ -7,6 +7,8 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DatabaseService } from '../../database/database.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ProductsService } from '../products/products.service';
@@ -23,16 +25,58 @@ import {
   QueryTransfersDto,
 } from './dto';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
-import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
+
+/** Cấu trúc dữ liệu hàng thô từ bảng internal_transfers */
+interface InternalTransferDbRow {
+  id: string;
+  code: string;
+  from_warehouse_id: string;
+  from_warehouse_name: string;
+  to_warehouse_id: string;
+  to_warehouse_name: string;
+  status: TransferStatus;
+  notes: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  transferred_at: Date | string | null;
+  received_by: string | null;
+  received_by_name: string | null;
+  received_at: Date | string | null;
+  discrepancy_reason: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+/** Cấu trúc dữ liệu hàng thô từ bảng internal_transfer_items */
+interface InternalTransferItemDbRow {
+  id: string;
+  transfer_id: string;
+  product_id: string;
+  sku: string;
+  product_name: string;
+  unit: string;
+  conversion_rate: number | string;
+  base_unit: string;
+  transfer_quantity: number | string;
+  base_transfer_quantity: number | string;
+  received_quantity: number | string | null;
+  base_received_quantity: number | string | null;
+  discrepancy_quantity: number | string | null;
+  discrepancy_reason: string | null;
+  notes: string | null;
+  created_at: Date | string;
+}
 
 /**
  * Service quản lý Phiếu Chuyển kho Nội bộ (Internal Warehouse Transfer) - SN-181
- * Tuân thủ quy chuẩn Code Convention & Nghiệp vụ Quản trị Kho Vận
+ * Tuân thủ quy chuẩn CODE_CONVENTION.md:
+ * - 100% Type Safety (0 any)
+ * - Tương tác dữ liệu với PostgreSQL qua DatabaseService & SQL Transaction
+ * - Hỗ trợ file persistence an toàn khi môi trường phát triển chưa kết nối CSDL
  */
 @Injectable()
 export class InternalTransfersService implements OnModuleInit {
   private readonly logger = new Logger(InternalTransfersService.name);
-  private readonly memoryTransfers = new Map<string, InternalTransferEntity>();
 
   constructor(
     private readonly databaseService: DatabaseService,
@@ -45,16 +89,16 @@ export class InternalTransfersService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.initDatabaseTables();
-    if (this.memoryTransfers.size === 0) {
-      await this.seedInitialTransfers();
-    }
   }
 
   /**
-   * Khởi tạo bảng dữ liệu PostgreSQL nếu kết nối CSDL đang hoạt động
+   * Khởi tạo bảng dữ liệu PostgreSQL
    */
   private async initDatabaseTables(): Promise<void> {
-    if (!this.databaseService?.isConnected()) return;
+    if (!this.databaseService?.isConnected()) {
+      this.logger.warn('CSDL PostgreSQL chưa sẵn sàng, hệ thống chuyển kho sẽ kích hoạt lưu trữ tệp đệm.');
+      return;
+    }
 
     try {
       await this.databaseService.query(`
@@ -97,7 +141,7 @@ export class InternalTransfersService implements OnModuleInit {
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
       `);
-      this.logger.log('Đã khởi tạo bảng CSDL cho Chuyển kho Nội bộ.');
+      this.logger.log('Đã khởi tạo bảng CSDL internal_transfers và internal_transfer_items thành công.');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Không thể khởi tạo bảng CSDL internal_transfers: ${message}`);
@@ -105,179 +149,23 @@ export class InternalTransfersService implements OnModuleInit {
   }
 
   /**
-   * Dữ liệu mẫu chuẩn hóa phục vụ kiểm thử và trải nghiệm người dùng
-   */
-  private async seedInitialTransfers(): Promise<void> {
-    const products = await this.productsService.findAll();
-    const milk = products.find((p) => p.sku === 'LH-MILK-900G') || products[0];
-    const cereal = products.find((p) => p.sku === 'LH-CEREAL-500G') || products[1] || products[0];
-    const nut = products.find((p) => p.sku === 'LH-NUT-180ML') || products[2] || products[0];
-
-    // Phiếu 1: ĐANG TRÊN ĐƯỜNG (IN_TRANSIT) - Để kiểm thử xác nhận nhận hàng
-    const sampleTransit = new InternalTransferEntity({
-      id: 'itf-seed-001',
-      code: 'CK-261011-0001',
-      fromWarehouseId: DEFAULT_WAREHOUSE_ID,
-      fromWarehouseName: 'Kho Tổng Miền Nam',
-      toWarehouseId: '11111111-0000-0000-0000-000000000002',
-      toWarehouseName: 'Kho Phân Phối Hà Nội',
-      status: TransferStatus.IN_TRANSIT,
-      notes: 'Điều chuyển bổ sung hàng dự trữ đợt khuyến mãi miền Bắc',
-      createdBy: 'user-001',
-      createdByName: 'Nguyễn Văn Kho',
-      transferredAt: new Date(Date.now() - 3 * 3600 * 1000),
-      createdAt: new Date(Date.now() - 3 * 3600 * 1000),
-      items: [
-        new InternalTransferItemEntity({
-          id: 'iti-001',
-          transferId: 'itf-seed-001',
-          productId: milk?.id || 'prod-001',
-          sku: milk?.sku || 'LH-MILK-900G',
-          productName: milk?.name || 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
-          unit: 'Thùng',
-          conversionRate: 24,
-          baseUnit: 'Lon',
-          transferQuantity: 10,
-          baseTransferQuantity: 240,
-        }),
-        new InternalTransferItemEntity({
-          id: 'iti-002',
-          transferId: 'itf-seed-001',
-          productId: cereal?.id || 'prod-004',
-          sku: cereal?.sku || 'LH-CEREAL-500G',
-          productName: cereal?.name || 'Ngũ Cốc Dinh Dưỡng Cao Cấp Loha Cereal 500g',
-          unit: 'Thùng',
-          conversionRate: 20,
-          baseUnit: 'Gói',
-          transferQuantity: 15,
-          baseTransferQuantity: 300,
-        }),
-      ],
-    });
-
-    // Phiếu 2: ĐÃ HOÀN THÀNH (COMPLETED) - Nhận đủ 100%
-    const sampleCompleted = new InternalTransferEntity({
-      id: 'itf-seed-002',
-      code: 'CK-261010-0002',
-      fromWarehouseId: DEFAULT_WAREHOUSE_ID,
-      fromWarehouseName: 'Kho Tổng Miền Nam',
-      toWarehouseId: '11111111-0000-0000-0000-000000000003',
-      toWarehouseName: 'Kho Vùng Tây Nam Bộ',
-      status: TransferStatus.COMPLETED,
-      notes: 'Cấp hàng định kỳ cho kho Cần Thơ',
-      createdBy: 'user-001',
-      createdByName: 'Nguyễn Văn Kho',
-      transferredAt: new Date(Date.now() - 28 * 3600 * 1000),
-      receivedBy: 'user-002',
-      receivedByName: 'Trần Thị Nhận',
-      receivedAt: new Date(Date.now() - 4 * 3600 * 1000),
-      createdAt: new Date(Date.now() - 28 * 3600 * 1000),
-      items: [
-        new InternalTransferItemEntity({
-          id: 'iti-003',
-          transferId: 'itf-seed-002',
-          productId: nut?.id || 'prod-002',
-          sku: nut?.sku || 'LH-NUT-180ML',
-          productName: nut?.name || 'Sữa Hạt Óc Chó Nguyên Chất Loha Nut 180ml',
-          unit: 'Thùng',
-          conversionRate: 48,
-          baseUnit: 'Hộp',
-          transferQuantity: 20,
-          baseTransferQuantity: 960,
-          receivedQuantity: 20,
-          baseReceivedQuantity: 960,
-          discrepancyQuantity: 0,
-        }),
-      ],
-    });
-
-    // Phiếu 3: NHẬN CÓ CHÊNH LỆCH (PARTIALLY_RECEIVED) - Kèm lý do
-    const samplePartial = new InternalTransferEntity({
-      id: 'itf-seed-003',
-      code: 'CK-261009-0003',
-      fromWarehouseId: '11111111-0000-0000-0000-000000000002',
-      fromWarehouseName: 'Kho Phân Phối Hà Nội',
-      toWarehouseId: DEFAULT_WAREHOUSE_ID,
-      toWarehouseName: 'Kho Tổng Miền Nam',
-      status: TransferStatus.PARTIALLY_RECEIVED,
-      notes: 'Hồi chuyển hàng thừa từ kho Hà Nội về kho tổng',
-      createdBy: 'user-003',
-      createdByName: 'Lê Văn Bắc',
-      transferredAt: new Date(Date.now() - 50 * 3600 * 1000),
-      receivedBy: 'user-001',
-      receivedByName: 'Nguyễn Văn Kho',
-      receivedAt: new Date(Date.now() - 20 * 3600 * 1000),
-      discrepancyReason: 'Xe chở hàng phanh gấp làm bẹp 2 thùng sữa bột khi dỡ hàng',
-      createdAt: new Date(Date.now() - 50 * 3600 * 1000),
-      items: [
-        new InternalTransferItemEntity({
-          id: 'iti-004',
-          transferId: 'itf-seed-003',
-          productId: milk?.id || 'prod-001',
-          sku: milk?.sku || 'LH-MILK-900G',
-          productName: milk?.name || 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
-          unit: 'Thùng',
-          conversionRate: 24,
-          baseUnit: 'Lon',
-          transferQuantity: 25,
-          baseTransferQuantity: 600,
-          receivedQuantity: 23,
-          baseReceivedQuantity: 552,
-          discrepancyQuantity: 2,
-          discrepancyReason: 'Bị bẹp móp biến dạng nặng 2 thùng khi vận chuyển, không đạt chuẩn nhập kho',
-        }),
-      ],
-    });
-
-    this.memoryTransfers.set(sampleTransit.id, sampleTransit);
-    this.memoryTransfers.set(sampleCompleted.id, sampleCompleted);
-    this.memoryTransfers.set(samplePartial.id, samplePartial);
-  }
-
-  /**
    * Lấy danh sách phiếu chuyển kho theo bộ lọc
    */
   async findAll(query?: QueryTransfersDto): Promise<InternalTransferEntity[]> {
-    let list = Array.from(this.memoryTransfers.values());
-
-    if (query?.status) {
-      list = list.filter((t) => t.status === query.status);
+    if (this.databaseService?.isConnected()) {
+      return this.findAllFromDatabase(query);
     }
-    if (query?.fromWarehouseId) {
-      list = list.filter((t) => t.fromWarehouseId === query.fromWarehouseId);
-    }
-    if (query?.toWarehouseId) {
-      list = list.filter((t) => t.toWarehouseId === query.toWarehouseId);
-    }
-    if (query?.search?.trim()) {
-      const q = query.search.trim().toLowerCase();
-      list = list.filter(
-        (t) =>
-          t.code.toLowerCase().includes(q) ||
-          t.fromWarehouseName.toLowerCase().includes(q) ||
-          t.toWarehouseName.toLowerCase().includes(q) ||
-          t.items.some(
-            (i) => i.sku.toLowerCase().includes(q) || i.productName.toLowerCase().includes(q),
-          ),
-      );
-    }
-
-    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return this.findAllFromDisk(query);
   }
 
   /**
-   * Xem chi tiết một phiếu chuyển kho
+   * Xem chi tiết một phiếu chuyển kho (theo UUID hoặc Mã phiếu)
    */
   async findOne(id: string): Promise<InternalTransferEntity> {
-    const transfer =
-      this.memoryTransfers.get(id) ||
-      Array.from(this.memoryTransfers.values()).find((t) => t.code === id);
-
-    if (!transfer) {
-      throw new NotFoundException(`Không tìm thấy phiếu chuyển kho với ID hoặc Mã "${id}"`);
+    if (this.databaseService?.isConnected()) {
+      return this.findOneFromDatabase(id);
     }
-
-    return transfer;
+    return this.findOneFromDisk(id);
   }
 
   /**
@@ -306,39 +194,12 @@ export class InternalTransfersService implements OnModuleInit {
     );
 
     const isDraft = Boolean(dto.isDraft);
-    const code = this.generateTransferCode();
-
-    // Chuẩn bị và kiểm tra các dòng mặt hàng
     const items = await this.prepareTransferItems(dto.items, dto.fromWarehouseId, isDraft);
 
-    const transfer = new InternalTransferEntity({
-      id: `itf-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      code,
-      fromWarehouseId: fromWarehouse.id,
-      fromWarehouseName: fromWarehouse.name,
-      toWarehouseId: toWarehouse.id,
-      toWarehouseName: toWarehouse.name,
-      status: isDraft ? TransferStatus.DRAFT : TransferStatus.IN_TRANSIT,
-      notes: dto.notes?.trim() || '',
-      createdBy: user.userId,
-      createdByName: user.username || user.email || 'Nhân viên kho',
-      createdAt: new Date(),
-      transferredAt: isDraft ? undefined : new Date(),
-      items: [],
-    });
-
-    items.forEach((item) => {
-      item.transferId = transfer.id;
-    });
-    transfer.items = items;
-
-    // Nếu không phải bản nháp, thực hiện xuất trừ kho đi
-    if (!isDraft) {
-      await this.processOutgoingStock(transfer, user.userId);
+    if (this.databaseService?.isConnected()) {
+      return this.createInDatabase(dto, fromWarehouse, toWarehouse, items, isDraft, user);
     }
-
-    this.memoryTransfers.set(transfer.id, transfer);
-    return transfer;
+    return this.createInDisk(dto, fromWarehouse, toWarehouse, items, isDraft, user);
   }
 
   /**
@@ -366,23 +227,13 @@ export class InternalTransfersService implements OnModuleInit {
       throw new BadRequestException('Vui lòng gửi danh sách số lượng kiểm đếm nhận hàng.');
     }
 
-    // Kiểm tra tính hợp lệ và bắt buộc lý do chênh lệch
+    // Kiểm tra ràng buộc lý do chênh lệch
     this.validateDiscrepancyReasons(transfer, dto);
 
-    // Tiến hành cộng tồn kho đến theo số lượng thực nhận
-    await this.processIncomingStock(transfer, dto, user.userId);
-
-    // Xác định trạng thái hoàn tất
-    const hasDiscrepancy = transfer.items.some((item) => (item.discrepancyQuantity ?? 0) !== 0);
-    transfer.status = hasDiscrepancy ? TransferStatus.PARTIALLY_RECEIVED : TransferStatus.COMPLETED;
-    transfer.receivedBy = user.userId;
-    transfer.receivedByName = user.username || user.email || 'Thủ kho nhận';
-    transfer.receivedAt = new Date();
-    transfer.discrepancyReason = dto.generalDiscrepancyReason?.trim() || transfer.discrepancyReason;
-    transfer.updatedAt = new Date();
-
-    this.memoryTransfers.set(transfer.id, transfer);
-    return transfer;
+    if (this.databaseService?.isConnected()) {
+      return this.confirmReceiptInDatabase(transfer, dto, user);
+    }
+    return this.confirmReceiptInDisk(transfer, dto, user);
   }
 
   /**
@@ -391,7 +242,10 @@ export class InternalTransfersService implements OnModuleInit {
   async cancel(id: string, user: ICurrentUser): Promise<InternalTransferEntity> {
     const transfer = await this.findOne(id);
 
-    if (transfer.status === TransferStatus.COMPLETED || transfer.status === TransferStatus.PARTIALLY_RECEIVED) {
+    if (
+      transfer.status === TransferStatus.COMPLETED ||
+      transfer.status === TransferStatus.PARTIALLY_RECEIVED
+    ) {
       throw new BadRequestException('Không thể hủy phiếu chuyển kho đã hoàn tất nhập hàng.');
     }
 
@@ -399,7 +253,494 @@ export class InternalTransfersService implements OnModuleInit {
       throw new BadRequestException('Phiếu chuyển kho này đã được hủy trước đó.');
     }
 
-    // Nếu đang trên đường mà bị hủy, hoàn trả lại tồn kho cho kho đi
+    if (this.databaseService?.isConnected()) {
+      return this.cancelInDatabase(transfer, user);
+    }
+    return this.cancelInDisk(transfer, user);
+  }
+
+  // ===========================================================================
+  // DATABASE TRANSACTION IMPLEMENTATION (POSTGRESQL)
+  // ===========================================================================
+
+  private async findAllFromDatabase(query?: QueryTransfersDto): Promise<InternalTransferEntity[]> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let pIdx = 1;
+
+    if (query?.status) {
+      conditions.push(`t.status = $${pIdx++}`);
+      params.push(query.status);
+    }
+    if (query?.fromWarehouseId) {
+      conditions.push(`t.from_warehouse_id = $${pIdx++}`);
+      params.push(query.fromWarehouseId);
+    }
+    if (query?.toWarehouseId) {
+      conditions.push(`t.to_warehouse_id = $${pIdx++}`);
+      params.push(query.toWarehouseId);
+    }
+    if (query?.search?.trim()) {
+      const searchPattern = `%${query.search.trim().toLowerCase()}%`;
+      conditions.push(
+        `(LOWER(t.code) LIKE $${pIdx} OR LOWER(t.from_warehouse_name) LIKE $${pIdx} OR LOWER(t.to_warehouse_name) LIKE $${pIdx})`,
+      );
+      params.push(searchPattern);
+      pIdx++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const transferRows = await this.databaseService.query<InternalTransferDbRow>(
+      `SELECT * FROM internal_transfers t ${whereClause} ORDER BY t.created_at DESC`,
+      params,
+    );
+
+    if (transferRows.length === 0) return [];
+
+    const transferIds = transferRows.map((r) => r.id);
+    const itemRows = await this.databaseService.query<InternalTransferItemDbRow>(
+      `SELECT * FROM internal_transfer_items WHERE transfer_id = ANY($1::uuid[]) ORDER BY created_at ASC`,
+      [transferIds],
+    );
+
+    const itemsByTransferId = new Map<string, InternalTransferItemDbRow[]>();
+    for (const item of itemRows) {
+      const list = itemsByTransferId.get(item.transfer_id) || [];
+      list.push(item);
+      itemsByTransferId.set(item.transfer_id, list);
+    }
+
+    return transferRows.map((row) =>
+      this.mapDbRowToEntity(row, itemsByTransferId.get(row.id) || []),
+    );
+  }
+
+  private async findOneFromDatabase(id: string): Promise<InternalTransferEntity> {
+    const transferRows = await this.databaseService.query<InternalTransferDbRow>(
+      `SELECT * FROM internal_transfers WHERE id::text = $1 OR code = $1 LIMIT 1`,
+      [id],
+    );
+
+    if (transferRows.length === 0) {
+      throw new NotFoundException(`Không tìm thấy phiếu chuyển kho với ID hoặc Mã "${id}"`);
+    }
+
+    const row = transferRows[0];
+    const itemRows = await this.databaseService.query<InternalTransferItemDbRow>(
+      `SELECT * FROM internal_transfer_items WHERE transfer_id = $1 ORDER BY created_at ASC`,
+      [row.id],
+    );
+
+    return this.mapDbRowToEntity(row, itemRows);
+  }
+
+  private async createInDatabase(
+    dto: CreateInternalTransferDto,
+    fromWarehouse: { id: string; name: string },
+    toWarehouse: { id: string; name: string },
+    items: InternalTransferItemEntity[],
+    isDraft: boolean,
+    user: ICurrentUser,
+  ): Promise<InternalTransferEntity> {
+    const client = await this.databaseService.getClient();
+    await client.query('BEGIN');
+    try {
+      const codeRes = await client.query<{ next_code: string }>(
+        `SELECT 'CK-' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '-' || LPAD(COALESCE(MAX(SUBSTRING(code FROM 11)), '0')::INT + 1, 4, '0') AS next_code
+         FROM internal_transfers WHERE code LIKE 'CK-' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '-%'`,
+      );
+      const code = codeRes.rows[0]?.next_code || this.generateFallbackCode();
+      const status = isDraft ? TransferStatus.DRAFT : TransferStatus.IN_TRANSIT;
+      const transferredAt = isDraft ? null : new Date();
+
+      const transferRes = await client.query<InternalTransferDbRow>(
+        `INSERT INTO internal_transfers (
+          code, from_warehouse_id, from_warehouse_name, to_warehouse_id, to_warehouse_name,
+          status, notes, created_by, created_by_name, transferred_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING *`,
+        [
+          code,
+          fromWarehouse.id,
+          fromWarehouse.name,
+          toWarehouse.id,
+          toWarehouse.name,
+          status,
+          dto.notes?.trim() || null,
+          user.userId,
+          user.username || user.email || 'Nhân viên kho',
+          transferredAt,
+        ],
+      );
+
+      const createdTransferRow = transferRes.rows[0];
+      const insertedItemRows: InternalTransferItemDbRow[] = [];
+
+      for (const item of items) {
+        const itemRes = await client.query<InternalTransferItemDbRow>(
+          `INSERT INTO internal_transfer_items (
+            transfer_id, product_id, sku, product_name, unit, conversion_rate,
+            base_unit, transfer_quantity, base_transfer_quantity, notes
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING *`,
+          [
+            createdTransferRow.id,
+            item.productId,
+            item.sku,
+            item.productName,
+            item.unit,
+            item.conversionRate,
+            item.baseUnit,
+            item.transferQuantity,
+            item.baseTransferQuantity,
+            item.notes || null,
+          ],
+        );
+        insertedItemRows.push(itemRes.rows[0]);
+      }
+
+      // Trừ tồn kho tại kho xuất nếu không phải bản nháp
+      if (!isDraft) {
+        for (const item of items) {
+          await this.inventoryService.adjustStock(
+            {
+              productSku: item.sku,
+              quantityChange: -item.transferQuantity,
+              unit: item.unit,
+              reason: `Xuất điều chuyển nội bộ sang ${toWarehouse.name}`,
+              referenceCode: code,
+              warehouseId: fromWarehouse.id,
+            },
+            user.userId,
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+      return this.mapDbRowToEntity(createdTransferRow, insertedItemRows);
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async confirmReceiptInDatabase(
+    transfer: InternalTransferEntity,
+    dto: ConfirmTransferReceiptDto,
+    user: ICurrentUser,
+  ): Promise<InternalTransferEntity> {
+    const client = await this.databaseService.getClient();
+    await client.query('BEGIN');
+    try {
+      const itemMap = new Map(dto.items.map((i) => [i.itemId, i]));
+      let hasDiscrepancy = false;
+
+      for (const item of transfer.items) {
+        const confirmItem = itemMap.get(item.id) || itemMap.get(item.productId)!;
+        const actualReceived = confirmItem.receivedQuantity;
+        const discrepancy = item.transferQuantity - actualReceived;
+        if (discrepancy !== 0) hasDiscrepancy = true;
+
+        const baseReceived = Math.round(actualReceived * item.conversionRate);
+        const discrepancyReason =
+          confirmItem.discrepancyReason?.trim() || dto.generalDiscrepancyReason?.trim() || null;
+
+        await client.query(
+          `UPDATE internal_transfer_items
+           SET received_quantity = $1, base_received_quantity = $2,
+               discrepancy_quantity = $3, discrepancy_reason = $4
+           WHERE id = $5`,
+          [actualReceived, baseReceived, discrepancy, discrepancyReason, item.id],
+        );
+
+        // Cộng tồn kho tại kho nhận theo số lượng thực nhận
+        if (actualReceived > 0) {
+          await this.inventoryService.adjustStock(
+            {
+              productSku: item.sku,
+              quantityChange: actualReceived,
+              unit: item.unit,
+              reason: `Nhập điều chuyển từ ${transfer.fromWarehouseName} (Phiếu ${transfer.code})${discrepancyReason ? ` [Lý do chênh lệch: ${discrepancyReason}]` : ''}`,
+              referenceCode: transfer.code,
+              warehouseId: transfer.toWarehouseId,
+            },
+            user.userId,
+          );
+        }
+      }
+
+      const finalStatus = hasDiscrepancy
+        ? TransferStatus.PARTIALLY_RECEIVED
+        : TransferStatus.COMPLETED;
+      const discrepancyReason = dto.generalDiscrepancyReason?.trim() || transfer.discrepancyReason || null;
+
+      const updatedRes = await client.query<InternalTransferDbRow>(
+        `UPDATE internal_transfers
+         SET status = $1, received_by = $2, received_by_name = $3,
+             received_at = CURRENT_TIMESTAMP, discrepancy_reason = $4, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $5
+         RETURNING *`,
+        [
+          finalStatus,
+          user.userId,
+          user.username || user.email || 'Thủ kho nhận',
+          discrepancyReason,
+          transfer.id,
+        ],
+      );
+
+      const updatedItems = await client.query<InternalTransferItemDbRow>(
+        `SELECT * FROM internal_transfer_items WHERE transfer_id = $1 ORDER BY created_at ASC`,
+        [transfer.id],
+      );
+
+      await client.query('COMMIT');
+      return this.mapDbRowToEntity(updatedRes.rows[0], updatedItems.rows);
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async cancelInDatabase(
+    transfer: InternalTransferEntity,
+    user: ICurrentUser,
+  ): Promise<InternalTransferEntity> {
+    const client = await this.databaseService.getClient();
+    await client.query('BEGIN');
+    try {
+      // Nếu đang chuyển trên đường, hoàn trả lại tồn kho xuất
+      if (transfer.status === TransferStatus.IN_TRANSIT) {
+        for (const item of transfer.items) {
+          await this.inventoryService.adjustStock(
+            {
+              productSku: item.sku,
+              quantityChange: item.transferQuantity,
+              unit: item.unit,
+              reason: `Hoàn nhập do hủy phiếu điều chuyển ${transfer.code}`,
+              referenceCode: transfer.code,
+              warehouseId: transfer.fromWarehouseId,
+            },
+            user.userId,
+          );
+        }
+      }
+
+      const updatedRes = await client.query<InternalTransferDbRow>(
+        `UPDATE internal_transfers
+         SET status = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING *`,
+        [TransferStatus.CANCELLED, transfer.id],
+      );
+
+      const items = await client.query<InternalTransferItemDbRow>(
+        `SELECT * FROM internal_transfer_items WHERE transfer_id = $1 ORDER BY created_at ASC`,
+        [transfer.id],
+      );
+
+      await client.query('COMMIT');
+      return this.mapDbRowToEntity(updatedRes.rows[0], items.rows);
+    } catch (error: unknown) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ===========================================================================
+  // DISK PERSISTENCE FALLBACK (Đảm bảo chạy độc lập khi chưa bật DB server)
+  // ===========================================================================
+
+  private getDiskStoragePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'internal-transfers.json');
+  }
+
+  private readDiskTransfers(): InternalTransferEntity[] {
+    try {
+      const filePath = this.getDiskStoragePath();
+      if (!fs.existsSync(filePath)) return [];
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return [];
+      const rawList: Array<Partial<InternalTransferEntity>> = JSON.parse(content);
+      return rawList.map((item) => new InternalTransferEntity(item));
+    } catch {
+      return [];
+    }
+  }
+
+  private saveDiskTransfers(transfers: InternalTransferEntity[]): void {
+    try {
+      const filePath = this.getDiskStoragePath();
+      fs.writeFileSync(filePath, JSON.stringify(transfers, null, 2), 'utf-8');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Lỗi lưu phiếu chuyển kho vào disk: ${msg}`);
+    }
+  }
+
+  private findAllFromDisk(query?: QueryTransfersDto): InternalTransferEntity[] {
+    let list = this.readDiskTransfers();
+
+    if (query?.status) {
+      list = list.filter((t) => t.status === query.status);
+    }
+    if (query?.fromWarehouseId) {
+      list = list.filter((t) => t.fromWarehouseId === query.fromWarehouseId);
+    }
+    if (query?.toWarehouseId) {
+      list = list.filter((t) => t.toWarehouseId === query.toWarehouseId);
+    }
+    if (query?.search?.trim()) {
+      const q = query.search.trim().toLowerCase();
+      list = list.filter(
+        (t) =>
+          t.code.toLowerCase().includes(q) ||
+          t.fromWarehouseName.toLowerCase().includes(q) ||
+          t.toWarehouseName.toLowerCase().includes(q) ||
+          t.items.some(
+            (i) => i.sku.toLowerCase().includes(q) || i.productName.toLowerCase().includes(q),
+          ),
+      );
+    }
+
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  private findOneFromDisk(id: string): InternalTransferEntity {
+    const list = this.readDiskTransfers();
+    const transfer = list.find((t) => t.id === id || t.code === id);
+
+    if (!transfer) {
+      throw new NotFoundException(`Không tìm thấy phiếu chuyển kho với ID hoặc Mã "${id}"`);
+    }
+
+    return transfer;
+  }
+
+  private async createInDisk(
+    dto: CreateInternalTransferDto,
+    fromWarehouse: { id: string; name: string },
+    toWarehouse: { id: string; name: string },
+    items: InternalTransferItemEntity[],
+    isDraft: boolean,
+    user: ICurrentUser,
+  ): Promise<InternalTransferEntity> {
+    const list = this.readDiskTransfers();
+    const code = this.generateFallbackCode();
+
+    const transfer = new InternalTransferEntity({
+      id: `itf-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      code,
+      fromWarehouseId: fromWarehouse.id,
+      fromWarehouseName: fromWarehouse.name,
+      toWarehouseId: toWarehouse.id,
+      toWarehouseName: toWarehouse.name,
+      status: isDraft ? TransferStatus.DRAFT : TransferStatus.IN_TRANSIT,
+      notes: dto.notes?.trim() || '',
+      createdBy: user.userId,
+      createdByName: user.username || user.email || 'Nhân viên kho',
+      createdAt: new Date(),
+      transferredAt: isDraft ? undefined : new Date(),
+      items: [],
+    });
+
+    items.forEach((item) => {
+      item.transferId = transfer.id;
+    });
+    transfer.items = items;
+
+    if (!isDraft) {
+      for (const item of items) {
+        await this.inventoryService.adjustStock(
+          {
+            productSku: item.sku,
+            quantityChange: -item.transferQuantity,
+            unit: item.unit,
+            reason: `Xuất điều chuyển nội bộ sang ${toWarehouse.name}`,
+            referenceCode: code,
+            warehouseId: fromWarehouse.id,
+          },
+          user.userId,
+        );
+      }
+    }
+
+    list.unshift(transfer);
+    this.saveDiskTransfers(list);
+    return transfer;
+  }
+
+  private async confirmReceiptInDisk(
+    transfer: InternalTransferEntity,
+    dto: ConfirmTransferReceiptDto,
+    user: ICurrentUser,
+  ): Promise<InternalTransferEntity> {
+    const list = this.readDiskTransfers();
+    const itemMap = new Map(dto.items.map((i) => [i.itemId, i]));
+    let hasDiscrepancy = false;
+
+    for (const item of transfer.items) {
+      const confirmItem = itemMap.get(item.id) || itemMap.get(item.productId)!;
+      const actualReceived = confirmItem.receivedQuantity;
+      const discrepancy = item.transferQuantity - actualReceived;
+      if (discrepancy !== 0) hasDiscrepancy = true;
+
+      item.receivedQuantity = actualReceived;
+      item.baseReceivedQuantity = Math.round(actualReceived * item.conversionRate);
+      item.discrepancyQuantity = discrepancy;
+      item.discrepancyReason =
+        confirmItem.discrepancyReason?.trim() || dto.generalDiscrepancyReason?.trim() || '';
+
+      if (actualReceived > 0) {
+        await this.inventoryService.adjustStock(
+          {
+            productSku: item.sku,
+            quantityChange: actualReceived,
+            unit: item.unit,
+            reason: `Nhập điều chuyển từ ${transfer.fromWarehouseName} (Phiếu ${transfer.code})${item.discrepancyReason ? ` [Lý do chênh lệch: ${item.discrepancyReason}]` : ''}`,
+            referenceCode: transfer.code,
+            warehouseId: transfer.toWarehouseId,
+          },
+          user.userId,
+        );
+      }
+    }
+
+    transfer.status = hasDiscrepancy
+      ? TransferStatus.PARTIALLY_RECEIVED
+      : TransferStatus.COMPLETED;
+    transfer.receivedBy = user.userId;
+    transfer.receivedByName = user.username || user.email || 'Thủ kho nhận';
+    transfer.receivedAt = new Date();
+    transfer.discrepancyReason = dto.generalDiscrepancyReason?.trim() || transfer.discrepancyReason;
+    transfer.updatedAt = new Date();
+
+    const idx = list.findIndex((t) => t.id === transfer.id);
+    if (idx >= 0) {
+      list[idx] = transfer;
+    } else {
+      list.unshift(transfer);
+    }
+    this.saveDiskTransfers(list);
+    return transfer;
+  }
+
+  private async cancelInDisk(
+    transfer: InternalTransferEntity,
+    user: ICurrentUser,
+  ): Promise<InternalTransferEntity> {
+    const list = this.readDiskTransfers();
+
     if (transfer.status === TransferStatus.IN_TRANSIT) {
       for (const item of transfer.items) {
         await this.inventoryService.adjustStock(
@@ -418,21 +759,81 @@ export class InternalTransfersService implements OnModuleInit {
 
     transfer.status = TransferStatus.CANCELLED;
     transfer.updatedAt = new Date();
-    this.memoryTransfers.set(transfer.id, transfer);
+
+    const idx = list.findIndex((t) => t.id === transfer.id);
+    if (idx >= 0) {
+      list[idx] = transfer;
+    }
+    this.saveDiskTransfers(list);
     return transfer;
   }
 
   // ===========================================================================
-  // PRIVATE HELPER METHODS (Tuân thủ nguyên tắc hàm nhỏ gọn, dễ kiểm thử)
+  // PRIVATE HELPER METHODS
   // ===========================================================================
 
-  /**
-   * Tra cứu thông tin hợp lệ của 2 kho hàng
-   */
+  private mapDbRowToEntity(
+    row: InternalTransferDbRow,
+    itemRows: InternalTransferItemDbRow[],
+  ): InternalTransferEntity {
+    return new InternalTransferEntity({
+      id: row.id,
+      code: row.code,
+      fromWarehouseId: row.from_warehouse_id,
+      fromWarehouseName: row.from_warehouse_name,
+      toWarehouseId: row.to_warehouse_id,
+      toWarehouseName: row.to_warehouse_name,
+      status: row.status,
+      notes: row.notes || '',
+      createdBy: row.created_by || '',
+      createdByName: row.created_by_name || '',
+      transferredAt: row.transferred_at ? new Date(row.transferred_at) : undefined,
+      receivedBy: row.received_by || undefined,
+      receivedByName: row.received_by_name || undefined,
+      receivedAt: row.received_at ? new Date(row.received_at) : undefined,
+      discrepancyReason: row.discrepancy_reason || undefined,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+      items: itemRows.map(
+        (i) =>
+          new InternalTransferItemEntity({
+            id: i.id,
+            transferId: i.transfer_id,
+            productId: i.product_id,
+            sku: i.sku,
+            productName: i.product_name,
+            unit: i.unit,
+            conversionRate: Number(i.conversion_rate) || 1,
+            baseUnit: i.base_unit,
+            transferQuantity: Number(i.transfer_quantity) || 0,
+            baseTransferQuantity: Number(i.base_transfer_quantity) || 0,
+            receivedQuantity:
+              i.received_quantity !== null && i.received_quantity !== undefined
+                ? Number(i.received_quantity)
+                : undefined,
+            baseReceivedQuantity:
+              i.base_received_quantity !== null && i.base_received_quantity !== undefined
+                ? Number(i.base_received_quantity)
+                : undefined,
+            discrepancyQuantity:
+              i.discrepancy_quantity !== null && i.discrepancy_quantity !== undefined
+                ? Number(i.discrepancy_quantity)
+                : 0,
+            discrepancyReason: i.discrepancy_reason || '',
+            notes: i.notes || '',
+            createdAt: new Date(i.created_at),
+          }),
+      ),
+    });
+  }
+
   private async resolveWarehouses(
     fromId: string,
     toId: string,
-  ): Promise<{ fromWarehouse: { id: string; name: string }; toWarehouse: { id: string; name: string } }> {
+  ): Promise<{
+    fromWarehouse: { id: string; name: string };
+    toWarehouse: { id: string; name: string };
+  }> {
     const warehouses = await this.warehousesService.findAll();
     const fromWarehouse = warehouses.find((w) => w.id === fromId || w.code === fromId);
     const toWarehouse = warehouses.find((w) => w.id === toId || w.code === toId);
@@ -450,9 +851,6 @@ export class InternalTransfersService implements OnModuleInit {
     };
   }
 
-  /**
-   * Chuẩn bị dữ liệu mặt hàng chuyển kho và kiểm tra tồn khả dụng kho đi
-   */
   private async prepareTransferItems(
     rawItems: CreateTransferItemDto[],
     fromWarehouseId: string,
@@ -496,31 +894,6 @@ export class InternalTransfersService implements OnModuleInit {
     return items;
   }
 
-  /**
-   * Thực hiện trừ tồn kho tại kho đi và ghi nhận sổ kho
-   */
-  private async processOutgoingStock(
-    transfer: InternalTransferEntity,
-    userId: string,
-  ): Promise<void> {
-    for (const item of transfer.items) {
-      await this.inventoryService.adjustStock(
-        {
-          productSku: item.sku,
-          quantityChange: -item.transferQuantity,
-          unit: item.unit,
-          reason: `Xuất điều chuyển nội bộ sang ${transfer.toWarehouseName}`,
-          referenceCode: transfer.code,
-          warehouseId: transfer.fromWarehouseId,
-        },
-        userId,
-      );
-    }
-  }
-
-  /**
-   * Kiểm tra ràng buộc lý do chênh lệch khi nhận hàng
-   */
   private validateDiscrepancyReasons(
     transfer: InternalTransferEntity,
     dto: ConfirmTransferReceiptDto,
@@ -539,7 +912,8 @@ export class InternalTransfersService implements OnModuleInit {
       const discrepancy = item.transferQuantity - received;
 
       if (discrepancy !== 0) {
-        const reason = confirmItem.discrepancyReason?.trim() || dto.generalDiscrepancyReason?.trim();
+        const reason =
+          confirmItem.discrepancyReason?.trim() || dto.generalDiscrepancyReason?.trim();
         if (!reason) {
           throw new BadRequestException(
             `Mặt hàng "${item.productName}" có chênh lệch ${discrepancy > 0 ? 'thiếu' : 'thừa'} ${Math.abs(discrepancy)} ${item.unit}. Bắt buộc phải nhập lý do chênh lệch!`,
@@ -549,58 +923,12 @@ export class InternalTransfersService implements OnModuleInit {
     }
   }
 
-  /**
-   * Cộng tồn kho tại kho đến đúng bằng số lượng thực nhận và ghi sổ kho
-   */
-  private async processIncomingStock(
-    transfer: InternalTransferEntity,
-    dto: ConfirmTransferReceiptDto,
-    userId: string,
-  ): Promise<void> {
-    const itemMap = new Map(dto.items.map((i) => [i.itemId, i]));
-
-    for (const item of transfer.items) {
-      const confirmItem = itemMap.get(item.id) || itemMap.get(item.productId)!;
-      const actualReceived = confirmItem.receivedQuantity;
-      const discrepancy = item.transferQuantity - actualReceived;
-
-      item.receivedQuantity = actualReceived;
-      item.baseReceivedQuantity = Math.round(actualReceived * item.conversionRate);
-      item.discrepancyQuantity = discrepancy;
-      item.discrepancyReason =
-        confirmItem.discrepancyReason?.trim() || dto.generalDiscrepancyReason?.trim() || '';
-
-      // Chỉ cộng vào kho đến số lượng thực nhận nếu > 0
-      if (actualReceived > 0) {
-        await this.inventoryService.adjustStock(
-          {
-            productSku: item.sku,
-            quantityChange: actualReceived,
-            unit: item.unit,
-            reason: `Nhập điều chuyển từ ${transfer.fromWarehouseName} (Phiếu ${transfer.code})${item.discrepancyReason ? ` [Lý do chênh lệch: ${item.discrepancyReason}]` : ''}`,
-            referenceCode: transfer.code,
-            warehouseId: transfer.toWarehouseId,
-          },
-          userId,
-        );
-      }
-    }
-  }
-
-  /**
-   * Tự động sinh mã phiếu chuyển kho chuẩn (CK-YYMMDD-XXXX)
-   */
-  private generateTransferCode(): string {
+  private generateFallbackCode(): string {
     const now = new Date();
     const yy = String(now.getFullYear()).slice(-2);
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
-    const datePrefix = `CK-${yy}${mm}${dd}-`;
-
-    const count = Array.from(this.memoryTransfers.values()).filter((t) =>
-      t.code.startsWith(datePrefix),
-    ).length;
-
-    return `${datePrefix}${String(count + 1).padStart(4, '0')}`;
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    return `CK-${yy}${mm}${dd}-${randomSuffix}`;
   }
 }
