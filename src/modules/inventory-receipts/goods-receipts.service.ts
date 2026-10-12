@@ -12,50 +12,54 @@ export class GoodsReceiptsService implements OnModuleInit {
   constructor(private readonly db: DatabaseService) {}
 
   async onModuleInit() {
-    if (!this.db?.isConnected()) {
-      this.logger.warn('CSDL PostgreSQL chưa kết nối, bỏ qua khởi tạo bảng goods_receipts.');
+    if (!this.db.isConnected()) {
+      this.logger.warn('Chưa có kết nối DB PostgreSQL, bỏ qua khởi tạo bảng goods_receipts (chạy chế độ fallback)');
       return;
     }
-    this.logger.log('Khởi tạo bảng goods_receipts và goods_receipt_items...');
-    await this.db.query(`
-      CREATE TABLE IF NOT EXISTS goods_receipts (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        code VARCHAR(50) UNIQUE NOT NULL,
-        warehouse_id VARCHAR(50) NOT NULL,
-        supplier_id VARCHAR(50),
-        receipt_type VARCHAR(50) NOT NULL,
-        reference_document VARCHAR(100),
-        document_url VARCHAR(255),
-        status VARCHAR(50) DEFAULT 'DRAFT',
-        total_cost DECIMAL(15, 2) DEFAULT 0,
-        notes TEXT,
-        created_by VARCHAR(50),
-        received_by VARCHAR(50),
-        received_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    try {
+      this.logger.log('Khởi tạo bảng goods_receipts và goods_receipt_items...');
+      await this.db.query(`
+        CREATE TABLE IF NOT EXISTS goods_receipts (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          code VARCHAR(50) UNIQUE NOT NULL,
+          warehouse_id VARCHAR(50) NOT NULL,
+          supplier_id VARCHAR(50),
+          receipt_type VARCHAR(50) NOT NULL,
+          reference_document VARCHAR(100),
+          document_url VARCHAR(255),
+          status VARCHAR(50) DEFAULT 'DRAFT',
+          total_cost DECIMAL(15, 2) DEFAULT 0,
+          notes TEXT,
+          created_by VARCHAR(50),
+          received_by VARCHAR(50),
+          received_at TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
 
-    await this.db.query(`
-      CREATE TABLE IF NOT EXISTS goods_receipt_items (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        receipt_id UUID REFERENCES goods_receipts(id) ON DELETE CASCADE,
-        product_id VARCHAR(50) NOT NULL,
-        unit_id VARCHAR(50) NOT NULL,
-        package_quantity DECIMAL(15, 2) NOT NULL,
-        conversion_factor DECIMAL(10, 2) NOT NULL,
-        base_quantity DECIMAL(15, 2) NOT NULL,
-        unit_cost DECIMAL(15, 2) NOT NULL,
-        total_cost DECIMAL(15, 2) NOT NULL,
-        batch_number VARCHAR(50),
-        mfg_date DATE,
-        expiry_date DATE,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    this.logger.log('Đã tạo xong các bảng cho goods_receipts.');
+      await this.db.query(`
+        CREATE TABLE IF NOT EXISTS goods_receipt_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          receipt_id UUID REFERENCES goods_receipts(id) ON DELETE CASCADE,
+          product_id VARCHAR(50) NOT NULL,
+          unit_id VARCHAR(50) NOT NULL,
+          package_quantity DECIMAL(15, 2) NOT NULL,
+          conversion_factor DECIMAL(10, 2) NOT NULL,
+          base_quantity DECIMAL(15, 2) NOT NULL,
+          unit_cost DECIMAL(15, 2) NOT NULL,
+          total_cost DECIMAL(15, 2) NOT NULL,
+          batch_number VARCHAR(50),
+          mfg_date DATE,
+          expiry_date DATE,
+          notes TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      this.logger.log('Đã tạo xong các bảng cho goods_receipts.');
+    } catch (err) {
+      this.logger.warn(`Không thể khởi tạo bảng goods_receipts: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async create(dto: CreateGoodsReceiptDto, user: ICurrentUser): Promise<{ id: string }> {
@@ -67,10 +71,15 @@ export class GoodsReceiptsService implements OnModuleInit {
     await client.query('BEGIN');
     try {
       // 1. Generate code
-      const codeRes = await client.query(`SELECT 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || LPAD(COALESCE(MAX(SUBSTRING(code FROM 9)), '0')::INT + 1, 4, '0') AS next_code FROM goods_receipts WHERE code LIKE 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '%'`);
+      const codeRes = await client.query(`SELECT 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || LPAD((COALESCE(MAX(SUBSTRING(code FROM 9)), '0')::INT + 1)::TEXT, 4, '0') AS next_code FROM goods_receipts WHERE code LIKE 'PN' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '%'`);
       const code = codeRes.rows[0].next_code;
 
       const totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
+
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const creatorId = user?.userId && uuidRegex.test(user.userId)
+        ? user.userId
+        : '00000000-0000-0000-0000-000000000004';
 
       const receiptRes = await client.query(
         `INSERT INTO goods_receipts (
@@ -80,7 +89,7 @@ export class GoodsReceiptsService implements OnModuleInit {
         [
           code, dto.warehouseId, dto.supplierId || null, ReceiptType.PURCHASE_RECEIPT, 
           dto.referenceDocument, GoodsReceiptStatus.DRAFT, totalCost, 
-          dto.notes, user.userId, dto.receiptDate || null
+          dto.notes, creatorId, dto.receiptDate || null
         ]
       );
       

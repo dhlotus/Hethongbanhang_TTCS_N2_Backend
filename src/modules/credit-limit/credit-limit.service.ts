@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -38,6 +40,7 @@ export class CreditLimitService implements OnModuleInit {
   private readonly creditLimitLogs: CreditLimitLog[] = [];
 
   constructor(
+    @Inject(forwardRef(() => CustomersService))
     private readonly customersService: CustomersService,
     private readonly auditLogsService: AuditLogsService,
     @Optional() private readonly dbService?: DatabaseService,
@@ -344,7 +347,29 @@ export class CreditLimitService implements OnModuleInit {
    * Lấy chi tiết hạn mức công nợ theo agencyId (hoặc customerId)
    */
   async getAgencyCreditLimitById(agencyId: string): Promise<AgencyCreditLimit> {
-    const item = this.agencyCreditLimits.get(agencyId);
+    if (this.agencyCreditLimits.size === 0) {
+      await this.syncFromCustomers();
+    }
+    let item = this.agencyCreditLimits.get(agencyId);
+    if (!item) {
+      item = Array.from(this.agencyCreditLimits.values()).find(
+        (x) =>
+          x.agencyId === agencyId ||
+          x.agencyCode?.toLowerCase() === agencyId.toLowerCase() ||
+          x.id === agencyId,
+      );
+    }
+    if (!item) {
+      try {
+        const cust = await this.customersService.getCustomerById(agencyId);
+        if (cust) {
+          await this.syncFromCustomers();
+          item = this.agencyCreditLimits.get(cust.id);
+        }
+      } catch {
+        // ignore
+      }
+    }
     if (!item) {
       throw new NotFoundException(
         `Không tìm thấy dữ liệu hạn mức công nợ cho đại lý: ${agencyId}`,
@@ -406,13 +431,27 @@ export class CreditLimitService implements OnModuleInit {
 
   /**
    * Cập nhật hạn mức công nợ và ghi Audit Log trong cùng 1 Database Transaction (SN-34)
-   * Yêu cầu role ACCOUNTANT_DEBT hoặc BUSINESS_MANAGER
+   * Yêu cầu role ACCOUNTANT hoặc SALES_MANAGER
    */
   async updateCreditLimit(
     agencyId: string,
     dto: UpdateCreditLimitDto,
     currentUser?: ICurrentUser,
   ): Promise<AgencyCreditLimit> {
+    // 1. Validate dữ liệu đầu vào bắt buộc
+    if (!dto.reason || typeof dto.reason !== 'string' || dto.reason.trim().length === 0) {
+      throw new BadRequestException('Lý do thay đổi hạn mức là bắt buộc và không được để trống.');
+    }
+    if (dto.reason.trim().length < 5) {
+      throw new BadRequestException('Lý do thay đổi hạn mức phải có ít nhất 5 ký tự.');
+    }
+    if (dto.creditLimit === undefined || dto.creditLimit === null || dto.creditLimit < 0) {
+      throw new BadRequestException('Hạn mức tiền tối đa không được nhỏ hơn 0.');
+    }
+    if (dto.maxDebtDays === undefined || dto.maxDebtDays === null || dto.maxDebtDays < 0) {
+      throw new BadRequestException('Số ngày nợ tối đa không được nhỏ hơn 0.');
+    }
+
     const currentEntity = await this.getAgencyCreditLimitById(agencyId);
 
     const oldCreditLimit = currentEntity.creditLimit;
@@ -423,7 +462,7 @@ export class CreditLimitService implements OnModuleInit {
     const actorName =
       currentUser?.username || currentUser?.email || 'Kế toán công nợ';
     const actorRole =
-      currentUser?.roles?.[0] || Role.ACCOUNTANT_DEBT;
+      currentUser?.roles?.[0] || Role.ACCOUNTANT;
 
     const oldValues: Record<string, unknown> = {
       creditLimit: oldCreditLimit,

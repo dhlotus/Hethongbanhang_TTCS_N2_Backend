@@ -63,6 +63,10 @@ export class RolesGuard implements CanActivate {
       if (r === 'ACCOUNTANT_DEBT') userRoles.push('ACCOUNTANT');
       if (r === 'SALES_MANAGER') userRoles.push('BUSINESS_MANAGER');
       if (r === 'BUSINESS_MANAGER') userRoles.push('SALES_MANAGER');
+      if (r === 'WAREHOUSE') userRoles.push('WAREHOUSE_KEEPER');
+      if (r === 'WAREHOUSE_KEEPER') userRoles.push('WAREHOUSE');
+      if (r === 'WAREHOUSE_MANAGER') userRoles.push('WH_MANAGER');
+      if (r === 'WH_MANAGER') userRoles.push('WAREHOUSE_MANAGER');
     }
 
     // 4. Quản trị hệ thống (ADMIN) luôn có toàn quyền trên toàn bộ hệ thống

@@ -37,6 +37,18 @@ export interface StockAdjustmentResult {
   timestamp: string;
 }
 
+export interface StockOverviewItem extends StockBalance {
+  id: string;
+  category: string;
+  parentCategory: string;
+  subCategory?: string;
+  physicalStock: number;
+  reservedStock: number;
+  availableStock: number;
+  status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  imageUrl?: string;
+}
+
 @Injectable()
 export class InventoryService implements OnModuleInit {
   /**
@@ -294,10 +306,19 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Xem tồn kho khả dụng của danh mục sản phẩm kèm 3 cột (Thực tế, Đang giữ chỗ, Khả dụng) và đơn vị quy đổi (SN-180)
+   * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
    */
-  async getStockOverview(warehouseId: string = DEFAULT_WAREHOUSE_ID): Promise<StockBalance[]> {
+  async getStockOverview(query?: {
+    warehouse?: string;
+    warehouseId?: string;
+    category?: string;
+    status?: string;
+    search?: string;
+  } | string): Promise<StockOverviewItem[]> {
+    const q = typeof query === 'string' ? { warehouseId: query } : query;
+    const warehouseId = q?.warehouseId || q?.warehouse || DEFAULT_WAREHOUSE_ID;
     const products = await this.productsService.findAll();
+
     let physicalBalances = new Map<string, number>();
     const reservations = new Map<string, number>();
     const reservationsListBySku = new Map<
@@ -502,7 +523,7 @@ export class InventoryService implements OnModuleInit {
       }
     }
 
-    return products.map((p) => {
+    let items: StockOverviewItem[] = products.map((p) => {
       const pSkuUpper = p.sku.toUpperCase();
       const aliasSku = pSkuUpper === 'LH-MILK-POWDER-900G' ? 'LH-MILK-900G' : pSkuUpper === 'LH-MILK-900G' ? 'LH-MILK-POWDER-900G' : '';
       const physicalStockQuantity = physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0;
@@ -511,31 +532,76 @@ export class InventoryService implements OnModuleInit {
       const reservedQuantity = Math.max(dbReserved, orderReserved);
       const available = Math.max(0, physicalStockQuantity - reservedQuantity);
       const matchedReservations = reservationsListBySku.get(pSkuUpper) || (aliasSku ? reservationsListBySku.get(aliasSku) : []) || [];
+      const minStockLevel = minLevels.get(p.sku.trim().toUpperCase()) ?? (this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 0);
+      const isBelowMinStock = minStockLevel > 0 && available <= minStockLevel;
 
-      return this.buildStockBalance(
-        {
-          sku: p.sku,
-          productId: p.id,
-          name: p.name,
-          productName: p.name,
-          stockQuantity: available,
-          physicalStockQuantity,
-          physicalQuantity: physicalStockQuantity,
-          reservedQuantity,
-          availableQuantity: available,
-          baseUnit: p.baseUnit,
-          units: (p.units || []).map((u) => ({
-            unitName: u.unitName,
-            conversionRate: u.conversionRate,
-            isBaseUnit: u.isBaseUnit,
-          })),
-          activeReservations: matchedReservations,
-        },
-        minLevels.get(p.sku.trim().toUpperCase()) ?? (this.minStockLevels.get(p.sku.trim().toUpperCase()) ?? 0),
+      let status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' = 'IN_STOCK';
+      if (available <= 0) {
+        status = 'OUT_OF_STOCK';
+      } else if (available <= 10 || isBelowMinStock) {
+        status = 'LOW_STOCK';
+      }
+
+      return {
+        id: p.id,
+        productId: p.id,
+        sku: p.sku,
+        name: p.name,
+        productName: p.name,
+        category: p.category || `${p.parentCategory || ''} / ${p.subCategory || ''}`,
+        parentCategory: p.parentCategory || 'Sữa & Chế phẩm sữa',
+        subCategory: p.subCategory || '',
+        physicalStock: physicalStockQuantity,
+        physicalStockQuantity,
+        physicalQuantity: physicalStockQuantity,
+        reservedStock: reservedQuantity,
+        reservedQuantity,
+        availableStock: available,
+        availableQuantity: available,
+        stockQuantity: available,
+        baseUnit: p.baseUnit,
+        units: (p.units || []).map((u) => ({
+          unitName: u.unitName,
+          conversionRate: u.conversionRate,
+          isBaseUnit: u.isBaseUnit,
+        })),
+        warehouse: warehouseName,
         warehouseId,
-        warehouseName,
-      );
+        minStockLevel,
+        isBelowMinStock,
+        status,
+        imageUrl: p.imageUrl,
+        activeReservations: matchedReservations,
+      };
     });
+
+    if (q?.search) {
+      const searchLower = q.search.trim().toLowerCase();
+      items = items.filter(
+        (i) => i.sku.toLowerCase().includes(searchLower) || i.name.toLowerCase().includes(searchLower),
+      );
+    }
+
+    if (q?.category && q.category !== 'ALL') {
+      items = items.filter(
+        (i) =>
+          i.category.includes(q.category!) ||
+          i.parentCategory === q.category ||
+          i.subCategory === q.category,
+      );
+    }
+
+    if (q?.status && q.status !== 'ALL') {
+      items = items.filter((i) => i.status === q.status);
+    }
+
+    if (q?.warehouse && q.warehouse !== 'ALL' && q.warehouse !== warehouseId) {
+      items = items.filter(
+        (i) => i.warehouse === q.warehouse || i.warehouseId === q.warehouse,
+      );
+    }
+
+    return items;
   }
 
   /**
