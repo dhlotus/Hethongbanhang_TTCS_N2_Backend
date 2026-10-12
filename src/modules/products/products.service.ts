@@ -195,6 +195,11 @@ export class ProductsService implements OnModuleInit {
         const costPrice = Number(row.cost_price) || 0;
 
         if (existing) {
+          if (existing.id !== row.id) {
+            this.products.delete(existing.id);
+            existing.id = row.id;
+            this.products.set(existing.id, existing);
+          }
           existing.sku = row.sku;
           if (row.category_id) {
             existing.categoryId = String(row.category_id);

@@ -1,15 +1,15 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min, ValidateNested } from 'class-validator';
 import { GoodsReceiptStatus, ReceiptType } from '../entities/goods-receipt.entity';
 
 export class CreateGoodsReceiptItemDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID('all', { message: 'productId phải là định dạng UUID hợp lệ' })
+  @IsNotEmpty({ message: 'productId không được để trống' })
   productId: string;
 
   @IsString()
-  @IsNotEmpty()
-  unitId: string;
+  @IsOptional()
+  unitId?: string;
 
   @IsNumber()
   @Min(0.01)
@@ -43,7 +43,7 @@ export class CreateGoodsReceiptItemDto {
 
 export class CreateGoodsReceiptDto {
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'warehouseId không được để trống' })
   warehouseId: string;
 
   @IsString()
@@ -67,3 +67,4 @@ export class CreateGoodsReceiptDto {
   @Type(() => CreateGoodsReceiptItemDto)
   items: CreateGoodsReceiptItemDto[];
 }
+
