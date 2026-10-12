@@ -20,7 +20,7 @@ import { AuditLogEntity } from './entities/audit-log.entity';
  */
 @Controller('audit-logs')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
 export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}
 
