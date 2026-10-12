@@ -316,7 +316,10 @@ export class InventoryService implements OnModuleInit {
     search?: string;
   } | string): Promise<StockOverviewItem[]> {
     const q = typeof query === 'string' ? { warehouseId: query } : query;
-    const warehouseId = q?.warehouseId || q?.warehouse || DEFAULT_WAREHOUSE_ID;
+    const isUuid = (val?: string) =>
+      Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim()));
+    const rawWh = q?.warehouseId || q?.warehouse;
+    const warehouseId = isUuid(rawWh) ? rawWh!.trim() : DEFAULT_WAREHOUSE_ID;
     const products = await this.productsService.findAll();
 
     let physicalBalances = new Map<string, number>();
@@ -592,7 +595,13 @@ export class InventoryService implements OnModuleInit {
     }
 
     if (q?.status && q.status !== 'ALL') {
-      items = items.filter((i) => i.status === q.status);
+      if (q.status === 'BELOW_MIN_STOCK') {
+        items = items.filter(
+          (i) => i.isBelowMinStock || ((i.minStockLevel ?? 0) > 0 && i.availableStock <= (i.minStockLevel ?? 0)),
+        );
+      } else {
+        items = items.filter((i) => i.status === q.status);
+      }
     }
 
     if (q?.warehouse && q.warehouse !== 'ALL' && q.warehouse !== warehouseId) {
