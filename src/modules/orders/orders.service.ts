@@ -202,6 +202,14 @@ export class OrdersService implements OnModuleInit {
           // ignore
         }
       }
+
+      if (this.priceListsService) {
+        for (const order of this.orders.values()) {
+          if (order.priceListId) {
+            void this.priceListsService.markPriceListHasOrders(order.priceListId);
+          }
+        }
+      }
     } catch (error) {
       this.logger.warn(`[PostgreSQL] Lỗi khởi tạo bảng đơn hàng, chuyển sang bộ nhớ tạm: ${(error as Error).message}`);
       if (this.orders.size === 0) {
@@ -425,11 +433,18 @@ export class OrdersService implements OnModuleInit {
     if (!this.databaseService || !this.inventoryService) {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
-    const warehouseRows = await this.databaseService.query<{ warehouse_id: string }>(
-      'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
-      [customerId],
-    );
-    const warehouseId = warehouseRows[0]?.warehouse_id ?? DEFAULT_WAREHOUSE_ID;
+    let warehouseId = DEFAULT_WAREHOUSE_ID;
+    try {
+      const warehouseRows = await this.databaseService.query<{ warehouse_id: string }>(
+        'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+        [customerId],
+      );
+      if (warehouseRows[0]?.warehouse_id) {
+        warehouseId = warehouseRows[0].warehouse_id;
+      }
+    } catch {
+      // Fallback DEFAULT_WAREHOUSE_ID
+    }
     const stockRows = await this.inventoryService.getStockOverview(warehouseId);
     const availableBySku = new Map(
       stockRows.map((row) => [row.sku.trim().toUpperCase(), row.stockQuantity]),
@@ -1131,6 +1146,11 @@ export class OrdersService implements OnModuleInit {
 
     await this.saveOrder(newOrder);
 
+    // Đánh dấu Bảng giá đã phát sinh đơn hàng (Ràng buộc đơn hàng hasOrders = true)
+    if (newOrder.priceListId && this.priceListsService) {
+      await this.priceListsService.markPriceListHasOrders(newOrder.priceListId);
+    }
+
     // Cập nhật tính toán tồn khả dụng cho các sản phẩm trong đơn (SN-180 & SN-42)
     if (!this.databaseService?.isConnected() && this.productsService && newOrder.lines) {
       for (const line of newOrder.lines) {
@@ -1765,11 +1785,18 @@ export class OrdersService implements OnModuleInit {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
     const linesBySku = this.groupOrderLinesBySku(order.lines);
-    const warehouseRows = await client.query<{ warehouse_id: string }>(
-      'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
-      [order.customerId],
-    );
-    const warehouseId = warehouseRows.rows[0]?.warehouse_id || DEFAULT_WAREHOUSE_ID;
+    let warehouseId = DEFAULT_WAREHOUSE_ID;
+    try {
+      const warehouseRows = await client.query<{ warehouse_id: string }>(
+        'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+        [order.customerId],
+      );
+      if (warehouseRows.rows[0]?.warehouse_id) {
+        warehouseId = warehouseRows.rows[0].warehouse_id;
+      }
+    } catch {
+      // Fallback DEFAULT_WAREHOUSE_ID
+    }
     for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
       const product = await this.productsService.findById(sku);

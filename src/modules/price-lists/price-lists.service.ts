@@ -649,6 +649,32 @@ export class PriceListsService implements OnModuleInit {
   ): Promise<PaginatedPriceListsResponse> {
     const { page = 1, limit = 20, search, customerGroup, status } = filterDto;
 
+    // Tự động kiểm tra và đồng bộ trạng thái hasOrders từ cơ sở dữ liệu đơn hàng
+    if (this.databaseService?.isConnected()) {
+      try {
+        const orderRows = await this.databaseService.query<{ payload: any }>(
+          'SELECT payload FROM app_order_records',
+        );
+        const usedPriceListKeys = new Set<string>();
+        for (const row of orderRows) {
+          const pId = row.payload?.priceListId;
+          if (pId) {
+            usedPriceListKeys.add(String(pId).trim().toLowerCase());
+          }
+        }
+        for (const pl of this.priceLists.values()) {
+          if (
+            usedPriceListKeys.has(pl.id.toLowerCase()) ||
+            usedPriceListKeys.has(pl.code.toLowerCase())
+          ) {
+            pl.hasOrders = true;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     let items = Array.from(this.priceLists.values());
 
     // 1. Tìm kiếm tương đối theo Mã hoặc Tên bảng giá
@@ -1036,6 +1062,23 @@ export class PriceListsService implements OnModuleInit {
         for (const pl of this.priceLists.values()) {
           await this.savePriceListToDb(pl);
         }
+      }
+    }
+  }
+
+  /**
+   * Đánh dấu Bảng giá đã phát sinh đơn hàng (hasOrders = true)
+   */
+  async markPriceListHasOrders(idOrCode: string): Promise<void> {
+    if (!idOrCode) return;
+    const pl = this.findInternal(idOrCode);
+    if (pl && !pl.hasOrders) {
+      pl.hasOrders = true;
+      pl.updatedAt = new Date();
+      this.priceLists.set(pl.id, pl);
+      this.savePriceListsToDisk();
+      if (this.databaseService?.isConnected()) {
+        await this.savePriceListToDb(pl);
       }
     }
   }
