@@ -970,19 +970,44 @@ export class OrdersService implements OnModuleInit {
     }
 
     // 6. Lọc theo khoảng thời gian (fromDate, toDate)
-    if (query.fromDate) {
-      const fromTime = new Date(query.fromDate).getTime();
-      if (!isNaN(fromTime)) {
-        list = list.filter((o) => new Date(o.createdAt).getTime() >= fromTime);
+    // Chuẩn hóa ngày dạng YYYY-MM-DD độc lập với múi giờ, hỗ trợ cả ngày tạo (createdAt) và ngày giao (deliveryDate)
+    const toDateKey = (val: string | Date | undefined): string => {
+      if (!val) return '';
+      if (typeof val === 'string') {
+        const m = val.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (m) return m[1];
       }
-    }
-    if (query.toDate) {
-      const toDateObj = new Date(query.toDate);
-      toDateObj.setHours(23, 59, 59, 999);
-      const toTime = toDateObj.getTime();
-      if (!isNaN(toTime)) {
-        list = list.filter((o) => new Date(o.createdAt).getTime() <= toTime);
-      }
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return '';
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    const fromKey = query.fromDate?.trim();
+    const toKey = query.toDate?.trim();
+
+    if (fromKey && toKey) {
+      list = list.filter((o) => {
+        const cKey = toDateKey(o.createdAt);
+        const dKey = toDateKey(o.deliveryDate);
+        const cMatch = Boolean(cKey && cKey >= fromKey && cKey <= toKey);
+        const dMatch = Boolean(dKey && dKey >= fromKey && dKey <= toKey);
+        return cMatch || dMatch;
+      });
+    } else if (fromKey) {
+      list = list.filter((o) => {
+        const cKey = toDateKey(o.createdAt);
+        const dKey = toDateKey(o.deliveryDate);
+        return Boolean((cKey && cKey >= fromKey) || (dKey && dKey >= fromKey));
+      });
+    } else if (toKey) {
+      list = list.filter((o) => {
+        const cKey = toDateKey(o.createdAt);
+        const dKey = toDateKey(o.deliveryDate);
+        return Boolean((cKey && cKey <= toKey) || (dKey && dKey <= toKey));
+      });
     }
 
     // 7. Tìm kiếm tự do (mã đơn, mã đại lý, tên đại lý, sđt, người nhận, nhân viên)
