@@ -300,8 +300,29 @@ export class UsersService implements OnModuleInit {
       const content = fs.readFileSync(filePath, 'utf-8');
       if (!content.trim()) return;
       const rawList: Array<Partial<UserEntity>> = JSON.parse(content);
+      
+      const isMock = (fullName?: string, username?: string) => {
+        if (!fullName && !username) return false;
+        return (
+          /Nhân Viên \d+/i.test(fullName || '') ||
+          /vũ văn bảy/i.test(fullName || '') ||
+          /nguyễn văn một/i.test(fullName || '') ||
+          /nguyen van a/i.test(fullName || '') ||
+          (username || '').startsWith('employee_') ||
+          (username || '').startsWith('test_')
+        );
+      };
+
+      // Dọn sạch các user mock khỏi Map
+      for (const [id, u] of this.users.entries()) {
+        if (isMock(u.fullName, u.username)) {
+          this.users.delete(id);
+        }
+      }
+
       for (const item of rawList) {
         if (!item.id) continue;
+        if (isMock(item.fullName, item.username)) continue;
         const existing = this.users.get(item.id);
         if (existing) {
           Object.assign(existing, {
