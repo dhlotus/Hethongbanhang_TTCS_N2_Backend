@@ -201,11 +201,50 @@ export class UsersService implements OnModuleInit {
         id: 'usr-sales-002',
         email: 'sales@loha.vn',
         username: 'sales',
-        fullName: 'Trần Văn Nam (Nhân Viên Kinh Doanh)',
+        fullName: 'Trần Văn Nam',
         phone: '0923456789',
         role: UserRole.SALES_REP,
         status: UserStatus.ACTIVE,
-        assignedWarehouse: 'Địa bàn TP. Hồ Chí Minh',
+        assignedWarehouse: 'Địa bàn Miền Bắc',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-sale-01',
+        email: 'long.tran@loha.vn',
+        username: 'long_tran',
+        fullName: 'Trần Văn Long',
+        phone: '0907000001',
+        role: UserRole.SALES_REP,
+        status: UserStatus.ACTIVE,
+        assignedWarehouse: 'Địa bàn Miền Nam',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-sale-02',
+        email: 'hang.nguyen@loha.vn',
+        username: 'hang_nguyen',
+        fullName: 'Nguyễn Thị Hằng',
+        phone: '0907000002',
+        role: UserRole.SALES_REP,
+        status: UserStatus.ACTIVE,
+        assignedWarehouse: 'Địa bàn Miền Nam',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-sale-03',
+        email: 'tuan.pham@loha.vn',
+        username: 'tuan_pham',
+        fullName: 'Phạm Minh Tuấn',
+        phone: '0907000003',
+        role: UserRole.SALES_REP,
+        status: UserStatus.ACTIVE,
+        assignedWarehouse: 'Địa bàn Miền Bắc',
         passwordHash,
         failedAttempts: 0,
         lockedUntil: null,
@@ -214,7 +253,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-salesmgr-003',
         email: 'salesmanager@loha.vn',
         username: 'salesmanager',
-        fullName: 'Lê Hoàng Trưởng Phòng (Quản Lý Kinh Doanh)',
+        fullName: 'Lê Hoàng',
         phone: '0934567890',
         role: UserRole.SALES_MANAGER,
         status: UserStatus.ACTIVE,
@@ -289,8 +328,29 @@ export class UsersService implements OnModuleInit {
       const content = fs.readFileSync(filePath, 'utf-8');
       if (!content.trim()) return;
       const rawList: Array<Partial<UserEntity>> = JSON.parse(content);
+      
+      const isMock = (fullName?: string, username?: string) => {
+        if (!fullName && !username) return false;
+        return (
+          /Nhân Viên \d+/i.test(fullName || '') ||
+          /vũ văn bảy/i.test(fullName || '') ||
+          /nguyễn văn một/i.test(fullName || '') ||
+          /nguyen van a/i.test(fullName || '') ||
+          (username || '').startsWith('employee_') ||
+          (username || '').startsWith('test_')
+        );
+      };
+
+      // Dọn sạch các user mock khỏi Map
+      for (const [id, u] of this.users.entries()) {
+        if (isMock(u.fullName, u.username)) {
+          this.users.delete(id);
+        }
+      }
+
       for (const item of rawList) {
         if (!item.id) continue;
+        if (isMock(item.fullName, item.username)) continue;
         const existing = this.users.get(item.id);
         if (existing) {
           Object.assign(existing, {
