@@ -46,14 +46,20 @@ export class DiscountPoliciesController {
 
   @Post('calculate')
   @Public()
-  calculateDiscount(@Body() body: { productId: string; productSku?: string; productName?: string; categoryId: string; quantity: number }) {
-    const discount = this.discountPoliciesService.calculateBestDiscount(
-      body.productId,
-      body.categoryId,
-      body.quantity,
-      body.productSku,
-      body.productName,
-    );
-    return { discount };
+  calculateDiscount(@Body() body: any) {
+    const result = this.discountPoliciesService.calculateFinalPriceAndDiscount({
+      productId: body.productId,
+      productSku: body.productSku,
+      productName: body.productName,
+      categoryId: body.categoryId || '',
+      quantity: Number(body.quantity) || 1,
+      listPrice: body.listPrice !== undefined ? Number(body.listPrice) : undefined,
+      agencyId: body.agencyId,
+      customerId: body.customerId,
+    });
+    return {
+      discount: result.discountPercent,
+      ...result,
+    };
   }
 }

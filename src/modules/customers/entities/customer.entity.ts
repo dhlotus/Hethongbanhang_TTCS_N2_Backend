@@ -36,6 +36,7 @@ export class CustomerEntity {
   lockedAt?: Date;
   lockedBy?: string;
   deliveryPoints: DeliveryPointEntity[];
+  userId?: string;
   createdAt: Date;
   updatedAt: Date;
 

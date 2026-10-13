@@ -8,6 +8,33 @@ import { UpdateDiscountPolicyDto } from './dto/update-discount-policy.dto';
 import { DiscountPolicyStatus } from './enums/discount.enum';
 import { DatabaseService } from '../../database/database.service';
 
+export interface PricingCalculationInput {
+  productId: string;
+  productSku?: string;
+  productName?: string;
+  categoryId?: string;
+  quantity: number;
+  listPrice?: number;
+  agencyId?: string;
+  customerId?: string;
+}
+
+export interface PricingCalculationResult {
+  listPrice: number;
+  unitPrice: number;
+  discountType: 'PERCENTAGE' | 'FIXED_AMOUNT' | 'NONE';
+  discountRawValue: number;
+  discountPercent: number; // Tối đa 100%
+  discountAmountPerUnit: number; // Số tiền giảm trên 1 đơn vị, tối đa bằng listPrice
+  subtotal: number; // listPrice * quantity
+  totalDiscount: number; // discountAmountPerUnit * quantity
+  finalAmount: number; // unitPrice * quantity
+  policyId?: string;
+  policyCode?: string;
+  policyName?: string;
+  displayText: string; // "Giảm 30.000 đ" hoặc "Giảm 10%"
+}
+
 @Injectable()
 export class DiscountPoliciesService implements OnModuleInit {
   private discountPolicies = new Map<string, DiscountPolicyEntity>();
@@ -255,47 +282,64 @@ export class DiscountPoliciesService implements OnModuleInit {
     await this.deletePolicyFromDb(policy.id);
   }
 
-  calculateBestDiscount(
-    productId: string,
-    categoryId: string,
-    quantity: number,
-    productSku?: string,
-    productName?: string,
-  ): number {
-    if (quantity <= 0) return 0;
+  /**
+   * PRICING & DISCOUNT ENGINE DÙNG CHUNG (SINGLE SOURCE OF TRUTH)
+   * Tính toán giá bán, chiết khấu và tổng tiền thống nhất cho mọi luồng (Admin, B2B, Portal)
+   */
+  calculateFinalPriceAndDiscount(input: PricingCalculationInput): PricingCalculationResult {
+    const qty = Math.max(1, Number(input.quantity) || 1);
+    const rawListPrice = Math.max(0, Number(input.listPrice) || 0);
+    const listPrice = Math.round(rawListPrice);
+
+    const defaultResult: PricingCalculationResult = {
+      listPrice,
+      unitPrice: listPrice,
+      discountType: 'NONE',
+      discountRawValue: 0,
+      discountPercent: 0,
+      discountAmountPerUnit: 0,
+      subtotal: listPrice * qty,
+      totalDiscount: 0,
+      finalAmount: listPrice * qty,
+      displayText: '0%',
+    };
+
+    if (qty <= 0) return defaultResult;
 
     const today = new Date().toISOString().split('T')[0];
 
-    // BƯỚC 1: LỌC TẤT CẢ CÁC CHÍNH SÁCH ĐANG HIỆU LỰC (ACTIVE) VÀ TRONG THỜI HẠN
-    // Các chính sách INACTIVE hoặc hết hạn bị loại bỏ ngay lập tức tại đây!
-    const activePolicies = Array.from(this.discountPolicies.values()).filter(
-      (p) => {
-        // Chỉ chấp nhận chính sách ĐANG HIỆU LỰC (ACTIVE)
-        if (p.status !== DiscountPolicyStatus.ACTIVE) return false;
-        if (p.startDate && p.startDate.split('T')[0] > today) return false;
-        if (p.endDate && p.endDate.split('T')[0] < today) return false;
+    // BƯỚC 1: LỌC TẤT CẢ CHÍNH SÁCH ACTIVE VÀ TRONG THỜI HẠN ÁP DỤNG CHO SẢN PHẨM
+    const activePolicies = Array.from(this.discountPolicies.values()).filter((p) => {
+      if (p.status !== DiscountPolicyStatus.ACTIVE) return false;
+      if (p.startDate && p.startDate.split('T')[0] > today) return false;
+      if (p.endDate && p.endDate.split('T')[0] < today) return false;
 
-        return this.isProductMatchingPolicy(p, productId, productSku, categoryId, productName);
-      },
-    );
+      return this.isProductMatchingPolicy(
+        p,
+        input.productId,
+        input.productSku,
+        input.categoryId,
+        input.productName,
+      );
+    });
 
-    // BƯỚC 2: NẾU KHÔNG CÓ CHÍNH SÁCH NÀO ĐANG HIỆU LỰC CHO SẢN PHẨM NÀY -> 0%
     if (activePolicies.length === 0) {
-      return 0;
+      return defaultResult;
     }
 
-    // BƯỚC 3: DUYỆT TẤT CẢ CÁC MÃ ĐANG HIỆU LỰC, TÍNH ƯU ĐÃI VÀ CHỌN CHÍNH SÁCH CÓ ƯU ĐÃI TỐT NHẤT (CAO NHẤT)
-    let bestDiscountPercent = 0;
+    // BƯỚC 2: DUYỆT CÁC CHÍNH SÁCH, TÍNH ƯU ĐÃI TỐT NHẤT (SỐ TIỀN GIẢM CAO NHẤT)
+    let bestDiscountAmountPerUnit = 0;
+    let bestPolicy: DiscountPolicyEntity | null = null;
+    let bestTierValue = 0;
+    let bestDiscountType: 'PERCENTAGE' | 'FIXED_AMOUNT' = 'PERCENTAGE';
 
     for (const policy of activePolicies) {
       if (!policy.tiers || policy.tiers.length === 0) continue;
 
-      // 1. Sắp xếp các nấc theo Q_min tăng dần
       const sortedTiers = [...policy.tiers].sort(
         (a, b) => (Number(a.minQuantity) || 0) - (Number(b.minQuantity) || 0),
       );
 
-      // 2. Tìm các nấc thỏa mãn: Quantity >= Q_min VÀ (Quantity <= Q_max HOẶC Q_max rỗng/0/null/undefined/Infinity)
       const matchedTiers = sortedTiers.filter((t) => {
         const min = Number(t.minQuantity) || 0;
         const rawMax = t.maxQuantity;
@@ -304,24 +348,122 @@ export class DiscountPoliciesService implements OnModuleInit {
             ? Number(rawMax)
             : null;
 
-        if (quantity < min) return false;
+        if (qty < min) return false;
         if (max === null || isNaN(max) || max <= 0 || max === Infinity) return true;
-        return quantity <= max;
+        return qty <= max;
       });
 
-      // 3. Lấy nấc thỏa mãn có Q_min cao nhất trong chính sách này
       const applicableTier = matchedTiers.length > 0 ? matchedTiers[matchedTiers.length - 1] : null;
+      if (!applicableTier) continue;
 
-      if (applicableTier) {
-        const val = Number(applicableTier.discountValue) || 0;
-        // So sánh để chọn ưu đãi tốt hơn (cao nhất) giữa các chính sách
-        if ((policy.discountType === 'PERCENTAGE' || !policy.discountType) && val > bestDiscountPercent) {
-          bestDiscountPercent = val;
-        }
+      const val = Math.max(0, Number(applicableTier.discountValue) || 0);
+      const isFixed = policy.discountType === 'FIXED_AMOUNT';
+
+      let discountAmountPerUnitForTier = 0;
+      if (isFixed) {
+        // Trường hợp 2 (Loại Tiền mặt - FIXED_AMOUNT):
+        // Số tiền giảm không được vượt quá Giá gốc của sản phẩm
+        discountAmountPerUnitForTier = listPrice > 0 ? Math.min(listPrice, val) : val;
+      } else {
+        // Trường hợp 1 (Loại Phần trăm - PERCENTAGE):
+        // Cấp chiết khấu không được vượt quá 100%
+        const validPercent = Math.min(100, Math.max(0, val));
+        discountAmountPerUnitForTier = listPrice > 0 ? Math.round((listPrice * validPercent) / 100) : 0;
+      }
+
+      // So sánh chọn chính sách có mức ưu đãi tốt nhất cho đại lý
+      // Nếu có listPrice: chọn discountAmountPerUnit cao nhất
+      // Nếu listPrice = 0: nếu là tiền mặt thì lấy val cao nhất, nếu là % thì quy đổi
+      const effectiveComparisonValue = listPrice > 0 ? discountAmountPerUnitForTier : val;
+      const currentBestComparisonValue =
+        listPrice > 0
+          ? bestDiscountAmountPerUnit
+          : bestDiscountType === 'FIXED_AMOUNT'
+          ? bestTierValue
+          : (bestTierValue / 100) * 100000;
+
+      if (effectiveComparisonValue > currentBestComparisonValue || !bestPolicy) {
+        bestDiscountAmountPerUnit = discountAmountPerUnitForTier;
+        bestPolicy = policy;
+        bestTierValue = val;
+        bestDiscountType = isFixed ? 'FIXED_AMOUNT' : 'PERCENTAGE';
       }
     }
 
-    return bestDiscountPercent;
+    if (!bestPolicy) {
+      return defaultResult;
+    }
+
+    // BƯỚC 3: TỔNG HỢP KẾT QUẢ ĐỒNG NHẤT, CHỐNG ÂM TIỀN & ĐỊNH DẠNG CHUẨN XÁC
+    // Validation: Số tiền giảm không được lớn hơn Giá gốc của sản phẩm
+    const finalDiscountAmountPerUnit =
+      listPrice > 0
+        ? Math.min(listPrice, Math.max(0, bestDiscountAmountPerUnit))
+        : 0;
+
+    // Giá sau CK = Math.max(0, Giá gốc - Giá trị CK)
+    const unitPrice = Math.max(0, listPrice - finalDiscountAmountPerUnit);
+
+    // Tính phần trăm chiết khấu quy đổi chuẩn (tối đa 100%)
+    let discountPercent = 0;
+    if (bestDiscountType === 'PERCENTAGE') {
+      discountPercent = Math.min(100, Math.max(0, bestTierValue));
+    } else if (listPrice > 0) {
+      discountPercent = Math.min(
+        100,
+        Number(((finalDiscountAmountPerUnit / listPrice) * 100).toFixed(2)),
+      );
+    }
+
+    // Text hiển thị thân thiện, không bao giờ nhầm lẫn VNĐ và %
+    let displayText = '';
+    if (bestDiscountType === 'FIXED_AMOUNT') {
+      displayText = `Giảm ${bestTierValue.toLocaleString('vi-VN')} đ`;
+    } else {
+      displayText = `Giảm ${discountPercent}%`;
+    }
+
+    const subtotal = listPrice * qty;
+    const totalDiscount = finalDiscountAmountPerUnit * qty;
+    const finalAmount = Math.max(0, unitPrice * qty);
+
+    return {
+      listPrice,
+      unitPrice,
+      discountType: bestDiscountType,
+      discountRawValue: bestTierValue,
+      discountPercent,
+      discountAmountPerUnit: finalDiscountAmountPerUnit,
+      subtotal,
+      totalDiscount,
+      finalAmount,
+      policyId: bestPolicy.id,
+      policyCode: bestPolicy.code,
+      policyName: bestPolicy.name,
+      displayText,
+    };
+  }
+
+  /**
+   * Tính mức chiết khấu quy đổi (%) tốt nhất (Backward compatibility)
+   */
+  calculateBestDiscount(
+    productId: string,
+    categoryId: string,
+    quantity: number,
+    productSku?: string,
+    productName?: string,
+    listPrice?: number,
+  ): number {
+    const res = this.calculateFinalPriceAndDiscount({
+      productId,
+      categoryId,
+      quantity,
+      productSku,
+      productName,
+      listPrice,
+    });
+    return res.discountPercent;
   }
 
   /**

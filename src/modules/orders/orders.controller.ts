@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -41,12 +42,99 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   /**
-   * Lấy danh sách đơn hàng của riêng Đại lý đang đăng nhập (SN-170: Chỉ thấy đơn của chính mình)
+   * Lấy danh sách đơn hàng của riêng Đại lý đang đăng nhập (SN-170: Cách ly dữ liệu Cổng B2B)
    * GET /api/orders/portal/my-orders
+   * - Bắt buộc xác thực JWT Token
+   * - Tự động trích xuất agencyId từ Token
+   * - Tuyệt đối không nhận agency_id hay customerId từ query/body của Frontend
+   * - Nếu tài khoản không có agency_id hợp lệ, văng 403 Forbidden
    */
   @Get('portal/my-orders')
-  @Public()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CUSTOMER, UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
   async getMyOrders(
+    @Query() query: QueryOrdersDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<{
+    data: OrderEntity[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    // Xóa bỏ triệt để các tham số do Frontend gửi lên để chống rò rỉ dữ liệu chéo
+    delete (query as any).customerId;
+    delete (query as any).agency_id;
+    delete (query as any).agencyId;
+
+    const agencyId = currentUser.agencyId || currentUser.customerId;
+    if (!agencyId) {
+      throw new ForbiddenException(
+        'Tài khoản của bạn chưa được liên kết với hồ sơ Đại lý hợp lệ.',
+      );
+    }
+
+    return this.ordersService.findOrdersByCustomer(agencyId, query);
+  }
+
+  /**
+   * Xem trước dòng hàng đặt lại, phát hiện sản phẩm ngừng kinh doanh & áp giá hiện hành (SN-174)
+   * GET /api/orders/:id/reorder-preview
+   */
+  @Get(':id/reorder-preview')
+  @UseGuards(JwtAuthGuard)
+  async getReorderPreview(
+    @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser | string,
+    @Query('customerId') queryCustomerId?: string,
+  ) {
+    let agencyId: string | undefined;
+    if (typeof currentUser === 'string') {
+      agencyId = currentUser;
+    } else if (currentUser) {
+      agencyId = (currentUser.agencyId || currentUser.customerId) ?? undefined;
+      if (currentUser.roles?.includes(UserRole.CUSTOMER) && !agencyId) {
+        throw new ForbiddenException('Tài khoản đại lý không hợp lệ.');
+      }
+    }
+    agencyId = agencyId || queryCustomerId;
+    return this.ordersService.getReorderPreview(id, agencyId || undefined);
+  }
+
+  /**
+   * Đặt lại đơn hàng cũ theo bảng giá hiện hành (SN-174)
+   * POST /api/orders/:id/reorder
+   */
+  @Post(':id/reorder')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.CREATED)
+  async reorder(
+    @Param('id') id: string,
+    @Body() dto: ReorderDto,
+    @CurrentUser() currentUser?: ICurrentUser | string,
+    @Query('customerId') queryCustomerId?: string,
+  ) {
+    let agencyId: string | undefined;
+    if (typeof currentUser === 'string') {
+      agencyId = currentUser;
+    } else if (currentUser) {
+      agencyId = (currentUser.agencyId || currentUser.customerId) ?? undefined;
+      if (currentUser.roles?.includes(UserRole.CUSTOMER) && !agencyId) {
+        throw new ForbiddenException('Tài khoản đại lý không hợp lệ.');
+      }
+    }
+    agencyId = agencyId || queryCustomerId;
+    return this.ordersService.reorder(id, dto, agencyId || undefined);
+  }
+
+  /**
+   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38)
+   * GET /api/orders
+   */
+  @Get()
+  @Public()
+  @UseGuards(JwtAuthGuard)
+  async getOrders(
     @Query() query: QueryOrdersDto,
     @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<{
@@ -56,60 +144,52 @@ export class OrdersController {
     limit: number;
     totalPages: number;
   }> {
-    // Xác định customerId của đại lý (tự động nhận diện theo token hoặc query)
-    const targetCustomerId =
-      query.customerId ||
-      (currentUser?.username === 'dealer' ||
-      currentUser?.email?.includes('dealer') ||
-      currentUser?.email?.includes('daily')
-        ? 'cust-001'
-        : 'cust-001');
-
-    return this.ordersService.findOrdersByCustomer(targetCustomerId, query);
+    // Nếu người dùng có vai trò Đại lý (CUSTOMER), cưỡng chế ép lọc đơn hàng của chính đại lý đó
+    if (currentUser?.roles?.includes(UserRole.CUSTOMER)) {
+      const agencyId = currentUser.agencyId || currentUser.customerId;
+      if (!agencyId) {
+        throw new ForbiddenException('Tài khoản của bạn chưa gắn với hồ sơ đại lý.');
+      }
+      delete (query as any).agency_id;
+      delete (query as any).agencyId;
+      query.customerId = agencyId;
+    }
+    return this.ordersService.findAllOrders(query, currentUser as any);
   }
 
   /**
-   * Xem trước dòng hàng đặt lại, phát hiện sản phẩm ngừng kinh doanh & áp giá hiện hành (SN-174)
-   * GET /api/orders/:id/reorder-preview
+   * Sao chép đơn hàng thành đơn mới ở trạng thái Nháp (SN-48)
+   * POST /api/orders/:id/clone
    */
-  @Get(':id/reorder-preview')
-  @Public()
-  async getReorderPreview(
-    @Param('id') id: string,
-    @Query('customerId') customerId?: string,
-  ) {
-    return this.ordersService.getReorderPreview(id, customerId);
-  }
-
-  /**
-   * Đặt lại đơn hàng cũ theo bảng giá hiện hành (SN-174)
-   * POST /api/orders/:id/reorder
-   */
-  @Post(':id/reorder')
+  @Post(':id/clone')
   @Public()
   @HttpCode(HttpStatus.CREATED)
-  async reorder(
+  async cloneOrder(
     @Param('id') id: string,
-    @Body() dto: ReorderDto,
-    @Query('customerId') customerId?: string,
-  ) {
-    return this.ordersService.reorder(id, dto, customerId);
-  }
-
-  /**
-   * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38)
-   * GET /api/orders
-   */
-  @Get()
-  @Public()
-  async getOrders(@Query() query: QueryOrdersDto): Promise<{
-    data: OrderEntity[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
-    return this.ordersService.findAllOrders(query);
+    @CurrentUser() currentUser?: ICurrentUser,
+    @Req() req?: any,
+  ): Promise<OrderEntity> {
+    let salesRep: { id?: string; name?: string } | undefined;
+    if (currentUser) {
+      salesRep = { id: currentUser.userId, name: currentUser.username || currentUser.email };
+    } else if (req?.headers?.authorization) {
+      try {
+        const authHeader = req.headers.authorization;
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7).trim();
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+            if (payload && (payload.sub || payload.username)) {
+              salesRep = { id: payload.sub, name: payload.fullName || payload.username || payload.email };
+            }
+          }
+        }
+      } catch {
+        // Fallback undefined
+      }
+    }
+    return this.ordersService.cloneOrder(id, salesRep);
   }
 
 
@@ -160,8 +240,22 @@ export class OrdersController {
    */
   @Post()
   @Public()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.CREATED)
-  async createOrder(@Body() dto: CreateOrderDto): Promise<OrderEntity> {
+  async createOrder(
+    @Body() dto: CreateOrderDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<OrderEntity> {
+    // Nếu người tạo là Đại lý B2B, ép cứng customerId từ Token để ngăn giả mạo ID đại lý khác
+    if (currentUser?.roles?.includes(UserRole.CUSTOMER)) {
+      const agencyId = currentUser.agencyId || currentUser.customerId;
+      if (!agencyId) {
+        throw new ForbiddenException(
+          'Tài khoản đại lý chưa được liên kết với hồ sơ Đại lý.',
+        );
+      }
+      dto.customerId = agencyId;
+    }
     return this.ordersService.createOrder(dto);
   }
 
