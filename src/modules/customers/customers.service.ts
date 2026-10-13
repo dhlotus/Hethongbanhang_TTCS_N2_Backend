@@ -12,6 +12,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseService } from '../../database/database.service';
+import type { PoolClient } from 'pg';
 import { CustomerEntity, CustomerStatus } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
@@ -102,16 +103,64 @@ export class CustomersService implements OnModuleInit {
     }
   }
 
-  private generateNextCustomerCode(): string {
-    let num = this.customers.size + 1;
-    while (
-      Array.from(this.customers.values()).some(
-        (c) => c.code?.toUpperCase() === `DL-${String(num).padStart(4, '0')}`,
-      )
-    ) {
+  /**
+   * Sinh mã đại lý tiếp theo (DL-0001, DL-0002, ...).
+   * - Lấy số thứ tự lớn nhất hiện có (DB + bộ nhớ) rồi cộng 1.
+   * - Vòng lặp kiểm tra trực tiếp trong DB (qua `client` của transaction nếu có)
+   *   và trong bộ nhớ; nếu mã đã tồn tại thì tăng số đếm và sinh lại.
+   * - Chỉ trả về mã khi xác nhận chưa ai dùng.
+   */
+  private async generateNextCustomerCode(client?: PoolClient): Promise<string> {
+    const prefix = 'DL-';
+    const codePattern = /^DL-(\d+)$/i;
+    const format = (n: number) => `${prefix}${String(n).padStart(4, '0')}`;
+
+    // 1. Số lớn nhất trong bộ nhớ
+    let maxNum = 0;
+    const memoryCodes = new Set<string>();
+    for (const c of this.customers.values()) {
+      const code = c.code?.trim().toUpperCase();
+      if (!code) continue;
+      memoryCodes.add(code);
+      const m = codePattern.exec(code);
+      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+    }
+
+    // 2. Số lớn nhất trong Database (đọc real-time; dùng client của transaction nếu có)
+    const useDb = Boolean(client) || Boolean(this.dbService?.isConnected());
+    const queryRows = async (sql: string, params: unknown[] = []): Promise<any[]> => {
+      if (client) {
+        return (await client.query(sql, params)).rows;
+      }
+      return this.dbService!.query(sql, params);
+    };
+
+    if (useDb) {
+      const maxRows = await queryRows(
+        `SELECT COALESCE(MAX(CAST(SUBSTRING(code FROM 4) AS BIGINT)), 0) AS max_num
+           FROM customers
+          WHERE code ~* '^DL-[0-9]+$'`,
+      );
+      maxNum = Math.max(maxNum, Number(maxRows?.[0]?.max_num ?? 0));
+    }
+
+    // 3. Vòng lặp đảm bảo mã chưa tồn tại
+    let num = maxNum + 1;
+    for (;;) {
+      const candidate = format(num);
+      let exists = memoryCodes.has(candidate);
+
+      if (!exists && useDb) {
+        const found = await queryRows(
+          'SELECT 1 FROM customers WHERE UPPER(code) = UPPER($1) LIMIT 1',
+          [candidate],
+        );
+        exists = found.length > 0;
+      }
+
+      if (!exists) return candidate;
       num++;
     }
-    return `DL-${String(num).padStart(4, '0')}`;
   }
 
   /**
@@ -1287,20 +1336,24 @@ export class CustomersService implements OnModuleInit {
       throw new BadRequestException(`Đã tồn tại hồ sơ đại lý sử dụng email "${cleanEmail}" (${existingCustomerEmail.code}).`);
     }
 
-    let trimmedCode = dto.code?.trim();
-    if (!trimmedCode) {
-      trimmedCode = this.generateNextCustomerCode();
-    }
+    let trimmedCode: string = dto.code?.trim() || '';
+    const autoGenerateCode = !trimmedCode;
+    const dbConnected = Boolean(this.dbService?.isConnected());
 
-    // Kiểm tra tính duy nhất của mã đại lý (không phân biệt hoa/thường)
-    const normalizedCode = trimmedCode.toUpperCase();
-    const existingCustomer = Array.from(this.customers.values()).find(
-      (c) => c.code && c.code.trim().toUpperCase() === normalizedCode,
-    );
-    if (existingCustomer) {
-      throw new BadRequestException(
-        `Mã đại lý "${trimmedCode}" đã tồn tại trong hệ thống. Vui lòng nhập mã khác.`,
+    if (!autoGenerateCode) {
+      // Kiểm tra tính duy nhất của mã nhập tay (không phân biệt hoa/thường)
+      const normalizedCode = trimmedCode.toUpperCase();
+      const existingCustomer = Array.from(this.customers.values()).find(
+        (c) => c.code && c.code.trim().toUpperCase() === normalizedCode,
       );
+      if (existingCustomer) {
+        throw new BadRequestException(
+          `Mã đại lý "${trimmedCode}" đã tồn tại trong hệ thống. Vui lòng nhập mã khác.`,
+        );
+      }
+    } else if (!dbConnected) {
+      // Chế độ bộ nhớ (không có PostgreSQL)
+      trimmedCode = await this.generateNextCustomerCode();
     }
 
     const newId = `cust-${Date.now()}`;
@@ -1335,10 +1388,16 @@ export class CustomersService implements OnModuleInit {
     }
 
     // 3. Sử dụng Database Transaction (nếu có PostgreSQL kết nối): Tạo User và Customer đồng thời
-    if (this.dbService?.isConnected()) {
-      const client = await this.dbService.getClient();
+    if (dbConnected) {
+      const client = await this.dbService!.getClient();
       try {
         await client.query('BEGIN');
+
+        // Sinh mã tự động BÊN TRONG transaction; khóa advisory để 2 request không sinh trùng mã
+        if (autoGenerateCode) {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['customers_code_seq']);
+          trimmedCode = await this.generateNextCustomerCode(client);
+        }
 
         // Tạo tài khoản User (Role ID 7 = CUSTOMER)
         await client.query(
