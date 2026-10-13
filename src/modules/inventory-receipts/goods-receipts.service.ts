@@ -159,9 +159,24 @@ export class GoodsReceiptsService implements OnModuleInit {
     }
   }
 
-  async findAll(query: QueryGoodsReceiptsDto): Promise<any> {
+  private mapToCamelCase<T = Record<string, unknown>>(row: Record<string, unknown>): T {
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(row)) {
+      const camelKey = key.replace(/_([a-z])/g, (_, g: string) => g.toUpperCase());
+      result[camelKey] = row[key];
+    }
+    return result as T;
+  }
+
+  async findAll(query: QueryGoodsReceiptsDto): Promise<{
+    data: GoodsReceiptEntity[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     const conditions: string[] = [];
-    const params: any[] = [];
+    const params: (string | number)[] = [];
     let paramIndex = 1;
 
     if (query.warehouseId) {
@@ -177,54 +192,58 @@ export class GoodsReceiptsService implements OnModuleInit {
       params.push(query.status);
     }
     if (query.search) {
-      conditions.push(`(r.code ILIKE $${paramIndex} OR r.reference_document ILIKE $${paramIndex})`);
+      conditions.push(`(r.code ILIKE $${paramIndex} OR r.reference_document ILIKE $${paramIndex} OR s.name ILIKE $${paramIndex})`);
       params.push(`%${query.search}%`);
       paramIndex++;
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limit = query.limit ? parseInt(query.limit as string) : 20;
-    const page = query.page ? parseInt(query.page as string) : 1;
+    const limit = query.limit ? parseInt(query.limit as string, 10) : 20;
+    const page = query.page ? parseInt(query.page as string, 10) : 1;
     const offset = (page - 1) * limit;
 
-    const countRes = await this.db.query(`SELECT COUNT(*) FROM goods_receipts r ${whereClause}`, params);
-    const total = parseInt(countRes[0].count);
+    const countRes = await this.db.query<{ count: string }>(
+      `SELECT COUNT(*) FROM goods_receipts r 
+       LEFT JOIN suppliers s ON r.supplier_id::text = s.id::text
+       ${whereClause}`,
+      params
+    );
+    const total = parseInt(countRes[0]?.count || '0', 10);
 
-    const rows = await this.db.query(
-      `SELECT r.*, COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, COALESCE(s.name, 'Nhà cung cấp') as supplier_name, 'Người tạo' as created_by_name
+    const rows = await this.db.query<Record<string, unknown>>(
+      `SELECT r.*, 
+              COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, 
+              COALESCE(s.name, 'Nhà cung cấp') as supplier_name, 
+              COALESCE(u.full_name, 'Người tạo') as created_by_name
        FROM goods_receipts r
-       LEFT JOIN warehouses w ON w.id::text = r.warehouse_id::text
-       LEFT JOIN suppliers s ON s.id::text = r.supplier_id::text
+       LEFT JOIN warehouses w ON r.warehouse_id::text = w.id::text
+       LEFT JOIN suppliers s ON r.supplier_id::text = s.id::text
+       LEFT JOIN users u ON r.created_by::text = u.id::text
        ${whereClause}
        ORDER BY r.created_at DESC
        LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
       [...params, limit, offset]
     );
 
-    const mapToCamelCase = (row: any) => {
-      const result: any = {};
-      for (const key of Object.keys(row)) {
-        const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
-        result[camelKey] = row[key];
-      }
-      return result;
-    };
-
     return {
-      data: rows.map(mapToCamelCase),
+      data: rows.map(r => this.mapToCamelCase<GoodsReceiptEntity>(r)),
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit) || 1,
     };
   }
 
-  async findOne(id: string): Promise<any> {
-    const receiptRes = await this.db.query(
-      `SELECT r.*, COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, COALESCE(s.name, 'Nhà cung cấp') as supplier_name, 'Người tạo' as created_by_name
+  async findOne(id: string): Promise<GoodsReceiptEntity> {
+    const receiptRes = await this.db.query<Record<string, unknown>>(
+      `SELECT r.*, 
+              COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, 
+              COALESCE(s.name, 'Nhà cung cấp') as supplier_name, 
+              COALESCE(u.full_name, 'Người tạo') as created_by_name
        FROM goods_receipts r
-       LEFT JOIN warehouses w ON w.id::text = r.warehouse_id::text
-       LEFT JOIN suppliers s ON s.id::text = r.supplier_id::text
+       LEFT JOIN warehouses w ON r.warehouse_id::text = w.id::text
+       LEFT JOIN suppliers s ON r.supplier_id::text = s.id::text
+       LEFT JOIN users u ON r.created_by::text = u.id::text
        WHERE r.id = $1`,
       [id]
     );
@@ -233,27 +252,21 @@ export class GoodsReceiptsService implements OnModuleInit {
       throw new NotFoundException('Không tìm thấy phiếu nhập');
     }
 
-    const itemsRes = await this.db.query(
-      `SELECT i.*, p.name as product_name, p.sku as product_code, 'ĐVT' as unit_name
+    const itemsRes = await this.db.query<Record<string, unknown>>(
+      `SELECT i.*, 
+              p.name as product_name, 
+              p.sku as product_code, 
+              COALESCE(pu.unit_name, 'ĐVT') as unit_name
        FROM goods_receipt_items i
        LEFT JOIN products p ON i.product_id::text = p.id::text
+       LEFT JOIN product_units pu ON i.unit_id::text = pu.id::text
        WHERE i.receipt_id = $1`,
       [id]
     );
 
-    const mapToCamelCase = (row: any) => {
-      const result: any = {};
-      for (const key of Object.keys(row)) {
-        const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
-        result[camelKey] = row[key];
-      }
-      return result;
-    };
-
-    return {
-      ...mapToCamelCase(receiptRes[0]),
-      items: itemsRes.map(mapToCamelCase),
-    };
+    const receipt = this.mapToCamelCase<GoodsReceiptEntity>(receiptRes[0]);
+    receipt.items = itemsRes.map(item => this.mapToCamelCase<GoodsReceiptItemEntity>(item));
+    return receipt;
   }
 
   async confirm(id: string, user: ICurrentUser): Promise<{ success: boolean; message: string }> {
@@ -291,14 +304,30 @@ export class GoodsReceiptsService implements OnModuleInit {
       const itemsRes = await client.query(`SELECT * FROM goods_receipt_items WHERE receipt_id = $1`, [id]);
       const items = itemsRes.rows;
 
+      let validUserId = null;
+      if (user && user.userId) {
+        try {
+          const uCheck = await client.query(`SELECT id FROM users WHERE id = $1`, [user.userId]);
+          if (uCheck.rows.length > 0) {
+            validUserId = user.userId;
+          }
+        } catch {
+          // Fallback if users check fails
+        }
+      }
+
       for (const item of items) {
+        const baseQty = Number(item.base_quantity) || 1;
+        const totalCost = Number(item.total_cost) || 0;
+        const baseUnitCost = baseQty > 0 ? totalCost / baseQty : Number(item.unit_cost) || 0;
+
         // 1. Cập nhật tồn kho tổng (inventories)
         await client.query(
           `INSERT INTO inventories (warehouse_id, product_id, on_hand, created_at, updated_at)
            VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
            ON CONFLICT (warehouse_id, product_id) 
            DO UPDATE SET on_hand = inventories.on_hand + $3, updated_at = CURRENT_TIMESTAMP`,
-          [targetWarehouseId, item.product_id, item.base_quantity]
+          [targetWarehouseId, item.product_id, baseQty]
         );
 
         let batchId = null;
@@ -312,9 +341,9 @@ export class GoodsReceiptsService implements OnModuleInit {
             `INSERT INTO inventory_batches (warehouse_id, product_id, batch_number, mfg_date, expiry_date, quantity, cost_price, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
              ON CONFLICT (warehouse_id, product_id, batch_number)
-             DO UPDATE SET quantity = inventory_batches.quantity + $6, updated_at = CURRENT_TIMESTAMP
+             DO UPDATE SET quantity = inventory_batches.quantity + $6, cost_price = $7, updated_at = CURRENT_TIMESTAMP
              RETURNING id`,
-            [targetWarehouseId, item.product_id, batchNum, mfgDate, expDate, item.base_quantity, item.unit_cost]
+            [targetWarehouseId, item.product_id, batchNum, mfgDate, expDate, baseQty, baseUnitCost]
           );
           batchId = batchRes.rows[0].id;
         }
@@ -324,7 +353,7 @@ export class GoodsReceiptsService implements OnModuleInit {
           `SELECT on_hand FROM inventories WHERE warehouse_id = $1 AND product_id = $2`,
           [targetWarehouseId, item.product_id]
         );
-        const balanceAfter = onHandRes.rows[0].on_hand;
+        const balanceAfter = onHandRes.rows[0]?.on_hand || baseQty;
 
         // 3. Ghi log giao dịch (inventory_transactions)
         await client.query(
@@ -333,8 +362,8 @@ export class GoodsReceiptsService implements OnModuleInit {
             balance_after, unit_cost, reference_type, reference_id, created_by, created_at
           ) VALUES ($1, $2, $3, 'IMPORT', $4, $5, $6, 'GOODS_RECEIPT', $7, $8, CURRENT_TIMESTAMP)`,
           [
-            targetWarehouseId, item.product_id, batchId, item.base_quantity,
-            balanceAfter, item.unit_cost, receipt.code, transactionUserId
+            targetWarehouseId, item.product_id, batchId, baseQty,
+            balanceAfter, baseUnitCost, receipt.code, receiverId
           ]
         );
       }

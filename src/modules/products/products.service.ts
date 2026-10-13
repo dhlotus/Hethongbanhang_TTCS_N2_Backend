@@ -182,41 +182,56 @@ export class ProductsService implements OnModuleInit {
          LEFT JOIN categories pcat ON c.parent_id = pcat.id;`,
       );
 
-      for (const row of rows) {
-        const existing = Array.from(this.products.values()).find(
-          (p) =>
-            p.sku.toUpperCase() === row.sku.toUpperCase() ||
-            p.id === row.id ||
-            (row.sku.toUpperCase() === 'LH-MILK-POWDER-900G' && p.sku.toUpperCase() === 'LH-MILK-900G'),
-        );
-        const catName = row.category_name || 'Đồ uống & Nước giải khát';
-        const parentName = row.parent_category_name || catName;
-        const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
-        const costPrice = Number(row.cost_price) || 0;
+      if (rows && rows.length > 0) {
+        // Khi PostgreSQL đã có sản phẩm thực tế, loại bỏ hoàn toàn mock tĩnh để tránh lệch Foreign Key
+        this.products.clear();
 
-        if (existing) {
-          if (existing.id !== row.id) {
-            this.products.delete(existing.id);
-            existing.id = row.id;
-            this.products.set(existing.id, existing);
+        // Tải danh sách đơn vị tính quy đổi của từng sản phẩm từ PostgreSQL
+        let unitsByProductId = new Map<string, ProductUnitEntity[]>();
+        try {
+          const unitRows = await this.dbService!.query<{
+            id: string;
+            product_id: string;
+            unit_name: string;
+            conversion_factor: string | number;
+            is_base_unit: boolean;
+          }>(
+            `SELECT id, product_id, unit_name, conversion_factor, is_base_unit FROM product_units;`
+          );
+          for (const u of unitRows) {
+            const list = unitsByProductId.get(u.product_id) || [];
+            list.push(
+              new ProductUnitEntity({
+                id: u.id,
+                unitName: u.unit_name,
+                conversionRate: Number(u.conversion_factor) || 1,
+                isBaseUnit: Boolean(u.is_base_unit),
+              }),
+            );
+            unitsByProductId.set(u.product_id, list);
           }
-          existing.sku = row.sku;
-          if (row.category_id) {
-            existing.categoryId = String(row.category_id);
-            existing.category = fullCat;
-            existing.parentCategory = parentName;
-            existing.subCategory = catName;
+        } catch {
+          // Fallback nếu bảng product_units trống
+        }
+
+        for (const row of rows) {
+          const catName = row.category_name || 'Đồ uống & Nước giải khát';
+          const parentName = row.parent_category_name || catName;
+          const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
+          const costPrice = Number(row.cost_price) || 0;
+
+          const productUnits = unitsByProductId.get(row.id) || [];
+          if (productUnits.length === 0) {
+            productUnits.push(
+              new ProductUnitEntity({
+                id: `unit-${row.id}-base`,
+                unitName: row.base_unit || 'Cái',
+                conversionRate: 1,
+                isBaseUnit: true,
+              }),
+            );
           }
-          if (costPrice > 0) {
-            existing.costPrice = costPrice;
-          }
-          if (row.base_unit) {
-            existing.baseUnit = row.base_unit;
-          }
-          if (row.name) {
-            existing.name = row.name;
-          }
-        } else {
+
           const entity = new ProductEntity({
             id: row.id,
             sku: row.sku,
@@ -225,7 +240,8 @@ export class ProductsService implements OnModuleInit {
             category: fullCat,
             parentCategory: parentName,
             subCategory: catName,
-            baseUnit: row.base_unit,
+            baseUnit: row.base_unit || 'Cái',
+            units: productUnits,
             costPrice,
             price: Math.round(costPrice * 1.35),
             stockQuantity: 100,
