@@ -70,8 +70,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
           released_at TIMESTAMPTZ
         );
+
+        CREATE TABLE IF NOT EXISTS product_price_histories (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          product_id VARCHAR(255) NOT NULL,
+          old_price NUMERIC(15, 2) NOT NULL,
+          new_price NUMERIC(15, 2) NOT NULL,
+          changed_by VARCHAR(255) NOT NULL,
+          changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_product_price_histories_product_id
+          ON product_price_histories(product_id);
+
+        CREATE INDEX IF NOT EXISTS idx_product_price_histories_changed_at
+          ON product_price_histories(changed_at DESC);
       `);
-      this.logger.log('[PostgreSQL] Đã khởi tạo / đồng bộ các bảng cấu trúc kho và giữ chỗ thành công.');
+      this.logger.log('[PostgreSQL] Đã khởi tạo / đồng bộ các bảng cấu trúc kho và lịch sử giá thành công.');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`[PostgreSQL] Lỗi khởi tạo cấu trúc bảng kho: ${msg}`);

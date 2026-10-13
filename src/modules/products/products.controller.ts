@@ -32,8 +32,18 @@ import { ConfirmImportDto } from './dto/import-product.dto';
 import { ProductUnitDto } from './dto/product-unit.dto';
 import { ProductEntity } from './entities/product.entity';
 import { ProductUnitEntity } from './entities/product-unit.entity';
+import { ProductPriceHistory } from './entities/product-price-history.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
 import { ProductsService } from './products.service';
+
+interface AuthenticatedRequest {
+  user?: {
+    id?: string;
+    username?: string;
+    fullName?: string;
+    role?: string;
+  };
+}
 
 /**
  * Controller Quản lý Sản phẩm / SKU Hàng hóa (SN-138 & SN-20 / EP-02 / SN-21 / SN-23 / SN-24):
@@ -181,7 +191,22 @@ export class ProductsController {
   @Get(':id/price-history')
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
-  async getPriceHistory(@Param('id') id: string) {
+  async getPriceHistory(
+    @Param('id') id: string,
+  ): Promise<ProductPriceHistory[]> {
+    return this.productsService.getPriceHistory(id);
+  }
+
+  /**
+   * Alias: GET /api/products/:id/price-histories (SN-29)
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  @Get(':id/price-histories')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async getPriceHistories(
+    @Param('id') id: string,
+  ): Promise<ProductPriceHistory[]> {
     return this.productsService.getPriceHistory(id);
   }
 
@@ -218,9 +243,9 @@ export class ProductsController {
   async update(
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
-    @Req() req?: any,
+    @Req() req?: AuthenticatedRequest,
   ): Promise<ProductEntity> {
-    const userName = req?.user?.fullName || req?.user?.username || 'Hệ thống';
+    const userName = req?.user?.fullName || req?.user?.username || 'Quản trị viên';
     return this.productsService.update(id, updateDto, userName);
   }
 
@@ -233,9 +258,9 @@ export class ProductsController {
   async updatePut(
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
-    @Req() req?: any,
+    @Req() req?: AuthenticatedRequest,
   ): Promise<ProductEntity> {
-    const userName = req?.user?.fullName || req?.user?.username || 'Hệ thống';
+    const userName = req?.user?.fullName || req?.user?.username || 'Quản trị viên';
     return this.productsService.update(id, updateDto, userName);
   }
 
