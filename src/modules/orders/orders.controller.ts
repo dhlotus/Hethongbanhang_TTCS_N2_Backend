@@ -97,6 +97,41 @@ export class OrdersController {
   }
 
   /**
+   * Sao chép đơn hàng thành đơn mới ở trạng thái Nháp (SN-48)
+   * POST /api/orders/:id/clone
+   */
+  @Post(':id/clone')
+  @Public()
+  @HttpCode(HttpStatus.CREATED)
+  async cloneOrder(
+    @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+    @Req() req?: any,
+  ): Promise<OrderEntity> {
+    let salesRep: { id?: string; name?: string } | undefined;
+    if (currentUser) {
+      salesRep = { id: currentUser.userId, name: currentUser.username || currentUser.email };
+    } else if (req?.headers?.authorization) {
+      try {
+        const authHeader = req.headers.authorization;
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7).trim();
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+            if (payload && (payload.sub || payload.username)) {
+              salesRep = { id: payload.sub, name: payload.fullName || payload.username || payload.email };
+            }
+          }
+        }
+      } catch {
+        // Fallback undefined
+      }
+    }
+    return this.ordersService.cloneOrder(id, salesRep);
+  }
+
+  /**
    * Lấy danh sách đơn hàng phân trang và bộ lọc (SN-38)
    * GET /api/orders
    */
