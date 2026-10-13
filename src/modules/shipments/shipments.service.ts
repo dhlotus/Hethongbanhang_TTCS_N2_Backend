@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -167,6 +167,18 @@ export class ShipmentsService {
   }
 
   async create(dto: Partial<ShipmentItem>, user?: ICurrentUser): Promise<ShipmentItem> {
+    if (!dto.orderCode || !dto.orderCode.trim()) {
+      throw new BadRequestException('Mã đơn hàng không được để trống');
+    }
+    if (!dto.customerName || !dto.customerName.trim()) {
+      throw new BadRequestException('Tên đại lý / Khách hàng không được để trống');
+    }
+    if (dto.phone) {
+      const cleanPhone = dto.phone.trim();
+      if (!/^0[0-9]{9}$/.test(cleanPhone)) {
+        throw new BadRequestException('Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng số 0');
+      }
+    }
     const id = `shp-${Date.now()}`;
     const newShipment: ShipmentItem = {
       id,

@@ -11,6 +11,103 @@ import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 export class GoodsReceiptsService implements OnModuleInit {
   private readonly logger = new Logger(GoodsReceiptsService.name);
 
+  private readonly productMap: Record<string, { name: string; sku: string }> = {
+    'prod-001': { name: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g', sku: 'LH-MILK-900G' },
+    'prod-002': { name: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml', sku: 'LH-NUT-180ML' },
+    'prod-003': { name: 'Nước Yến Sào Cao Cấp Loha Nest 70ml', sku: 'LH-NEST-70ML' },
+    'prod-004': { name: 'Ngũ Cốc Dinh Dưỡng Hạt Loha Cereal 500g', sku: 'LH-CEREAL-500G' },
+    'prod-005': { name: 'Nước Uống Collagen Trắng Da Loha Beauty 50ml', sku: 'LH-COLLAGEN-50ML' },
+    'prod-006': { name: 'Trà Thảo Mộc Thanh Nhiệt Loha Herbal Tea 240ml', sku: 'LH-TEA-240ML' },
+  };
+
+  private readonly supplierMap: Record<string, string> = {
+    '22222222-0000-0000-0000-000000000001': 'Công ty Cổ phần Nước giải khát LOHA Quốc Tế',
+    '22222222-0000-0000-0000-000000000002': 'Công ty TNHH Khai Thác Khoáng Tinh Khiết Aqua Life',
+    '22222222-0000-0000-0000-000000000003': 'Công ty Cổ phần Sữa & Dinh Dưỡng Quốc Tế NutriPlus',
+  };
+
+  private fallbackReceipts: GoodsReceiptEntity[] = [
+    {
+      id: 'receipt-001',
+      code: 'PN2603150001',
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+      supplierId: '22222222-0000-0000-0000-000000000001',
+      supplierName: 'Công ty Cổ phần Nước giải khát LOHA Quốc Tế',
+      receiptType: ReceiptType.PURCHASE_RECEIPT,
+      referenceDocument: 'HD-2026-0315',
+      status: GoodsReceiptStatus.CONFIRMED,
+      totalCost: 19000000,
+      notes: 'Nhập hàng định kỳ tháng 3 theo hợp đồng',
+      createdBy: '00000000-0000-0000-0000-000000000004',
+      createdByName: 'Nhân viên kho',
+      receivedBy: '00000000-0000-0000-0000-000000000004',
+      receivedAt: new Date('2026-03-15T10:30:00Z'),
+      createdAt: new Date('2026-03-15T08:00:00Z'),
+      updatedAt: new Date('2026-03-15T10:30:00Z'),
+      items: [
+        {
+          id: 'item-001',
+          receiptId: 'receipt-001',
+          productId: 'prod-001',
+          productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+          productCode: 'LH-MILK-900G',
+          unitId: 'unit-thung',
+          unitName: 'Thùng',
+          packageQuantity: 50,
+          conversionFactor: 24,
+          baseQuantity: 1200,
+          unitCost: 380000,
+          totalCost: 19000000,
+          batchNumber: 'LOT-2026-03A',
+          mfgDate: new Date('2026-03-01'),
+          expiryDate: new Date('2028-03-01'),
+          notes: 'Đầy đủ tem niêm phong và CO/CQ',
+          createdAt: new Date('2026-03-15T08:00:00Z'),
+        },
+      ],
+    },
+    {
+      id: 'receipt-002',
+      code: 'PN2604010002',
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+      supplierId: '22222222-0000-0000-0000-000000000002',
+      supplierName: 'Công ty TNHH Khai Thác Khoáng Tinh Khiết Aqua Life',
+      receiptType: ReceiptType.PURCHASE_RECEIPT,
+      referenceDocument: 'BB-GN-8842',
+      status: GoodsReceiptStatus.DRAFT,
+      totalCost: 12500000,
+      notes: 'Hàng vừa cập cảng/kho, đang chờ kiểm đếm số lượng',
+      createdBy: '00000000-0000-0000-0000-000000000004',
+      createdByName: 'Nhân viên kho',
+      receivedAt: new Date('2026-04-01T09:00:00Z'),
+      createdAt: new Date('2026-04-01T09:00:00Z'),
+      updatedAt: new Date('2026-04-01T09:00:00Z'),
+      items: [
+        {
+          id: 'item-002',
+          receiptId: 'receipt-002',
+          productId: 'prod-002',
+          productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+          productCode: 'LH-NUT-180ML',
+          unitId: 'unit-loc',
+          unitName: 'Lốc',
+          packageQuantity: 100,
+          conversionFactor: 6,
+          baseQuantity: 600,
+          unitCost: 125000,
+          totalCost: 12500000,
+          batchNumber: 'LOT-AL-2026',
+          mfgDate: new Date('2026-03-10'),
+          expiryDate: new Date('2027-03-10'),
+          notes: 'Ngoại quan nguyên vẹn',
+          createdAt: new Date('2026-04-01T09:00:00Z'),
+        },
+      ],
+    },
+  ];
+
   constructor(private readonly db: DatabaseService) {}
 
   async onModuleInit() {
@@ -82,6 +179,57 @@ export class GoodsReceiptsService implements OnModuleInit {
   async create(dto: CreateGoodsReceiptDto, user: ICurrentUser): Promise<{ id: string }> {
     if (!dto.items || dto.items.length === 0) {
       throw new BadRequestException('Phiếu nhập phải có ít nhất 1 mặt hàng');
+    }
+
+    if (!this.db?.isConnected()) {
+      const now = new Date();
+      const dateStr = now.toISOString().slice(2, 10).replace(/-/g, '');
+      const code = `PN${dateStr}${String(this.fallbackReceipts.length + 1).padStart(4, '0')}`;
+      const totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
+      const newId = `receipt-mock-${Date.now()}`;
+
+      const receiptItems: GoodsReceiptItemEntity[] = dto.items.map((it, idx) => ({
+        id: `item-mock-${Date.now()}-${idx}`,
+        receiptId: newId,
+        productId: it.productId,
+        unitId: it.unitId,
+        packageQuantity: Number(it.packageQuantity),
+        conversionFactor: Number(it.conversionFactor),
+        baseQuantity: Number(it.packageQuantity) * Number(it.conversionFactor),
+        unitCost: Number(it.unitCost || 0),
+        totalCost: Number(it.packageQuantity) * Number(it.unitCost || 0),
+        batchNumber: it.batchNumber || '',
+        mfgDate: it.mfgDate ? new Date(it.mfgDate) : undefined,
+        expiryDate: it.expiryDate ? new Date(it.expiryDate) : new Date(),
+        notes: it.notes,
+        createdAt: now,
+        productName: this.productMap[it.productId]?.name || it.productId,
+        productCode: this.productMap[it.productId]?.sku || it.productId,
+        unitName: it.unitId,
+      }));
+
+      const newReceipt: GoodsReceiptEntity = {
+        id: newId,
+        code,
+        warehouseId: dto.warehouseId || DEFAULT_WAREHOUSE_ID,
+        warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+        supplierId: dto.supplierId,
+        supplierName: dto.supplierId ? (this.supplierMap[dto.supplierId] || 'Nhà cung cấp') : undefined,
+        receiptType: ReceiptType.PURCHASE_RECEIPT,
+        referenceDocument: dto.referenceDocument,
+        status: GoodsReceiptStatus.DRAFT,
+        totalCost,
+        notes: dto.notes,
+        createdBy: user?.userId || '00000000-0000-0000-0000-000000000004',
+        createdByName: user?.username || 'Nhân viên kho',
+        receivedAt: dto.receiptDate ? new Date(dto.receiptDate) : now,
+        createdAt: now,
+        updatedAt: now,
+        items: receiptItems,
+      };
+
+      this.fallbackReceipts.unshift(newReceipt);
+      return { id: newId };
     }
 
     const client = await this.db.getClient();
@@ -175,6 +323,40 @@ export class GoodsReceiptsService implements OnModuleInit {
     limit: number;
     totalPages: number;
   }> {
+    if (!this.db?.isConnected()) {
+      let filtered = [...this.fallbackReceipts];
+      if (query.warehouseId) {
+        filtered = filtered.filter(r => r.warehouseId === query.warehouseId);
+      }
+      if (query.supplierId) {
+        filtered = filtered.filter(r => r.supplierId === query.supplierId);
+      }
+      if (query.status) {
+        filtered = filtered.filter(r => r.status === query.status);
+      }
+      if (query.search) {
+        const s = query.search.toLowerCase();
+        filtered = filtered.filter(r =>
+          r.code?.toLowerCase().includes(s) ||
+          r.referenceDocument?.toLowerCase().includes(s) ||
+          r.supplierName?.toLowerCase().includes(s)
+        );
+      }
+      const limit = query.limit ? parseInt(query.limit as string, 10) : 20;
+      const page = query.page ? parseInt(query.page as string, 10) : 1;
+      const total = filtered.length;
+      const offset = (page - 1) * limit;
+      const data = filtered.slice(offset, offset + limit);
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      };
+    }
+
     const conditions: string[] = [];
     const params: (string | number)[] = [];
     let paramIndex = 1;
@@ -235,6 +417,14 @@ export class GoodsReceiptsService implements OnModuleInit {
   }
 
   async findOne(id: string): Promise<GoodsReceiptEntity> {
+    if (!this.db?.isConnected()) {
+      const found = this.fallbackReceipts.find(r => r.id === id || r.code === id);
+      if (!found) {
+        throw new NotFoundException('Không tìm thấy phiếu nhập');
+      }
+      return found;
+    }
+
     const receiptRes = await this.db.query<Record<string, unknown>>(
       `SELECT r.*, 
               COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, 
@@ -270,6 +460,21 @@ export class GoodsReceiptsService implements OnModuleInit {
   }
 
   async confirm(id: string, user: ICurrentUser): Promise<{ success: boolean; message: string }> {
+    if (!this.db?.isConnected()) {
+      const receipt = this.fallbackReceipts.find(r => r.id === id || r.code === id);
+      if (!receipt) {
+        throw new NotFoundException('Không tìm thấy phiếu nhập');
+      }
+      if (receipt.status !== GoodsReceiptStatus.DRAFT) {
+        throw new BadRequestException('Chỉ có thể xác nhận phiếu nhập ở trạng thái nháp');
+      }
+      receipt.status = GoodsReceiptStatus.CONFIRMED;
+      receipt.receivedBy = user?.userId || '00000000-0000-0000-0000-000000000004';
+      receipt.receivedAt = new Date();
+      receipt.updatedAt = new Date();
+      return { success: true, message: 'Xác nhận phiếu nhập kho thành công' };
+    }
+
     const client = await this.db.getClient();
     await client.query('BEGIN');
     try {
@@ -385,6 +590,48 @@ export class GoodsReceiptsService implements OnModuleInit {
   }
 
   async update(id: string, dto: UpdateGoodsReceiptDto, user: ICurrentUser): Promise<{ success: boolean; message: string }> {
+    if (!this.db?.isConnected()) {
+      const receipt = this.fallbackReceipts.find(r => r.id === id || r.code === id);
+      if (!receipt) {
+        throw new NotFoundException('Không tìm thấy phiếu nhập');
+      }
+      if (receipt.status === GoodsReceiptStatus.CONFIRMED || receipt.status !== GoodsReceiptStatus.DRAFT) {
+        throw new BadRequestException('Phiếu đã xác nhận không thể chỉnh sửa, vui lòng lập phiếu điều chỉnh');
+      }
+      if (dto.warehouseId) receipt.warehouseId = dto.warehouseId;
+      if (dto.supplierId !== undefined) {
+        receipt.supplierId = dto.supplierId;
+        receipt.supplierName = dto.supplierId ? (this.supplierMap[dto.supplierId] || 'Nhà cung cấp') : undefined;
+      }
+      if (dto.referenceDocument !== undefined) receipt.referenceDocument = dto.referenceDocument;
+      if (dto.notes !== undefined) receipt.notes = dto.notes;
+      if (dto.receiptDate) receipt.receivedAt = new Date(dto.receiptDate);
+      if (dto.items && dto.items.length > 0) {
+        receipt.totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
+        receipt.items = dto.items.map((it, idx) => ({
+          id: `item-mock-${Date.now()}-${idx}`,
+          receiptId: receipt.id,
+          productId: it.productId,
+          unitId: it.unitId,
+          packageQuantity: Number(it.packageQuantity),
+          conversionFactor: Number(it.conversionFactor),
+          baseQuantity: Number(it.packageQuantity) * Number(it.conversionFactor),
+          unitCost: Number(it.unitCost || 0),
+          totalCost: Number(it.packageQuantity) * Number(it.unitCost || 0),
+          batchNumber: it.batchNumber || '',
+          mfgDate: it.mfgDate ? new Date(it.mfgDate) : undefined,
+          expiryDate: it.expiryDate ? new Date(it.expiryDate) : new Date(),
+          notes: it.notes,
+          createdAt: new Date(),
+          productName: this.productMap[it.productId]?.name || it.productId,
+          productCode: this.productMap[it.productId]?.sku || it.productId,
+          unitName: it.unitId,
+        }));
+      }
+      receipt.updatedAt = new Date();
+      return { success: true, message: 'Cập nhật phiếu nhập kho thành công' };
+    }
+
     const client = await this.db.getClient();
     await client.query('BEGIN');
     try {
@@ -465,6 +712,18 @@ export class GoodsReceiptsService implements OnModuleInit {
   }
 
   async remove(id: string): Promise<{ success: boolean; message: string }> {
+    if (!this.db?.isConnected()) {
+      const index = this.fallbackReceipts.findIndex(r => r.id === id || r.code === id);
+      if (index === -1) {
+        throw new NotFoundException('Không tìm thấy phiếu nhập');
+      }
+      if (this.fallbackReceipts[index].status === GoodsReceiptStatus.CONFIRMED || this.fallbackReceipts[index].status !== GoodsReceiptStatus.DRAFT) {
+        throw new BadRequestException('Phiếu đã xác nhận không thể xóa, vui lòng lập phiếu điều chỉnh');
+      }
+      this.fallbackReceipts.splice(index, 1);
+      return { success: true, message: 'Xóa phiếu nhập thành công' };
+    }
+
     const client = await this.db.getClient();
     await client.query('BEGIN');
     try {
