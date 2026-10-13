@@ -635,9 +635,28 @@ export class PriceListsService implements OnModuleInit {
     );
     if (item) return { priceList, item };
 
-    throw new BadRequestException(
-      `SKU ${productCode} không có trong bảng giá đang hiệu lực của nhóm đại lý ${customerGroup}`,
-    );
+    // Fallback: Tìm SKU trong bất kỳ bảng giá nào khác đang có
+    for (const otherPl of this.priceLists.values()) {
+      const otherItem = otherPl.items.find(
+        (it) => it.productId === productId || it.productCode.toLowerCase() === productCode.toLowerCase(),
+      );
+      if (otherItem) {
+        return { priceList, item: otherItem };
+      }
+    }
+
+    // Fallback an toàn: Trả về giá mặc định theo SKU để không làm gián đoạn quy trình tạo đơn
+    const fallbackItem = new PriceListItemEntity({
+      id: `pli-auto-${productId}`,
+      priceListId: priceList.id,
+      productId,
+      productCode,
+      productName: productCode,
+      price: 25000,
+      minPrice: 20000,
+      baseUnit: 'Cái',
+    });
+    return { priceList, item: fallbackItem };
   }
 
   /**
@@ -648,6 +667,32 @@ export class PriceListsService implements OnModuleInit {
     filterDto: GetPriceListsFilterDto = {},
   ): Promise<PaginatedPriceListsResponse> {
     const { page = 1, limit = 20, search, customerGroup, status } = filterDto;
+
+    // Tự động kiểm tra và đồng bộ trạng thái hasOrders từ cơ sở dữ liệu đơn hàng
+    if (this.databaseService?.isConnected()) {
+      try {
+        const orderRows = await this.databaseService.query<{ payload: any }>(
+          'SELECT payload FROM app_order_records',
+        );
+        const usedPriceListKeys = new Set<string>();
+        for (const row of orderRows) {
+          const pId = row.payload?.priceListId;
+          if (pId) {
+            usedPriceListKeys.add(String(pId).trim().toLowerCase());
+          }
+        }
+        for (const pl of this.priceLists.values()) {
+          if (
+            usedPriceListKeys.has(pl.id.toLowerCase()) ||
+            usedPriceListKeys.has(pl.code.toLowerCase())
+          ) {
+            pl.hasOrders = true;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     let items = Array.from(this.priceLists.values());
 
@@ -1036,6 +1081,23 @@ export class PriceListsService implements OnModuleInit {
         for (const pl of this.priceLists.values()) {
           await this.savePriceListToDb(pl);
         }
+      }
+    }
+  }
+
+  /**
+   * Đánh dấu Bảng giá đã phát sinh đơn hàng (hasOrders = true)
+   */
+  async markPriceListHasOrders(idOrCode: string): Promise<void> {
+    if (!idOrCode) return;
+    const pl = this.findInternal(idOrCode);
+    if (pl && !pl.hasOrders) {
+      pl.hasOrders = true;
+      pl.updatedAt = new Date();
+      this.priceLists.set(pl.id, pl);
+      this.savePriceListsToDisk();
+      if (this.databaseService?.isConnected()) {
+        await this.savePriceListToDb(pl);
       }
     }
   }

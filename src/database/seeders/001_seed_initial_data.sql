@@ -97,10 +97,10 @@ END $$;
 -- =============================================================================
 INSERT INTO warehouses (id, code, name, address, phone, manager_id, status)
 VALUES 
-    ('11111111-0000-4000-8000-000000000001', 'WH01', 'Kho Tổng Miền Nam - LOHA WH01', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '0274379001', '00000000-0000-0000-0000-000000000004', 'ACTIVE'),
-    ('11111111-0000-4000-8000-000000000002', 'WH02', 'Kho Phân Phối Hà Nội - LOHA WH02', 'Lô CN-05 KCN Ninh Hiệp, Gia Lâm, Hà Nội', '0243889002', '00000000-0000-0000-0000-000000000014', 'ACTIVE'),
-    ('11111111-0000-4000-8000-000000000003', 'WH03', 'Kho Vùng Tây Nam Bộ - LOHA WH03', 'Đường số 3 KCN Trà Nóc 1, Bình Thủy, Cần Thơ', '0292389003', NULL, 'ACTIVE')
-ON CONFLICT (id) DO UPDATE SET code = EXCLUDED.code, name = EXCLUDED.name;
+    ('11111111-0000-0000-0000-000000000001', 'KHO-MN-01', 'Kho Tổng Miền Nam', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '0274379001', '00000000-0000-0000-0000-000000000004', 'ACTIVE'),
+    ('11111111-0000-0000-0000-000000000002', 'KHO-MB-01', 'Kho Phân Phối Hà Nội', 'Lô CN-05 KCN Ninh Hiệp, Gia Lâm, Hà Nội', '0243889002', '00000000-0000-0000-0000-000000000014', 'ACTIVE'),
+    ('11111111-0000-0000-0000-000000000003', 'KHO-MT-01', 'Kho Vùng Tây Nam Bộ', 'Đường số 3 KCN Trà Nóc 1, Bình Thủy, Cần Thơ', '0292389003', NULL, 'ACTIVE')
+ON CONFLICT (code) DO NOTHING;
 
 -- Vị trí kệ trong Kho Tổng Miền Nam
 INSERT INTO warehouse_locations (id, warehouse_id, code, zone, aisle, rack, shelf, bin, status)

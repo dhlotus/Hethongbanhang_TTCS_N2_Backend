@@ -181,6 +181,14 @@ export class CreateOrderDto {
 
   @IsOptional()
   @IsString()
+  salesRepId?: string;
+
+  @IsOptional()
+  @IsString()
+  salesRepName?: string;
+
+  @IsOptional()
+  @IsString()
   createdSource?: string;
 }
 

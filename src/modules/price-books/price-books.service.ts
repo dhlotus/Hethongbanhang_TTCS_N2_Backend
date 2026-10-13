@@ -525,6 +525,31 @@ export class PriceBooksService implements OnModuleInit {
    * Lấy danh sách bảng giá phân trang, tìm kiếm và lọc
    */
   async findAllPaginated(filter: GetPriceListsFilterDto): Promise<PaginatedPriceListsResponse> {
+    if (this.dbService?.isConnected()) {
+      try {
+        const orderRows = await this.dbService.query<{ payload: any }>(
+          'SELECT payload FROM app_order_records',
+        );
+        const usedPriceListKeys = new Set<string>();
+        for (const row of orderRows) {
+          const pId = row.payload?.priceListId;
+          if (pId) {
+            usedPriceListKeys.add(String(pId).trim().toLowerCase());
+          }
+        }
+        for (const pl of this.priceLists.values()) {
+          if (
+            usedPriceListKeys.has(pl.id.toLowerCase()) ||
+            usedPriceListKeys.has(pl.code.toLowerCase())
+          ) {
+            pl.hasOrders = true;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     let items = Array.from(this.priceLists.values());
 
     // Sắp xếp mặc định: mới nhất lên đầu
@@ -856,5 +881,32 @@ export class PriceBooksService implements OnModuleInit {
       success: true,
       message: `Đã xóa bảng giá "${existing.name}" [${existing.code}] khỏi hệ thống.`,
     };
+  }
+
+  /**
+   * Đánh dấu Bảng giá đã phát sinh đơn hàng (hasOrders = true)
+   */
+  async markPriceListHasOrders(idOrCode: string): Promise<void> {
+    if (!idOrCode) return;
+    const pl =
+      this.priceLists.get(idOrCode) ||
+      Array.from(this.priceLists.values()).find(
+        (p) => p.code.toUpperCase() === idOrCode.toUpperCase(),
+      );
+    if (pl && !pl.hasOrders) {
+      pl.hasOrders = true;
+      pl.updatedAt = new Date();
+      this.priceLists.set(pl.id, pl);
+      if (this.dbService?.isConnected()) {
+        try {
+          await this.dbService.query(
+            'UPDATE price_lists SET has_orders = TRUE, updated_at = $2 WHERE id = $1',
+            [pl.id, pl.updatedAt],
+          );
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 }

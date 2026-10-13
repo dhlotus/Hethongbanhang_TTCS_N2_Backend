@@ -30,6 +30,7 @@ import { UpdateOrderDto } from './dto/update-order.dto';
 import { OrderLineEntity } from './entities/order-line.entity';
 import { OrderEntity, IOrderDeliveryPoint } from './entities/order.entity';
 import { OrderStatus, PaymentStatus } from './entities/order-status.enum';
+import { getSeedInitialOrders } from './initial-orders.seed';
 import { DatabaseService } from '../../database/database.service';
 import { ProductsService } from '../products/products.service';
 import { DecideOrderDto } from './dto/decide-order.dto';
@@ -159,24 +160,24 @@ export class OrdersService implements OnModuleInit {
         const stateResult = await client.query(
           `SELECT seeded FROM app_order_storage_state WHERE state_key = 'orders' FOR UPDATE`,
         );
-        if (!stateResult.rows[0]?.seeded) {
-          const countResult = await client.query(
-            'SELECT COUNT(*)::int AS count FROM app_order_records',
-          );
-          if (Number(countResult.rows[0]?.count ?? 0) === 0) {
-            for (const order of this.seedInitialOrders()) {
-              await client.query(
-                `INSERT INTO app_order_records (id, order_code, payload, created_at, updated_at)
-                 VALUES ($1, $2, $3::jsonb, $4, $5)
-                 ON CONFLICT (id) DO NOTHING`,
-                [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
-              );
-            }
+        const countResult = await client.query(
+          'SELECT COUNT(*)::int AS count FROM app_order_records',
+        );
+        if (Number(countResult.rows[0]?.count ?? 0) < 20) {
+          for (const order of this.seedInitialOrders()) {
+            await client.query(
+              `INSERT INTO app_order_records (id, order_code, payload, created_at, updated_at)
+               VALUES ($1, $2, $3::jsonb, $4, $5)
+               ON CONFLICT (id) DO UPDATE
+               SET payload = EXCLUDED.payload, order_code = EXCLUDED.order_code,
+                   created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at`,
+              [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
+            );
           }
-          await client.query(
-            `UPDATE app_order_storage_state SET seeded = TRUE WHERE state_key = 'orders'`,
-          );
         }
+        await client.query(
+          `UPDATE app_order_storage_state SET seeded = TRUE WHERE state_key = 'orders'`,
+        );
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK');
@@ -200,6 +201,14 @@ export class OrdersService implements OnModuleInit {
           }
         } catch {
           // ignore
+        }
+      }
+
+      if (this.priceListsService) {
+        for (const order of this.orders.values()) {
+          if (order.priceListId) {
+            void this.priceListsService.markPriceListHasOrders(order.priceListId);
+          }
         }
       }
     } catch (error) {
@@ -425,11 +434,18 @@ export class OrdersService implements OnModuleInit {
     if (!this.databaseService || !this.inventoryService) {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
-    const warehouseRows = await this.databaseService.query<{ warehouse_id: string }>(
-      'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
-      [customerId],
-    );
-    const warehouseId = warehouseRows[0]?.warehouse_id ?? DEFAULT_WAREHOUSE_ID;
+    let warehouseId = DEFAULT_WAREHOUSE_ID;
+    try {
+      const warehouseRows = await this.databaseService.query<{ warehouse_id: string }>(
+        'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+        [customerId],
+      );
+      if (warehouseRows[0]?.warehouse_id) {
+        warehouseId = warehouseRows[0].warehouse_id;
+      }
+    } catch {
+      // Fallback DEFAULT_WAREHOUSE_ID
+    }
     const stockRows = await this.inventoryService.getStockOverview(warehouseId);
     const availableBySku = new Map(
       stockRows.map((row) => [row.sku.trim().toUpperCase(), row.stockQuantity]),
@@ -661,287 +677,7 @@ export class OrdersService implements OnModuleInit {
    * Khởi tạo dữ liệu mẫu thực tế cho đơn hàng
    */
   private seedInitialOrders(): OrderEntity[] {
-    const initialOrders: OrderEntity[] = [
-      new OrderEntity({
-        id: 'ord-001',
-        orderCode: 'DH2610-10023',
-        customerId: 'cust-001',
-        customerCode: 'DL-HCM-001',
-        customerName: 'Cửa Hàng Thực Phẩm Tiêu Dùng Minh Khang',
-        customerGroup: 'AGENT_LEVEL_1',
-        salesRepId: 'usr-sale-01',
-        salesRepName: 'Trần Văn Long',
-        region: 'Miền Nam',
-        deliveryPoint: {
-          id: 'dp-001-1',
-          name: 'Kho Tổng Phú Nhuận',
-          address: '123 Nguyễn Trọng Tuyển, Phường 8, Quận Phú Nhuận, TP.HCM',
-          receiverName: 'Anh Nguyễn Minh Khang',
-          phone: '0901234567',
-          roadNote: 'Đường 2 chiều, xe tải 2.5T vào thoải mái, giao giờ hành chính 8h00 - 17h00',
-        },
-        deliveryDate: '2026-10-12',
-        lines: [
-          new OrderLineEntity({
-            id: 'line-001-1',
-            productId: 'prod-001',
-            productSku: 'LH-MILK-900G',
-            productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
-            unit: 'Thùng (12 lon)',
-            baseUnit: 'Lon',
-            conversionRate: 12,
-            quantity: 5,
-            baseQuantity: 60,
-            listPrice: 5400000,
-            unitPrice: 5130000,
-            discountPercent: 5,
-            lineTotal: 25650000,
-          }),
-          new OrderLineEntity({
-            id: 'line-001-2',
-            productId: 'prod-002',
-            productSku: 'LH-NUT-180ML',
-            productName: 'Sữa Hạt Óc Chó Yến Mạch LOHA 180ml',
-            unit: 'Thùng (48 hộp)',
-            baseUnit: 'Hộp',
-            conversionRate: 48,
-            quantity: 10,
-            baseQuantity: 480,
-            listPrice: 620000,
-            unitPrice: 589000,
-            discountPercent: 5,
-            lineTotal: 5890000,
-          }),
-        ],
-        subtotal: 33200000,
-        totalDiscount: 1660000,
-        grandTotal: 31540000,
-        note: 'Giao buổi sáng, gọi trước 30 phút để chuẩn bị thủ kho bốc dỡ',
-        status: OrderStatus.APPROVED,
-        paymentStatus: PaymentStatus.UNPAID,
-        createdAt: new Date('2026-10-06T08:30:00Z'),
-        updatedAt: new Date('2026-10-06T09:15:00Z'),
-      }),
-      new OrderEntity({
-        id: 'ord-002',
-        orderCode: 'DH2610-10045',
-        customerId: 'cust-002',
-        customerCode: 'DL-HCM-002',
-        customerName: 'Đại Lý Bách Hóa Thực Phẩm Bảo Châu',
-        customerGroup: 'AGENT_LEVEL_2',
-        salesRepId: 'usr-sale-02',
-        salesRepName: 'Nguyễn Thị Hằng',
-        deliveryPoint: {
-          id: 'dp-002-1',
-          name: 'Kho Phân Phối Thủ Đức',
-          address: '456 Lê Văn Việt, Phường Tăng Nhơn Phú A, TP. Thủ Đức, TP.HCM',
-          receiverName: 'Chị Trần Bảo Châu',
-          phone: '0912345678',
-          roadNote: 'Hẻm xe tải 8m, vào cổng sắt màu xanh, gọi điện trước khi đến 15 phút',
-        },
-        deliveryDate: '2026-10-15',
-        lines: [
-          new OrderLineEntity({
-            id: 'line-002-1',
-            productId: 'prod-003',
-            productSku: 'LH-NEST-70ML',
-            productName: 'Nước Yến Sào Nhân Sâm Thượng Hạng LOHA 70ml',
-            unit: 'Hộp (6 hũ)',
-            baseUnit: 'Hũ',
-            conversionRate: 6,
-            quantity: 20,
-            baseQuantity: 120,
-            listPrice: 420000,
-            unitPrice: 420000,
-            discountPercent: 0,
-            lineTotal: 8400000,
-          }),
-        ],
-        subtotal: 8400000,
-        totalDiscount: 0,
-        grandTotal: 8400000,
-        note: 'Hàng dễ vỡ, bốc dỡ cẩn thận',
-        status: OrderStatus.PENDING,
-        paymentStatus: PaymentStatus.UNPAID,
-        createdAt: new Date('2026-10-07T10:00:00Z'),
-        updatedAt: new Date('2026-10-07T10:00:00Z'),
-      }),
-      new OrderEntity({
-        id: 'ord-003',
-        orderCode: 'DH2610-10088',
-        customerId: 'cust-003',
-        customerCode: 'DL-HCM-003',
-        customerName: 'Siêu Thị Mini Phương Nam Mart',
-        customerGroup: 'RETAIL',
-        salesRepId: 'usr-sale-01',
-        salesRepName: 'Trần Văn Long',
-        region: 'Miền Bắc',
-        deliveryPoint: {
-          id: 'dp-003-1',
-          name: 'Điểm Bán Tân Bình (Mặt Tiền)',
-          address: '789 Hoàng Văn Thụ, Phường 4, Quận Tân Bình, TP.HCM',
-          receiverName: 'Chị Đỗ Thu Phương',
-          phone: '0923456789',
-          roadNote: 'Giao vào bãi đỗ xe phía sau siêu thị mini, có thang máy vận chuyển hàng',
-        },
-        deliveryDate: '2026-10-14',
-        lines: [
-          new OrderLineEntity({
-            id: 'line-003-1',
-            productId: 'prod-004',
-            productSku: 'LH-CEREAL-500G',
-            productName: 'Ngũ Cốc Dinh Dưỡng Hạt Granola LOHA 500g',
-            unit: 'Gói',
-            baseUnit: 'Gói',
-            conversionRate: 1,
-            quantity: 30,
-            baseQuantity: 30,
-            listPrice: 145000,
-            unitPrice: 145000,
-            discountPercent: 0,
-            lineTotal: 4350000,
-          }),
-        ],
-        subtotal: 4350000,
-        totalDiscount: 0,
-        grandTotal: 4350000,
-        note: 'Đơn nháp lưu lại kiểm tra thêm tồn kho',
-        status: OrderStatus.DRAFT,
-        paymentStatus: PaymentStatus.UNPAID,
-        createdAt: new Date('2026-10-07T14:20:00Z'),
-        updatedAt: new Date('2026-10-07T14:20:00Z'),
-      }),
-      new OrderEntity({
-        id: 'ord-004',
-        orderCode: 'DH2610-10015',
-        customerId: 'cust-001',
-        customerCode: 'DL-HCM-001',
-        customerName: 'Cửa Hàng Thực Phẩm Tiêu Dùng Minh Khang',
-        customerGroup: 'AGENT_LEVEL_1',
-        salesRepId: 'usr-sale-01',
-        salesRepName: 'Trần Văn Long',
-        deliveryPoint: {
-          id: 'dp-001-1',
-          name: 'Kho Tổng Phú Nhuận',
-          address: '123 Nguyễn Trọng Tuyển, Phường 8, Quận Phú Nhuận, TP.HCM',
-          receiverName: 'Anh Nguyễn Minh Khang',
-          phone: '0901234567',
-          roadNote: 'Đường 2 chiều, xe tải 2.5T vào thoải mái',
-        },
-        deliveryDate: '2026-10-08',
-        lines: [
-          new OrderLineEntity({
-            id: 'line-004-1',
-            productId: 'prod-003',
-            productSku: 'LH-NEST-70ML',
-            productName: 'Nước Yến Sào Nhân Sâm Thượng Hạng LOHA 70ml',
-            unit: 'Hộp (6 hũ)',
-            baseUnit: 'Hũ',
-            conversionRate: 6,
-            quantity: 10,
-            baseQuantity: 60,
-            listPrice: 420000,
-            unitPrice: 399000,
-            discountPercent: 5,
-            lineTotal: 3990000,
-            deliveredQuantity: 8, // Giao thiếu 2 hộp (SN-170)
-            deliveredBaseQuantity: 48,
-            isShortDelivery: true,
-            shortDeliveryReason:
-              'Kho tổng tạm thiếu 2 hộp lô sản xuất mới nhất, đã xác nhận với đại lý sẽ giao bù vào đợt giao kế tiếp',
-          }),
-          new OrderLineEntity({
-            id: 'line-004-2',
-            productId: 'prod-001',
-            productSku: 'LH-MILK-900G',
-            productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
-            unit: 'Thùng (12 lon)',
-            baseUnit: 'Lon',
-            conversionRate: 12,
-            quantity: 5,
-            baseQuantity: 60,
-            listPrice: 5400000,
-            unitPrice: 5130000,
-            discountPercent: 5,
-            lineTotal: 25650000,
-            deliveredQuantity: 5, // Giao đủ 5 thùng (SN-170)
-            deliveredBaseQuantity: 60,
-            isShortDelivery: false,
-          }),
-        ],
-        subtotal: 31200000,
-        totalDiscount: 1560000,
-        grandTotal: 29640000,
-        note: 'Biên bản bàn giao số BB-2610-08 ghi nhận thiếu 2 hộp Nước Yến, đại lý đã ký xác nhận',
-        status: OrderStatus.DELIVERED,
-        paymentStatus: PaymentStatus.PARTIAL,
-        isShortDelivery: true,
-        createdAt: new Date('2026-10-04T09:00:00Z'),
-        updatedAt: new Date('2026-10-08T16:30:00Z'),
-      }),
-      new OrderEntity({
-        id: 'ord-005',
-        orderCode: 'DH2609-09880',
-        customerId: 'cust-001',
-        customerCode: 'DL-HCM-001',
-        customerName: 'Cửa Hàng Thực Phẩm Tiêu Dùng Minh Khang',
-        customerGroup: 'AGENT_LEVEL_1',
-        salesRepId: 'usr-sale-01',
-        salesRepName: 'Trần Văn Long',
-        deliveryPoint: {
-          id: 'dp-001-1',
-          name: 'Kho Tổng Phú Nhuận',
-          address: '123 Nguyễn Trọng Tuyển, Phường 8, Quận Phú Nhuận, TP.HCM',
-          receiverName: 'Anh Nguyễn Minh Khang',
-          phone: '0901234567',
-        },
-        deliveryDate: '2026-09-25',
-        lines: [
-          new OrderLineEntity({
-            id: 'line-005-1',
-            productId: 'prod-001',
-            productSku: 'LH-MILK-900G',
-            productName: 'Sữa Bột Dinh Dưỡng LOHA Gold 900g',
-            unit: 'Thùng (12 lon)',
-            baseUnit: 'Lon',
-            conversionRate: 12,
-            quantity: 4,
-            baseQuantity: 48,
-            listPrice: 5200000, // Giá cũ tháng trước
-            unitPrice: 4940000,
-            discountPercent: 5,
-            lineTotal: 19760000,
-            deliveredQuantity: 4,
-          }),
-          new OrderLineEntity({
-            id: 'line-005-2',
-            productId: 'prod-011',
-            productSku: 'LH-OLD-COFFEE-CAN',
-            productName:
-              'Cà Phê Sữa Đậm Đà Loha Lon 240ml (Mẫu Cũ - Ngừng Kinh Doanh)',
-            unit: 'Thùng (24 lon)',
-            baseUnit: 'Lon',
-            conversionRate: 24,
-            quantity: 6,
-            baseQuantity: 144,
-            listPrice: 336000,
-            unitPrice: 336000,
-            discountPercent: 0,
-            lineTotal: 2016000,
-            deliveredQuantity: 6,
-          }),
-        ],
-        subtotal: 22816000,
-        totalDiscount: 1040000,
-        grandTotal: 21776000,
-        note: 'Đơn hàng định kỳ tháng 9/2026 - Đã giao hoàn tất',
-        status: OrderStatus.DELIVERED,
-        paymentStatus: PaymentStatus.PAID,
-        createdAt: new Date('2026-09-20T08:00:00Z'),
-        updatedAt: new Date('2026-09-25T11:00:00Z'),
-      }),
-    ];
-
+    const initialOrders = getSeedInitialOrders();
     for (const ord of initialOrders) {
       this.orders.set(ord.id, ord);
     }
@@ -1107,8 +843,8 @@ export class OrdersService implements OnModuleInit {
       customerCode: customer.code,
       customerName: customer.name,
       customerGroup: customer.customerGroup,
-      salesRepId: salesRep?.id || customer.salesRepId,
-      salesRepName: salesRep?.name || customer.salesRepName,
+      salesRepId: dto.salesRepId || salesRep?.id || customer.salesRepId,
+      salesRepName: dto.salesRepName || salesRep?.name || customer.salesRepName,
       region: customer.region || (assignedDeliveryPoint?.address?.includes('Hà Nội') ? 'Miền Bắc' : 'Miền Nam'),
       deliveryPoint: assignedDeliveryPoint,
       deliveryDate: dto.deliveryDate,
@@ -1130,6 +866,11 @@ export class OrdersService implements OnModuleInit {
     });
 
     await this.saveOrder(newOrder);
+
+    // Đánh dấu Bảng giá đã phát sinh đơn hàng (Ràng buộc đơn hàng hasOrders = true)
+    if (newOrder.priceListId && this.priceListsService) {
+      await this.priceListsService.markPriceListHasOrders(newOrder.priceListId);
+    }
 
     // Cập nhật tính toán tồn khả dụng cho các sản phẩm trong đơn (SN-180 & SN-42)
     if (!this.databaseService?.isConnected() && this.productsService && newOrder.lines) {
@@ -1228,20 +969,41 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    // 6. Lọc theo khoảng thời gian (fromDate, toDate)
-    if (query.fromDate) {
-      const fromTime = new Date(query.fromDate).getTime();
-      if (!isNaN(fromTime)) {
-        list = list.filter((o) => new Date(o.createdAt).getTime() >= fromTime);
+    // 6. Lọc theo khoảng thời gian (fromDate, toDate, dateType)
+    // Chuẩn hóa ngày dạng YYYY-MM-DD độc lập với múi giờ
+    const toDateKey = (val: string | Date | undefined): string => {
+      if (!val) return '';
+      if (typeof val === 'string') {
+        const m = val.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (m) return m[1];
       }
-    }
-    if (query.toDate) {
-      const toDateObj = new Date(query.toDate);
-      toDateObj.setHours(23, 59, 59, 999);
-      const toTime = toDateObj.getTime();
-      if (!isNaN(toTime)) {
-        list = list.filter((o) => new Date(o.createdAt).getTime() <= toTime);
-      }
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return '';
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    const fromKey = query.fromDate?.trim();
+    const toKey = query.toDate?.trim();
+    const dateType = query.dateType?.toUpperCase() || 'CREATED'; // CREATED (mặc định: Ngày tạo/đặt đơn) | DELIVERY (Ngày giao)
+
+    if (fromKey || toKey) {
+      list = list.filter((o) => {
+        const cKey = toDateKey(o.createdAt);
+        const dKey = toDateKey(o.deliveryDate);
+        const targetKey = dateType === 'DELIVERY' ? dKey : cKey;
+
+        if (fromKey && toKey) {
+          return Boolean(targetKey && targetKey >= fromKey && targetKey <= toKey);
+        } else if (fromKey) {
+          return Boolean(targetKey && targetKey >= fromKey);
+        } else if (toKey) {
+          return Boolean(targetKey && targetKey <= toKey);
+        }
+        return true;
+      });
     }
 
     // 7. Tìm kiếm tự do (mã đơn, mã đại lý, tên đại lý, sđt, người nhận, nhân viên)
@@ -1765,11 +1527,18 @@ export class OrdersService implements OnModuleInit {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
     const linesBySku = this.groupOrderLinesBySku(order.lines);
-    const warehouseRows = await client.query<{ warehouse_id: string }>(
-      'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
-      [order.customerId],
-    );
-    const warehouseId = warehouseRows.rows[0]?.warehouse_id || DEFAULT_WAREHOUSE_ID;
+    let warehouseId = DEFAULT_WAREHOUSE_ID;
+    try {
+      const warehouseRows = await client.query<{ warehouse_id: string }>(
+        'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+        [order.customerId],
+      );
+      if (warehouseRows.rows[0]?.warehouse_id) {
+        warehouseId = warehouseRows.rows[0].warehouse_id;
+      }
+    } catch {
+      // Fallback DEFAULT_WAREHOUSE_ID
+    }
     for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
       const product = await this.productsService.findById(sku);

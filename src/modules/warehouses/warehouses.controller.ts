@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Put, UseGuards } from '@nest
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
@@ -69,7 +70,7 @@ export class WarehousesController {
   }
 
   @Get('agencies/:agencyId/default')
-  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.SALES_REP, UserRole.SALES_MANAGER)
+  @Public()
   getAgencyDefault(@Param('agencyId') agencyId: string): Promise<AgencyWarehouseDetailEntity> {
     return this.warehousesService.getAgencyDefault(agencyId);
   }

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Matches, ValidateIf } from 'class-validator';
 import { WAREHOUSE_MANAGER_ID_PATTERN } from '../warehouse.constants';
 
 export class CreateWarehouseDto {
@@ -16,6 +16,10 @@ export class CreateWarehouseDto {
 
   @IsOptional()
   @IsString()
+  @ValidateIf((o) => Boolean(o.phone))
+  @Matches(/^(0[235789])[0-9]{8}$/, {
+    message: 'Số điện thoại phải là số điện thoại Việt Nam gồm 10 chữ số (bắt đầu bằng 02, 03, 05, 07, 08, 09)',
+  })
   phone?: string;
 
   @IsOptional()
