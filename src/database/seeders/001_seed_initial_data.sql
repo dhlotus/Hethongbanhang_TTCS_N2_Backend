@@ -97,9 +97,9 @@ END $$;
 -- =============================================================================
 INSERT INTO warehouses (id, code, name, address, phone, manager_id, status)
 VALUES 
-    ('11111111-0000-0000-0000-000000000001', 'KHO-MN-01', 'Kho Tổng Miền Nam', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '02743790001', '00000000-0000-0000-0000-000000000004', 'ACTIVE'),
-    ('11111111-0000-0000-0000-000000000002', 'KHO-MB-01', 'Kho Phân Phối Hà Nội', 'Lô CN-05 KCN Ninh Hiệp, Gia Lâm, Hà Nội', '02438890002', '00000000-0000-0000-0000-000000000014', 'ACTIVE'),
-    ('11111111-0000-0000-0000-000000000003', 'KHO-MT-01', 'Kho Vùng Tây Nam Bộ', 'Đường số 3 KCN Trà Nóc 1, Bình Thủy, Cần Thơ', '02923890003', NULL, 'ACTIVE')
+    ('11111111-0000-0000-0000-000000000001', 'KHO-MN-01', 'Kho Tổng Miền Nam', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '0274379001', '00000000-0000-0000-0000-000000000004', 'ACTIVE'),
+    ('11111111-0000-0000-0000-000000000002', 'KHO-MB-01', 'Kho Phân Phối Hà Nội', 'Lô CN-05 KCN Ninh Hiệp, Gia Lâm, Hà Nội', '0243889002', '00000000-0000-0000-0000-000000000014', 'ACTIVE'),
+    ('11111111-0000-0000-0000-000000000003', 'KHO-MT-01', 'Kho Vùng Tây Nam Bộ', 'Đường số 3 KCN Trà Nóc 1, Bình Thủy, Cần Thơ', '0292389003', NULL, 'ACTIVE')
 ON CONFLICT (code) DO NOTHING;
 
 -- Vị trí kệ trong Kho Tổng Miền Nam
