@@ -1,17 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit, Logger } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { CreateGoodsReceiptDto } from './dto/create-goods-receipt.dto';
+import { UpdateGoodsReceiptDto } from './dto/update-goods-receipt.dto';
 import { QueryGoodsReceiptsDto } from './dto/query-goods-receipts.dto';
 import { GoodsReceiptEntity, GoodsReceiptItemEntity, GoodsReceiptStatus, ReceiptType } from './entities/goods-receipt.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
-
-export interface PaginatedGoodsReceipts {
-  data: GoodsReceiptEntity[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 
 @Injectable()
 export class GoodsReceiptsService implements OnModuleInit {
@@ -65,20 +59,21 @@ export class GoodsReceiptsService implements OnModuleInit {
         );
       `);
 
+      // Đảm bảo kho mặc định WH01 tồn tại với UUID v4 chuẩn
       await this.db.query(`
         INSERT INTO warehouses (id, code, name, address, phone, status)
-        VALUES ('11111111-0000-0000-0000-000000000001', 'WH01', 'Kho Tổng Miền Nam - LOHA WH01', 'Hồ Chí Minh', '02743790001', 'ACTIVE')
-        ON CONFLICT (id) DO NOTHING;
+        VALUES ('${DEFAULT_WAREHOUSE_ID}', 'WH01', 'Kho Tổng Miền Nam - LOHA WH01', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '0274379001', 'ACTIVE')
+        ON CONFLICT (id) DO UPDATE SET code = 'WH01', name = 'Kho Tổng Miền Nam - LOHA WH01';
       `);
 
+      // Chuẩn hóa dữ liệu cũ nếu warehouse_id đang lưu chuỗi 'WH01'
       await this.db.query(`
-        INSERT INTO suppliers (id, code, name, tax_code, contact_name, phone, email, address, payment_terms)
-        VALUES 
-          ('22222222-0000-0000-0000-000000000001', 'NCC-BEV-01', 'Công ty Cổ phần Nước giải khát LOHA Quốc Tế', '0312345678', 'Ông Đỗ Quốc Tuấn', '02838123456', 'supply@loha.vn', 'KCN Tân Bình, Tây Thạnh, Tân Phú, TP.HCM', 'NET_45'),
-          ('22222222-0000-0000-0000-000000000002', 'NCC-AQUA-02', 'Công ty TNHH Khai Thác Khoáng Tinh Khiết Aqua Life', '0398765432', 'Bà Mai Thị Lan', '02723789012', 'contact@aqualife.vn', 'Xã Long Hậu, Cần Giuộc, Long An', 'NET_30')
-        ON CONFLICT (id) DO NOTHING;
+        UPDATE goods_receipts 
+        SET warehouse_id = '${DEFAULT_WAREHOUSE_ID}' 
+        WHERE warehouse_id = 'WH01' OR warehouse_id = '11111111-0000-0000-0000-000000000001';
       `);
-      this.logger.log('Đã tạo xong các bảng và dữ liệu mẫu cho goods_receipts.');
+
+      this.logger.log('Đã tạo xong các bảng cho goods_receipts và đồng bộ kho mặc định.');
     } catch (err) {
       this.logger.warn(`Không thể khởi tạo bảng goods_receipts: ${err instanceof Error ? err.message : err}`);
     }
@@ -99,30 +94,20 @@ export class GoodsReceiptsService implements OnModuleInit {
       const totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
 
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      const targetWarehouseId = dto.warehouseId && uuidRegex.test(dto.warehouseId)
-        ? dto.warehouseId
-        : '11111111-0000-0000-0000-000000000001';
+      const creatorId = user?.userId && uuidRegex.test(user.userId)
+        ? user.userId
+        : '00000000-0000-0000-0000-000000000004';
 
-      await client.query(`
-        INSERT INTO warehouses (id, code, name, address, phone, status)
-        VALUES ($1, 'WH01', 'Kho Tổng Miền Nam - LOHA WH01', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '02743790001', 'ACTIVE')
-        ON CONFLICT (id) DO NOTHING;
-      `, [targetWarehouseId]);
-
-      let targetSupplierId: string | null = null;
-      if (dto.supplierId && uuidRegex.test(dto.supplierId)) {
-        const supCheck = await client.query(`SELECT id FROM suppliers WHERE id = $1`, [dto.supplierId]);
-        if (supCheck.rows.length > 0) {
-          targetSupplierId = dto.supplierId;
-        }
+      let warehouseId = dto.warehouseId;
+      if (!uuidRegex.test(warehouseId)) {
+        const whRes = await client.query('SELECT id FROM warehouses WHERE code = $1 OR id::text = $1 LIMIT 1', [warehouseId]);
+        warehouseId = whRes.rows.length > 0 ? whRes.rows[0].id : DEFAULT_WAREHOUSE_ID;
       }
 
-      let creatorId: string | null = null;
-      if (user?.userId && uuidRegex.test(user.userId)) {
-        const userCheck = await client.query(`SELECT id FROM users WHERE id = $1`, [user.userId]);
-        if (userCheck.rows.length > 0) {
-          creatorId = user.userId;
-        }
+      let supplierId = dto.supplierId;
+      if (supplierId && !uuidRegex.test(supplierId)) {
+        const supRes = await client.query('SELECT id FROM suppliers WHERE code = $1 OR id::text = $1 LIMIT 1', [supplierId]);
+        supplierId = supRes.rows.length > 0 ? supRes.rows[0].id : null;
       }
 
       const receiptRes = await client.query(
@@ -131,52 +116,25 @@ export class GoodsReceiptsService implements OnModuleInit {
           status, total_cost, notes, created_by, received_at, created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING id`,
         [
-          code, targetWarehouseId, targetSupplierId, ReceiptType.PURCHASE_RECEIPT, 
-          dto.referenceDocument || null, GoodsReceiptStatus.DRAFT, totalCost, 
-          dto.notes || null, creatorId, dto.receiptDate || null
+          code, warehouseId, supplierId || null, ReceiptType.PURCHASE_RECEIPT, 
+          dto.referenceDocument, GoodsReceiptStatus.DRAFT, totalCost, 
+          dto.notes, creatorId, dto.receiptDate || null
         ]
       );
       
       const receiptId = receiptRes.rows[0].id;
 
       for (const item of dto.items) {
-        if (!uuidRegex.test(item.productId)) {
-          throw new BadRequestException(`Mã sản phẩm "${item.productId}" không đúng định dạng UUID`);
+        let productId = item.productId;
+        if (!uuidRegex.test(productId)) {
+          const prodRes = await client.query('SELECT id FROM products WHERE sku = $1 OR id::text = $1 LIMIT 1', [productId]);
+          if (prodRes.rows.length > 0) {
+            productId = prodRes.rows[0].id;
+          }
         }
-
-        const prodRes = await client.query(`SELECT id, name, base_unit FROM products WHERE id = $1`, [item.productId]);
-        if (prodRes.rows.length === 0) {
-          throw new NotFoundException(`Không tìm thấy sản phẩm có ID: ${item.productId}`);
-        }
-        const productBaseUnit = prodRes.rows[0].base_unit || 'ĐVT';
 
         const itemTotal = item.packageQuantity * (item.unitCost || 0);
         const baseQty = item.packageQuantity * item.conversionFactor;
-
-        let unitId: string | null = null;
-        if (item.unitId && uuidRegex.test(item.unitId)) {
-          const unitCheck = await client.query(`SELECT id FROM product_units WHERE id = $1`, [item.unitId]);
-          if (unitCheck.rows.length > 0) {
-            unitId = unitCheck.rows[0].id;
-          }
-        }
-
-        if (!unitId) {
-          const unitRes = await client.query(`SELECT id FROM product_units WHERE product_id = $1 LIMIT 1`, [item.productId]);
-          if (unitRes.rows.length > 0) {
-            unitId = unitRes.rows[0].id;
-          } else {
-            const newUnitRes = await client.query(`
-              INSERT INTO product_units (id, product_id, unit_name, conversion_factor, is_base_unit)
-              VALUES (gen_random_uuid(), $1, $2, 1, true)
-              RETURNING id
-            `, [item.productId, productBaseUnit]);
-            unitId = newUnitRes.rows[0].id;
-          }
-        }
-
-        const batchNum = item.batchNumber || `LOT-${code}`;
-        const expDate = item.expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
         
         await client.query(
           `INSERT INTO goods_receipt_items (
@@ -184,9 +142,9 @@ export class GoodsReceiptsService implements OnModuleInit {
             base_quantity, unit_cost, total_cost, batch_number, mfg_date, expiry_date, notes
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
           [
-            receiptId, item.productId, unitId, item.packageQuantity, item.conversionFactor,
-            baseQty, item.unitCost || 0, itemTotal, batchNum, 
-            item.mfgDate || null, expDate, item.notes || null
+            receiptId, productId, item.unitId, item.packageQuantity, item.conversionFactor,
+            baseQty, item.unitCost || 0, itemTotal, item.batchNumber || '', 
+            item.mfgDate || null, item.expiryDate || null, item.notes
           ]
         );
       }
@@ -201,9 +159,9 @@ export class GoodsReceiptsService implements OnModuleInit {
     }
   }
 
-  async findAll(query: QueryGoodsReceiptsDto): Promise<PaginatedGoodsReceipts> {
+  async findAll(query: QueryGoodsReceiptsDto): Promise<any> {
     const conditions: string[] = [];
-    const params: (string | number)[] = [];
+    const params: any[] = [];
     let paramIndex = 1;
 
     if (query.warehouseId) {
@@ -233,25 +191,27 @@ export class GoodsReceiptsService implements OnModuleInit {
     const total = parseInt(countRes[0].count);
 
     const rows = await this.db.query(
-      `SELECT r.*, 'Kho Tổng Miền Nam - LOHA WH01' as warehouse_name, 'Nhà cung cấp' as supplier_name, 'Người tạo' as created_by_name
+      `SELECT r.*, COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, COALESCE(s.name, 'Nhà cung cấp') as supplier_name, 'Người tạo' as created_by_name
        FROM goods_receipts r
+       LEFT JOIN warehouses w ON w.id::text = r.warehouse_id::text
+       LEFT JOIN suppliers s ON s.id::text = r.supplier_id::text
        ${whereClause}
        ORDER BY r.created_at DESC
        LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
       [...params, limit, offset]
     );
 
-    const mapToCamelCase = <T = Record<string, unknown>>(row: Record<string, unknown>): T => {
-      const result: Record<string, unknown> = {};
+    const mapToCamelCase = (row: any) => {
+      const result: any = {};
       for (const key of Object.keys(row)) {
-        const camelKey = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+        const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
         result[camelKey] = row[key];
       }
-      return result as T;
+      return result;
     };
 
     return {
-      data: rows.map((row: Record<string, unknown>) => mapToCamelCase<GoodsReceiptEntity>(row)),
+      data: rows.map(mapToCamelCase),
       total,
       page,
       limit,
@@ -259,10 +219,12 @@ export class GoodsReceiptsService implements OnModuleInit {
     };
   }
 
-  async findOne(id: string): Promise<GoodsReceiptEntity> {
+  async findOne(id: string): Promise<any> {
     const receiptRes = await this.db.query(
-      `SELECT r.*, 'Kho Tổng Miền Nam - LOHA WH01' as warehouse_name, 'Nhà cung cấp' as supplier_name, 'Người tạo' as created_by_name
+      `SELECT r.*, COALESCE(w.name, 'Kho Tổng Miền Nam - LOHA WH01') as warehouse_name, COALESCE(s.name, 'Nhà cung cấp') as supplier_name, 'Người tạo' as created_by_name
        FROM goods_receipts r
+       LEFT JOIN warehouses w ON w.id::text = r.warehouse_id::text
+       LEFT JOIN suppliers s ON s.id::text = r.supplier_id::text
        WHERE r.id = $1`,
       [id]
     );
@@ -279,18 +241,19 @@ export class GoodsReceiptsService implements OnModuleInit {
       [id]
     );
 
-    const mapToCamelCase = <T = Record<string, unknown>>(row: Record<string, unknown>): T => {
-      const result: Record<string, unknown> = {};
+    const mapToCamelCase = (row: any) => {
+      const result: any = {};
       for (const key of Object.keys(row)) {
-        const camelKey = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+        const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
         result[camelKey] = row[key];
       }
-      return result as T;
+      return result;
     };
 
-    const receipt = mapToCamelCase<GoodsReceiptEntity>(receiptRes[0]);
-    receipt.items = itemsRes.map((item: Record<string, unknown>) => mapToCamelCase<GoodsReceiptItemEntity>(item));
-    return receipt;
+    return {
+      ...mapToCamelCase(receiptRes[0]),
+      items: itemsRes.map(mapToCamelCase),
+    };
   }
 
   async confirm(id: string, user: ICurrentUser): Promise<{ success: boolean; message: string }> {
@@ -307,63 +270,59 @@ export class GoodsReceiptsService implements OnModuleInit {
         throw new BadRequestException('Chỉ có thể xác nhận phiếu nhập ở trạng thái nháp');
       }
 
+      // Đảm bảo warehouse_id là chuỗi UUID chuẩn trước khi ghi vào inventories
+      let targetWarehouseId = receipt.warehouse_id;
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      const targetWarehouseId = receipt.warehouse_id && uuidRegex.test(receipt.warehouse_id)
-        ? receipt.warehouse_id
-        : '11111111-0000-0000-0000-000000000001';
+      if (!uuidRegex.test(targetWarehouseId)) {
+        const whRes = await client.query('SELECT id FROM warehouses WHERE code = $1 OR id::text = $1 LIMIT 1', [targetWarehouseId]);
+        targetWarehouseId = whRes.rows.length > 0 ? whRes.rows[0].id : DEFAULT_WAREHOUSE_ID;
+        await client.query('UPDATE goods_receipts SET warehouse_id = $1 WHERE id = $2', [targetWarehouseId, id]);
+      }
 
-      await client.query(`
-        INSERT INTO warehouses (id, code, name, address, phone, status)
-        VALUES ($1, 'WH01', 'Kho Tổng Miền Nam - LOHA WH01', 'Hồ Chí Minh', '02743790001', 'ACTIVE')
-        ON CONFLICT (id) DO NOTHING;
-      `, [targetWarehouseId]);
-
-      let authorUserId: string | null = null;
+      let transactionUserId: string | null = null;
       if (user?.userId && uuidRegex.test(user.userId)) {
-        const userCheck = await client.query(`SELECT id FROM users WHERE id = $1`, [user.userId]);
-        if (userCheck.rows.length > 0) {
-          authorUserId = user.userId;
+        const userExists = await client.query('SELECT 1 FROM users WHERE id = $1', [user.userId]);
+        if (userExists.rows.length > 0) {
+          transactionUserId = user.userId;
         }
       }
+      const receiverId = transactionUserId || (user?.userId ? user.userId : null);
 
       const itemsRes = await client.query(`SELECT * FROM goods_receipt_items WHERE receipt_id = $1`, [id]);
       const items = itemsRes.rows;
 
       for (const item of items) {
-        const validProductId = uuidRegex.test(item.product_id) ? item.product_id : null;
-        if (!validProductId) continue;
-
-        const prodCheck = await client.query(`SELECT id FROM products WHERE id = $1`, [validProductId]);
-        if (prodCheck.rows.length === 0) continue;
-
         // 1. Cập nhật tồn kho tổng (inventories)
         await client.query(
           `INSERT INTO inventories (warehouse_id, product_id, on_hand, created_at, updated_at)
            VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
            ON CONFLICT (warehouse_id, product_id) 
            DO UPDATE SET on_hand = inventories.on_hand + $3, updated_at = CURRENT_TIMESTAMP`,
-          [targetWarehouseId, validProductId, item.base_quantity]
+          [targetWarehouseId, item.product_id, item.base_quantity]
         );
 
-        let batchId: string | null = null;
-        // 2. Cập nhật tồn kho theo lô (inventory_batches)
-        const batchNum = item.batch_number || `LOT-${receipt.code}`;
-        const expDate = item.expiry_date || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        let batchId = null;
+        // 2. Cập nhật tồn kho theo lô (inventory_batches) nếu có lô
+        const batchNum = item.batch_number ? String(item.batch_number).trim() : null;
+        const mfgDate = item.mfg_date ? item.mfg_date : null;
+        const expDate = item.expiry_date ? item.expiry_date : null;
 
-        const batchRes = await client.query(
-          `INSERT INTO inventory_batches (warehouse_id, product_id, batch_number, mfg_date, expiry_date, quantity, cost_price, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-           ON CONFLICT (warehouse_id, product_id, batch_number)
-           DO UPDATE SET quantity = inventory_batches.quantity + $6, updated_at = CURRENT_TIMESTAMP
-           RETURNING id`,
-          [targetWarehouseId, validProductId, batchNum, item.mfg_date || null, expDate, item.base_quantity, item.unit_cost]
-        );
-        batchId = batchRes.rows[0].id;
+        if (batchNum && expDate) {
+          const batchRes = await client.query(
+            `INSERT INTO inventory_batches (warehouse_id, product_id, batch_number, mfg_date, expiry_date, quantity, cost_price, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT (warehouse_id, product_id, batch_number)
+             DO UPDATE SET quantity = inventory_batches.quantity + $6, updated_at = CURRENT_TIMESTAMP
+             RETURNING id`,
+            [targetWarehouseId, item.product_id, batchNum, mfgDate, expDate, item.base_quantity, item.unit_cost]
+          );
+          batchId = batchRes.rows[0].id;
+        }
 
         // Lấy on_hand hiện tại sau khi cộng để ghi transaction
         const onHandRes = await client.query(
           `SELECT on_hand FROM inventories WHERE warehouse_id = $1 AND product_id = $2`,
-          [targetWarehouseId, validProductId]
+          [targetWarehouseId, item.product_id]
         );
         const balanceAfter = onHandRes.rows[0].on_hand;
 
@@ -374,8 +333,8 @@ export class GoodsReceiptsService implements OnModuleInit {
             balance_after, unit_cost, reference_type, reference_id, created_by, created_at
           ) VALUES ($1, $2, $3, 'IMPORT', $4, $5, $6, 'GOODS_RECEIPT', $7, $8, CURRENT_TIMESTAMP)`,
           [
-            targetWarehouseId, validProductId, batchId, item.base_quantity,
-            balanceAfter, item.unit_cost, receipt.code, authorUserId
+            targetWarehouseId, item.product_id, batchId, item.base_quantity,
+            balanceAfter, item.unit_cost, receipt.code, transactionUserId
           ]
         );
       }
@@ -383,11 +342,91 @@ export class GoodsReceiptsService implements OnModuleInit {
       // 4. Cập nhật trạng thái phiếu nhập
       await client.query(
         `UPDATE goods_receipts SET status = $1, received_by = $2, received_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-        [GoodsReceiptStatus.CONFIRMED, authorUserId, id]
+        [GoodsReceiptStatus.CONFIRMED, receiverId, id]
       );
 
       await client.query('COMMIT');
       return { success: true, message: 'Xác nhận phiếu nhập kho thành công' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async update(id: string, dto: UpdateGoodsReceiptDto, user: ICurrentUser): Promise<{ success: boolean; message: string }> {
+    const client = await this.db.getClient();
+    await client.query('BEGIN');
+    try {
+      const receiptRes = await client.query(`SELECT * FROM goods_receipts WHERE id = $1 FOR UPDATE`, [id]);
+      if (receiptRes.rows.length === 0) {
+        throw new NotFoundException('Không tìm thấy phiếu nhập');
+      }
+
+      const receipt = receiptRes.rows[0];
+      if (receipt.status === GoodsReceiptStatus.CONFIRMED || receipt.status !== GoodsReceiptStatus.DRAFT) {
+        throw new BadRequestException('Phiếu đã xác nhận không thể chỉnh sửa, vui lòng lập phiếu điều chỉnh');
+      }
+
+      let warehouseId = dto.warehouseId || receipt.warehouse_id;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(warehouseId)) {
+        const whRes = await client.query('SELECT id FROM warehouses WHERE code = $1 OR id::text = $1 LIMIT 1', [warehouseId]);
+        warehouseId = whRes.rows.length > 0 ? whRes.rows[0].id : DEFAULT_WAREHOUSE_ID;
+      }
+
+      const referenceDocument = dto.referenceDocument !== undefined ? dto.referenceDocument : receipt.reference_document;
+      let supplierId = dto.supplierId !== undefined ? dto.supplierId : receipt.supplier_id;
+      if (supplierId && !uuidRegex.test(supplierId)) {
+        const supRes = await client.query('SELECT id FROM suppliers WHERE code = $1 OR id::text = $1 LIMIT 1', [supplierId]);
+        supplierId = supRes.rows.length > 0 ? supRes.rows[0].id : null;
+      }
+      const notes = dto.notes !== undefined ? dto.notes : receipt.notes;
+      const receivedAt = dto.receiptDate !== undefined ? dto.receiptDate : receipt.received_at;
+
+      let totalCost = receipt.total_cost;
+      if (dto.items && dto.items.length > 0) {
+        totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
+
+        await client.query(`DELETE FROM goods_receipt_items WHERE receipt_id = $1`, [id]);
+
+        for (const item of dto.items) {
+          let productId = item.productId;
+          if (!uuidRegex.test(productId)) {
+            const prodRes = await client.query('SELECT id FROM products WHERE sku = $1 OR id::text = $1 LIMIT 1', [productId]);
+            if (prodRes.rows.length > 0) {
+              productId = prodRes.rows[0].id;
+            }
+          }
+
+          const itemTotal = item.packageQuantity * (item.unitCost || 0);
+          const baseQty = item.packageQuantity * item.conversionFactor;
+
+          await client.query(
+            `INSERT INTO goods_receipt_items (
+              receipt_id, product_id, unit_id, package_quantity, conversion_factor, 
+              base_quantity, unit_cost, total_cost, batch_number, mfg_date, expiry_date, notes
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            [
+              id, productId, item.unitId, item.packageQuantity, item.conversionFactor,
+              baseQty, item.unitCost || 0, itemTotal, item.batchNumber || '', 
+              item.mfgDate || null, item.expiryDate || null, item.notes
+            ]
+          );
+        }
+      }
+
+      await client.query(
+        `UPDATE goods_receipts 
+         SET warehouse_id = $1, supplier_id = $2, reference_document = $3, 
+             total_cost = $4, notes = $5, received_at = $6, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $7`,
+        [warehouseId, supplierId, referenceDocument, totalCost, notes, receivedAt, id]
+      );
+
+      await client.query('COMMIT');
+      return { success: true, message: 'Cập nhật phiếu nhập kho thành công' };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -405,11 +444,12 @@ export class GoodsReceiptsService implements OnModuleInit {
         throw new NotFoundException('Không tìm thấy phiếu nhập');
       }
 
-      if (receiptRes.rows[0].status !== GoodsReceiptStatus.DRAFT) {
-        throw new BadRequestException('Chỉ có thể xóa phiếu nhập ở trạng thái nháp');
+      if (receiptRes.rows[0].status === GoodsReceiptStatus.CONFIRMED || receiptRes.rows[0].status !== GoodsReceiptStatus.DRAFT) {
+        throw new BadRequestException('Phiếu đã xác nhận không thể xóa, vui lòng lập phiếu điều chỉnh');
       }
 
-      await client.query(`DELETE FROM goods_receipts WHERE id = $1`, [id]); // items will cascade
+      await client.query(`DELETE FROM goods_receipt_items WHERE receipt_id = $1`, [id]);
+      await client.query(`DELETE FROM goods_receipts WHERE id = $1`, [id]);
       await client.query('COMMIT');
       return { success: true, message: 'Xóa phiếu nhập thành công' };
     } catch (error) {
@@ -420,4 +460,3 @@ export class GoodsReceiptsService implements OnModuleInit {
     }
   }
 }
-

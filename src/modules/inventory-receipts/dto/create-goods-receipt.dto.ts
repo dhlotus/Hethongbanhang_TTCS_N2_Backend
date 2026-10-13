@@ -1,15 +1,48 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsEnum,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+  ValidationArguments,
+  ValidationOptions,
+  registerDecorator,
+} from 'class-validator';
 import { GoodsReceiptStatus, ReceiptType } from '../entities/goods-receipt.entity';
 
+/**
+ * Decorator kiểm tra định dạng UUID hợp lệ (hỗ trợ cả chuẩn RFC v1-v5 và UUID 128-bit hex của PostgreSQL)
+ */
+export function IsValidUuid(validationOptions?: ValidationOptions) {
+  return function (object: Object, propertyName: string) {
+    registerDecorator({
+      name: 'isUuid',
+      target: object.constructor,
+      propertyName: propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: any, _args: ValidationArguments) {
+          if (typeof value !== 'string') return false;
+          return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+        },
+      },
+    });
+  };
+}
+
 export class CreateGoodsReceiptItemDto {
-  @IsUUID('all', { message: 'productId phải là định dạng UUID hợp lệ' })
+  @IsValidUuid({ message: 'productId phải là định dạng UUID hợp lệ' })
   @IsNotEmpty({ message: 'productId không được để trống' })
   productId: string;
 
   @IsString()
-  @IsOptional()
-  unitId?: string;
+  @IsNotEmpty({ message: 'unitId không được để trống' })
+  unitId: string;
 
   @IsNumber()
   @Min(0.01)
@@ -42,11 +75,11 @@ export class CreateGoodsReceiptItemDto {
 }
 
 export class CreateGoodsReceiptDto {
-  @IsString()
+  @IsValidUuid({ message: 'warehouseId phải là định dạng UUID hợp lệ' })
   @IsNotEmpty({ message: 'warehouseId không được để trống' })
   warehouseId: string;
 
-  @IsString()
+  @IsValidUuid({ message: 'supplierId phải là định dạng UUID hợp lệ' })
   @IsOptional()
   supplierId?: string;
 
@@ -67,4 +100,3 @@ export class CreateGoodsReceiptDto {
   @Type(() => CreateGoodsReceiptItemDto)
   items: CreateGoodsReceiptItemDto[];
 }
-

@@ -26,8 +26,8 @@ export class WarehousesService {
       return [
         {
           id: DEFAULT_WAREHOUSE_ID,
-          code: 'KHO-MN-01',
-          name: 'Kho Tổng Miền Nam',
+          code: 'WH01',
+          name: 'Kho Tổng Miền Nam - LOHA WH01',
           address: 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương',
           phone: '02743790001',
           managerId: null,
