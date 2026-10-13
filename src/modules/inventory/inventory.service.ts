@@ -273,7 +273,7 @@ export class InventoryService implements OnModuleInit {
       baseQuantityChange: 240, // 10 * 24 = 240 Lon
       baseUnit: 'Lon',
       previousStock: 100,
-      newStock: 340,
+      newStock: 1500,
       reason: 'Nhập lô hàng mới từ Nhà máy Dược Loha',
       referenceCode: 'PNK-2026-0891',
       warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
