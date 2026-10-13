@@ -18,6 +18,8 @@ export interface SafeUser {
   lockReason?: string | null;
   resetCode?: string | null;
   resetCodeCreatedAt?: Date | null;
+  customerId?: string | null;
+  customerCode?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -34,6 +36,8 @@ export class UserEntity {
   status: UserStatus;
   avatarUrl: string | null;
   assignedWarehouse?: string;
+  customerId?: string | null;
+  customerCode?: string | null;
   dateOfBirth?: string | null;
   gender?: string | null;
   isIdentityLocked?: boolean;
@@ -52,6 +56,8 @@ export class UserEntity {
     this.fullName = partial.fullName ?? '';
     this.phone = partial.phone ?? '';
     this.passwordHash = partial.passwordHash ?? '';
+    this.customerId = partial.customerId ?? null;
+    this.customerCode = partial.customerCode ?? null;
 
     // Hỗ trợ Đa vai trò (Multi-role - SN-14)
     if (partial.roles && partial.roles.length > 0) {
@@ -105,6 +111,8 @@ export class UserEntity {
       status: this.status,
       avatarUrl: this.avatarUrl ?? null,
       assignedWarehouse: this.assignedWarehouse,
+      customerId: this.customerId,
+      customerCode: this.customerCode,
       dateOfBirth: this.dateOfBirth,
       gender: this.gender,
       isIdentityLocked: this.isIdentityLocked,
