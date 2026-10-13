@@ -146,6 +146,7 @@ export class UsersService implements OnModuleInit {
     if (this.users.size === 0) {
       this.seedInitialUsersSync();
     }
+    this.loadUsersFromDisk();
     if (this.dbService?.isConnected()) {
       await this.loadUsersFromDatabase();
     }
@@ -254,18 +255,6 @@ export class UsersService implements OnModuleInit {
         fullName: 'Vũ Mai Hoa (Kế Toán Công Nợ)',
         phone: '0967890123',
         role: UserRole.ACCOUNTANT,
-        status: UserStatus.ACTIVE,
-        passwordHash,
-        failedAttempts: 0,
-        lockedUntil: null,
-      },
-      {
-        id: 'usr-cust-007',
-        email: 'dealer@loha.vn',
-        username: 'dealer',
-        fullName: 'Đại Lý Cửa Hàng Minh Khang (B2B)',
-        phone: '0978901234',
-        role: UserRole.CUSTOMER,
         status: UserStatus.ACTIVE,
         passwordHash,
         failedAttempts: 0,
@@ -504,8 +493,6 @@ export class UsersService implements OnModuleInit {
     'quanlykho@loha.vn': 'warehousemanager@loha.vn',
     'ketoan@loha.vn': 'accountant@loha.vn',
     'ketoancongno@loha.vn': 'accountant@loha.vn',
-    'daily@loha.vn': 'dealer@loha.vn',
-    'khachhang@loha.vn': 'dealer@loha.vn',
   };
 
   /**
@@ -652,6 +639,18 @@ export class UsersService implements OnModuleInit {
       roles = [dto.role];
     } else {
       throw new BadRequestException('Vai trò người dùng không được để trống.');
+    }
+
+    // 2.1. Rào chắn bảo mật: Chặn cứng tạo tài khoản Đại lý / Khách hàng B2B (CUSTOMER / AGENCY) qua API nhân sự
+    const hasForbiddenRole = roles.some((r) => {
+      const roleStr = String(r).toUpperCase();
+      return roleStr === UserRole.CUSTOMER || roleStr === 'CUSTOMER' || roleStr === 'AGENCY';
+    });
+
+    if (hasForbiddenRole) {
+      throw new BadRequestException(
+        'Không được phép tạo tài khoản Đại lý / Khách hàng B2B qua tính năng quản lý nhân sự. Tài khoản Đại lý chỉ được cấp tự động thông qua quy trình tạo Hồ sơ Đại lý.',
+      );
     }
 
     // 3. Ràng buộc cứng: Nhân sự thuộc vai trò kho bắt buộc phải gắn với ít nhất một kho
@@ -1203,6 +1202,132 @@ export class UsersService implements OnModuleInit {
     this.users.set(user.id, user);
 
     return user.toSafeUser();
+  }
+
+  /**
+   * Tạo tài khoản Đại lý B2B đồng bộ (gọi tự động từ CustomersService khi tạo đại lý mới)
+   */
+  async createDealerUser(data: {
+    id: string;
+    email: string;
+    username: string;
+    fullName: string;
+    phone?: string;
+    passwordHash: string;
+    customerId?: string;
+    customerCode?: string;
+    status?: UserStatus;
+  }): Promise<UserEntity> {
+    const entity = new UserEntity({
+      id: data.id,
+      email: data.email,
+      username: data.username,
+      fullName: data.fullName,
+      phone: data.phone || '',
+      passwordHash: data.passwordHash,
+      role: UserRole.CUSTOMER,
+      roles: [UserRole.CUSTOMER],
+      status: data.status || UserStatus.ACTIVE,
+      customerId: data.customerId || null,
+      customerCode: data.customerCode || null,
+      failedAttempts: 0,
+      lockedUntil: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    this.users.set(entity.id, entity);
+    this.saveUsersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      await this.saveUserToDatabase(entity);
+    }
+
+    return entity;
+  }
+
+  /**
+   * Xóa tài khoản người dùng theo ID hoặc Email (dùng khi xóa hồ sơ đại lý)
+   */
+  async deleteUserByIdOrEmail(userIdOrEmail: string): Promise<boolean> {
+    const rawNormalized = (userIdOrEmail || '').trim().toLowerCase();
+    if (!rawNormalized) return false;
+
+    let targetUserId: string | null = null;
+    for (const user of this.users.values()) {
+      if (
+        user.id.toLowerCase() === rawNormalized ||
+        user.email.toLowerCase() === rawNormalized ||
+        user.username.toLowerCase() === rawNormalized
+      ) {
+        targetUserId = user.id;
+        break;
+      }
+    }
+
+    if (!targetUserId) return false;
+
+    this.users.delete(targetUserId);
+    this.saveUsersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `DELETE FROM users WHERE id::text = $1 OR LOWER(email) = $2 OR LOWER(username) = $2`,
+          [targetUserId, rawNormalized],
+        );
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi xóa user khỏi DB:', err);
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Đồng bộ trạng thái tài khoản người dùng (ACTIVE, LOCKED, INACTIVE)
+   */
+  async syncUserStatus(
+    userIdOrEmail: string,
+    status: UserStatus,
+    lockReason?: string,
+  ): Promise<void> {
+    const rawNormalized = (userIdOrEmail || '').trim().toLowerCase();
+    if (!rawNormalized) return;
+
+    let targetUser: UserEntity | null = null;
+    for (const user of this.users.values()) {
+      if (
+        user.id.toLowerCase() === rawNormalized ||
+        user.email.toLowerCase() === rawNormalized ||
+        user.username.toLowerCase() === rawNormalized
+      ) {
+        targetUser = user;
+        break;
+      }
+    }
+
+    if (!targetUser) return;
+
+    targetUser.status = status;
+    if (lockReason !== undefined) {
+      targetUser.lockReason = lockReason;
+    }
+    targetUser.updatedAt = new Date();
+    this.users.set(targetUser.id, targetUser);
+    this.saveUsersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE users SET status = $1, updated_at = NOW()
+           WHERE id::text = $2 OR LOWER(email) = $3`,
+          [status, targetUser.id, rawNormalized],
+        );
+      } catch (err) {
+        // Fallback in-memory
+      }
+    }
   }
 }
 

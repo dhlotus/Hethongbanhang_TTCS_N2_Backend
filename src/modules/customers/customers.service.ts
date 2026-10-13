@@ -1,10 +1,14 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseService } from '../../database/database.service';
@@ -17,6 +21,7 @@ import { LockCustomerDto } from './dto/lock-customer.dto';
 import { FilterCustomersDto } from './dto/filter-customers.dto';
 import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { UserStatus } from '../../common/enums/user-status.enum';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { INITIAL_AGENCIES } from './agencies.seed';
 import { CustomerDebtStatusDto } from './dto/customer-debt-status.dto';
@@ -27,6 +32,7 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { matchesSearchTerm, removeVietnameseTones } from '../../common/utils/vietnamese.util';
+import { UsersService } from '../users/users.service';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-35)
@@ -36,7 +42,12 @@ export class CustomersService implements OnModuleInit {
   private readonly customers = new Map<string, CustomerEntity>();
   private assignmentHistories: CustomerAssignmentHistoryEntity[] = [];
 
-  constructor(@Optional() private readonly dbService?: DatabaseService) {
+  constructor(
+    @Optional() private readonly dbService?: DatabaseService,
+    @Optional()
+    @Inject(forwardRef(() => UsersService))
+    private readonly usersService?: UsersService,
+  ) {
     this.seedInitialCustomers();
     this.loadCustomersFromDisk();
   }
@@ -896,6 +907,14 @@ export class CustomersService implements OnModuleInit {
       }
     }
 
+    if (this.usersService) {
+      void this.usersService.syncUserStatus(
+        customer.userId || customer.email || '',
+        UserStatus.LOCKED,
+        customer.lockReason,
+      );
+    }
+
     return customer;
   }
 
@@ -961,6 +980,13 @@ export class CustomersService implements OnModuleInit {
       } catch {
         // Fallback in-memory
       }
+    }
+
+    if (this.usersService) {
+      void this.usersService.syncUserStatus(
+        customer.userId || customer.email || '',
+        UserStatus.ACTIVE,
+      );
     }
 
     return customer;
@@ -1230,10 +1256,37 @@ export class CustomersService implements OnModuleInit {
 
   /**
    * Tạo đại lý mới (SN-30 & SN-35)
-   * - Khai báo: mã đại lý, tên, mã số thuế, nhóm khách hàng, khu vực, người phụ trách, trạng thái (SN-30 AC1)
-   * - Mã đại lý là duy nhất (SN-30 AC2)
+   * - Tự động sinh tài khoản Đại lý B2B tương ứng với email người dùng nhập
+   * - Mật khẩu mặc định: "123456"
+   * - Sử dụng Database Transaction (Rollback nếu tạo user hoặc đại lý lỗi)
+   * - Liên kết khóa ngoại user_id hai chiều
+   * - Hiển thị ngay trên Quản lý người dùng và đăng nhập được vào Cổng đặt hàng B2B
    */
   async createCustomer(dto: CreateCustomerDto): Promise<CustomerEntity> {
+    const cleanEmail = (dto.email || '').trim().toLowerCase();
+    if (!cleanEmail) {
+      throw new BadRequestException('Vui lòng nhập địa chỉ email liên hệ để hệ thống kích hoạt tài khoản Đại lý B2B.');
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      throw new BadRequestException(`Địa chỉ email "${cleanEmail}" không đúng định dạng.`);
+    }
+
+    // 1. Kiểm tra trùng email trong hệ thống tài khoản Users
+    const existingUser = await this.usersService?.findByEmailOrUsername(cleanEmail);
+    if (existingUser) {
+      throw new BadRequestException(`Email "${cleanEmail}" đã được sử dụng bởi một tài khoản khác trong hệ thống.`);
+    }
+
+    // 2. Kiểm tra trùng email trong danh sách đại lý Customers
+    const existingCustomerEmail = Array.from(this.customers.values()).find(
+      (c) => c.email && c.email.trim().toLowerCase() === cleanEmail,
+    );
+    if (existingCustomerEmail) {
+      throw new BadRequestException(`Đã tồn tại hồ sơ đại lý sử dụng email "${cleanEmail}" (${existingCustomerEmail.code}).`);
+    }
+
     let trimmedCode = dto.code?.trim();
     if (!trimmedCode) {
       trimmedCode = this.generateNextCustomerCode();
@@ -1251,6 +1304,11 @@ export class CustomersService implements OnModuleInit {
     }
 
     const newId = `cust-${Date.now()}`;
+    const userId = crypto.randomUUID();
+    const username = cleanEmail.length <= 50 ? cleanEmail : cleanEmail.split('@')[0].slice(0, 50);
+    const defaultPassword = '123456';
+    const passwordHash = bcrypt.hashSync(defaultPassword, 10);
+
     let salesRepName: string | undefined = dto.salesRepName;
     if (!salesRepName && dto.salesRepId) {
       if (dto.salesRepId === 'usr-sales-002') salesRepName = 'Trần Văn Nam';
@@ -1276,6 +1334,76 @@ export class CustomersService implements OnModuleInit {
       );
     }
 
+    // 3. Sử dụng Database Transaction (nếu có PostgreSQL kết nối): Tạo User và Customer đồng thời
+    if (this.dbService?.isConnected()) {
+      const client = await this.dbService.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // Tạo tài khoản User (Role ID 7 = CUSTOMER)
+        await client.query(
+          `INSERT INTO users (id, username, email, password_hash, full_name, phone, role_id, status, failed_attempts, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NOW(), NOW())`,
+          [
+            userId,
+            username,
+            cleanEmail,
+            passwordHash,
+            dto.name.trim(),
+            dto.phone?.trim() || null,
+            7,
+            'ACTIVE',
+          ],
+        );
+
+        // Tạo hồ sơ đại lý liên kết user_id
+        const customerDbId = crypto.randomUUID();
+        await client.query(
+          `INSERT INTO customers (id, code, name, region, customer_group, tax_code, phone, email, credit_limit, current_debt, max_debt_days, status, user_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
+          [
+            customerDbId,
+            trimmedCode,
+            dto.name.trim(),
+            dto.region?.trim() || 'Miền Nam',
+            dto.customerGroup || 'AGENT_LEVEL_2',
+            dto.taxCode?.trim() || null,
+            dto.phone.trim(),
+            cleanEmail,
+            dto.creditLimit ?? 0,
+            0,
+            dto.maxDebtDays ?? 30,
+            'ACTIVE',
+            userId,
+          ],
+        );
+
+        await client.query('COMMIT');
+      } catch (dbErr: any) {
+        await client.query('ROLLBACK');
+        const detail = dbErr?.detail || dbErr?.message || String(dbErr);
+        throw new BadRequestException(`Lỗi tạo đại lý và tài khoản B2B: ${detail}`);
+      } finally {
+        client.release();
+      }
+    }
+
+    // 4. Đồng bộ tạo tài khoản người dùng vào UsersService (Map bộ nhớ & users.json)
+    if (this.usersService) {
+      await this.usersService.createDealerUser({
+        id: userId,
+        email: cleanEmail,
+        username,
+        fullName: dto.name.trim(),
+        phone: dto.phone?.trim(),
+        passwordHash,
+        customerId: newId,
+        customerCode: trimmedCode,
+        status: UserStatus.ACTIVE,
+      });
+    }
+
+    // 5. Lưu hồ sơ đại lý vào memory & customers.json
     const newCustomer = new CustomerEntity({
       id: newId,
       code: trimmedCode,
@@ -1289,53 +1417,26 @@ export class CustomersService implements OnModuleInit {
         ? { id: dto.salesRepId, name: salesRepName || '' }
         : undefined,
       phone: dto.phone.trim(),
-      email: dto.email?.trim(),
+      email: cleanEmail,
       address: dto.address?.trim(),
       creditLimit: dto.creditLimit ?? 0,
       currentDebt: 0,
       maxDebtDays: dto.maxDebtDays ?? 30,
       status: CustomerStatus.ACTIVE,
+      userId,
       deliveryPoints,
     });
 
     this.customers.set(newId, newCustomer);
     this.saveCustomersToDisk();
 
-    if (this.dbService?.isConnected()) {
-      try {
-        await this.dbService.query(
-          `INSERT INTO customers (id, code, name, region, customer_group, tax_code, phone, email, address, credit_limit, current_debt, max_debt_days, status, sales_rep_id, sales_rep_name, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
-           ON CONFLICT (id) DO NOTHING;`,
-          [
-            newId,
-            trimmedCode,
-            newCustomer.name,
-            newCustomer.region,
-            newCustomer.customerGroup,
-            newCustomer.taxCode,
-            newCustomer.phone,
-            newCustomer.email,
-            newCustomer.address,
-            newCustomer.creditLimit,
-            0,
-            newCustomer.maxDebtDays,
-            newCustomer.status,
-            newCustomer.salesRepId,
-            salesRepName,
-          ],
-        );
-      } catch {
-        // In-memory & disk fallback
-      }
-    }
-
     return newCustomer;
   }
 
   /**
    * Xóa hồ sơ đại lý (SN-30 AC4)
-   * Chặn xóa nếu đại lý đã phát sinh giao dịch hoặc còn công nợ, chỉ cho phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE).
+   * - Chặn xóa nếu đại lý đã phát sinh giao dịch hoặc còn công nợ, chỉ cho phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE).
+   * - Khi xóa thành công: Tự động xóa vĩnh viễn tài khoản người dùng B2B liên kết khỏi hệ thống.
    */
   async deleteCustomer(
     id: string,
@@ -1352,20 +1453,42 @@ export class CustomersService implements OnModuleInit {
       );
     }
 
+    const linkedUserId = customer.userId;
+    const linkedEmail = customer.email;
+
+    // Database Transaction: Xóa đại lý và xóa tài khoản user liên kết
+    if (this.dbService?.isConnected()) {
+      const client = await this.dbService.getClient();
+      try {
+        await client.query('BEGIN');
+        await client.query(`UPDATE customers SET user_id = NULL WHERE id::text = $1 OR code = $1;`, [id]);
+        await client.query(`DELETE FROM customers WHERE id::text = $1 OR code = $1;`, [id]);
+        if (linkedUserId) {
+          await client.query(`DELETE FROM users WHERE id::text = $1;`, [linkedUserId]);
+        } else if (linkedEmail) {
+          await client.query(`DELETE FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $1;`, [linkedEmail.toLowerCase()]);
+        }
+        await client.query('COMMIT');
+      } catch (dbErr) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException(`Lỗi khi xóa hồ sơ đại lý: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
+      } finally {
+        client.release();
+      }
+    }
+
+    // Xóa khỏi bộ nhớ customers và lưu ra file customers.json
     this.customers.delete(customer.id);
     this.saveCustomersToDisk();
 
-    if (this.dbService?.isConnected()) {
-      try {
-        await this.dbService.query(`DELETE FROM customers WHERE id = $1 OR code = $1;`, [id]);
-      } catch {
-        // Fallback in-memory
-      }
+    // Xóa tài khoản người dùng tương ứng khỏi UsersService và users.json
+    if (this.usersService) {
+      await this.usersService.deleteUserByIdOrEmail(linkedUserId || linkedEmail || '');
     }
 
     return {
       success: true,
-      message: `Đã xóa hồ sơ đại lý "${customer.name}" (${customer.code}) thành công.`,
+      message: `Đã xóa hồ sơ đại lý "${customer.name}" (${customer.code}) và tài khoản đăng nhập B2B liên kết thành công.`,
       customerId: customer.id,
     };
   }
@@ -1377,6 +1500,7 @@ export class CustomersService implements OnModuleInit {
     const customer = await this.getCustomerById(id);
     customer.status = CustomerStatus.INACTIVE;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -1389,8 +1513,16 @@ export class CustomersService implements OnModuleInit {
       }
     }
 
+    if (this.usersService) {
+      void this.usersService.syncUserStatus(
+        customer.userId || customer.email || '',
+        UserStatus.INACTIVE,
+      );
+    }
+
     return customer;
   }
 }
+
 
 

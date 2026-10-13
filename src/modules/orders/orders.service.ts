@@ -565,6 +565,7 @@ export class OrdersService implements OnModuleInit {
     lines: CreateOrderLineDto[],
     customerGroup: string,
     requestedPriceListId?: string,
+    customerId?: string,
   ): ResolvedOrderPricing {
     if (!this.priceListsService) return { lines };
 
@@ -574,6 +575,7 @@ export class OrdersService implements OnModuleInit {
         line,
         customerGroup,
         requestedPriceListId,
+        customerId,
       );
       if (selectedPriceListId && selectedPriceListId !== resolved.priceListId) {
         throw new BadRequestException(
@@ -594,6 +596,7 @@ export class OrdersService implements OnModuleInit {
     line: CreateOrderLineDto,
     customerGroup: string,
     requestedPriceListId?: string,
+    customerId?: string,
   ): { line: PricedOrderLineDto; priceListId: string } {
     const { item, priceListId } = this.findEffectivePriceItem(
       line,
@@ -608,7 +611,7 @@ export class OrdersService implements OnModuleInit {
       line.baseUnit = item.baseUnit;
     }
 
-    const calculatedPrice = this.calculateLinePrices(line, item, conversionRate);
+    const calculatedPrice = this.calculateLinePrices(line, item, conversionRate, customerId);
 
     return {
       priceListId,
@@ -641,19 +644,27 @@ export class OrdersService implements OnModuleInit {
     line: CreateOrderLineDto,
     item: PriceListItemEntity,
     conversionRate: number,
+    customerId?: string,
   ): Pick<PricedOrderLineDto, 'listPrice' | 'unitPrice' | 'discountPercent' | 'minPrice' | 'requiresApproval'> {
     const listPrice = Math.round(item.price * conversionRate);
-    const baseQuantity = Math.round(line.quantity * conversionRate);
-    const tierDiscount =
-      this.discountPoliciesService?.calculateBestDiscount(
-        line.productId,
-        '',
-        baseQuantity,
-        line.productSku,
-      ) || 0;
-    const automaticUnitPrice = Math.round(
-      (listPrice * (100 - tierDiscount)) / 100,
-    );
+    const baseQuantity = Math.max(1, Math.round(line.quantity * conversionRate));
+
+    // Gọi Pricing & Discount Engine dùng chung (Single Source of Truth)
+    const pricingCalc = this.discountPoliciesService?.calculateFinalPriceAndDiscount({
+      productId: line.productId,
+      productSku: line.productSku,
+      productName: line.productName,
+      categoryId: (line as any).categoryId || '',
+      quantity: baseQuantity,
+      listPrice,
+      customerId,
+      agencyId: customerId,
+    });
+
+    const automaticUnitPrice = pricingCalc
+      ? pricingCalc.unitPrice
+      : listPrice;
+
     if (line.isPriceManuallyEdited && line.unitPrice === undefined) {
       throw new BadRequestException(
         `Vui lòng nhập giá bán thủ công cho SKU ${line.productSku}`,
@@ -661,13 +672,14 @@ export class OrdersService implements OnModuleInit {
     }
 
     const unitPrice = line.isPriceManuallyEdited
-      ? line.unitPrice!
-      : automaticUnitPrice;
+      ? Math.max(0, line.unitPrice!)
+      : Math.max(0, automaticUnitPrice);
     const minPrice = Math.round(item.minPrice * conversionRate);
-    const discountPercent =
-      listPrice > 0
-        ? Number((((listPrice - unitPrice) / listPrice) * 100).toFixed(2))
-        : 0;
+    const discountPercent = line.isPriceManuallyEdited
+      ? (listPrice > 0
+          ? Number(Math.min(100, Math.max(0, (((listPrice - unitPrice) / listPrice) * 100))).toFixed(2))
+          : 0)
+      : (pricingCalc ? pricingCalc.discountPercent : 0);
 
     return { listPrice, unitPrice, discountPercent, minPrice, requiresApproval: unitPrice < minPrice };
   }
@@ -1075,6 +1087,7 @@ export class OrdersService implements OnModuleInit {
       dto.lines || [],
       customer.customerGroup,
       dto.priceListId,
+      customer.id,
     );
     const {
       lines,
@@ -1986,6 +1999,7 @@ export class OrdersService implements OnModuleInit {
           dto.lines,
           order.customerGroup || '',
           dto.priceListId,
+          order.customerId,
         );
         const {
           lines,
