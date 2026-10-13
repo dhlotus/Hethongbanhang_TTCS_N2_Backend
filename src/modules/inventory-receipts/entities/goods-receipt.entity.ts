@@ -57,4 +57,5 @@ export class GoodsReceiptEntity {
   warehouseName?: string;
   supplierName?: string;
   createdByName?: string;
+  receivedByName?: string;
 }
