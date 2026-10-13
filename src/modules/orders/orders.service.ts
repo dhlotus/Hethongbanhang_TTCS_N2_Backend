@@ -1085,7 +1085,7 @@ export class OrdersService implements OnModuleInit {
       : [];
     const order = this.databaseService?.isConnected()
       ? (rows[0] ? this.restoreOrder(rows[0].payload) : undefined)
-      : this.orders.get(id);
+      : (this.orders.get(id) || Array.from(this.orders.values()).find((o) => o.id === id || o.orderCode === id));
     if (!order) {
       throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
     }
