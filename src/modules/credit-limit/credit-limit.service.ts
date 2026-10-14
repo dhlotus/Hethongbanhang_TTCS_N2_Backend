@@ -439,11 +439,22 @@ export class CreditLimitService implements OnModuleInit {
     currentUser?: ICurrentUser,
   ): Promise<AgencyCreditLimit> {
     // 1. Validate dữ liệu đầu vào bắt buộc
-    if (!dto.reason || typeof dto.reason !== 'string' || dto.reason.trim().length === 0) {
-      throw new BadRequestException('Lý do thay đổi hạn mức là bắt buộc và không được để trống.');
+    const cleanReason = dto.reason ? dto.reason.trim() : '';
+    if (!cleanReason) {
+      throw new BadRequestException('Vui lòng nhập lý do thay đổi hạn mức công nợ!');
     }
-    if (dto.reason.trim().length < 5) {
-      throw new BadRequestException('Lý do thay đổi hạn mức phải có ít nhất 5 ký tự.');
+    if (cleanReason.length < 10) {
+      throw new BadRequestException('Lý do phải có độ dài tối thiểu 10 ký tự!');
+    }
+    const reasonWords = cleanReason.split(/\s+/).filter(Boolean);
+    if (reasonWords.length < 2) {
+      throw new BadRequestException('Lý do thay đổi hạn mức phải có ít nhất 2 từ có nghĩa.');
+    }
+    if (/(.)\1{4,}/.test(cleanReason)) {
+      throw new BadRequestException('Lý do thay đổi chứa chuỗi ký tự lặp vô nghĩa. Vui lòng nhập nội dung rõ ràng.');
+    }
+    if (/[bcdfghjklmnpqrstvwxyz]{7,}/i.test(cleanReason)) {
+      throw new BadRequestException('Lý do thay đổi hạn mức chứa chuỗi ký tự vô nghĩa (spam phím). Vui lòng nhập lý do cụ thể.');
     }
     if (dto.creditLimit === undefined || dto.creditLimit === null || dto.creditLimit < 0) {
       throw new BadRequestException('Hạn mức tiền tối đa không được nhỏ hơn 0.');
@@ -454,10 +465,38 @@ export class CreditLimitService implements OnModuleInit {
 
     const currentEntity = await this.getAgencyCreditLimitById(agencyId);
 
+    // Chuẩn hóa và khớp nối giữa maxDebtDays và paymentTerms
+    let resolvedPaymentTerms = dto.paymentTerms ?? currentEntity.paymentTerms;
+    const daysToTerm: Record<number, string> = {
+      0: 'COD',
+      15: 'NET_15',
+      30: 'NET_30',
+      45: 'NET_45',
+      60: 'NET_60',
+    };
+    if (daysToTerm[dto.maxDebtDays] && !dto.paymentTerms) {
+      resolvedPaymentTerms = daysToTerm[dto.maxDebtDays];
+    }
+
     const oldCreditLimit = currentEntity.creditLimit;
     const oldMaxDebtDays = currentEntity.maxDebtDays;
     const newCreditLimit = dto.creditLimit;
     const newMaxDebtDays = dto.maxDebtDays;
+    const oldTempLimit = Number(currentEntity.temporaryCreditLimit || 0);
+    const newTempLimit = Number(dto.temporaryCreditLimit ?? currentEntity.temporaryCreditLimit ?? 0);
+
+    // Chặn trùng lặp / Dirty Audit Log khi không có gì thay đổi
+    const isUnchanged =
+      newCreditLimit === oldCreditLimit &&
+      newMaxDebtDays === oldMaxDebtDays &&
+      newTempLimit === oldTempLimit &&
+      resolvedPaymentTerms === currentEntity.paymentTerms;
+
+    if (isUnchanged) {
+      throw new BadRequestException(
+        'Hạn mức công nợ, số ngày nợ và điều khoản thanh toán không có gì thay đổi so với hiện tại. Không tạo bản ghi kiểm toán rác.',
+      );
+    }
 
     const actorName =
       currentUser?.username || currentUser?.email || 'Kế toán công nợ';
@@ -475,13 +514,12 @@ export class CreditLimitService implements OnModuleInit {
     const newValues: Record<string, unknown> = {
       creditLimit: newCreditLimit,
       maxDebtDays: newMaxDebtDays,
-      paymentTerms: dto.paymentTerms ?? currentEntity.paymentTerms,
-      temporaryCreditLimit:
-        dto.temporaryCreditLimit ?? currentEntity.temporaryCreditLimit,
-      reason: dto.reason.trim(),
+      paymentTerms: resolvedPaymentTerms,
+      temporaryCreditLimit: newTempLimit,
+      reason: cleanReason,
     };
 
-    const auditSummary = `Điều chỉnh hạn mức công nợ đại lý ${currentEntity.agencyCode} (${currentEntity.agencyName}) từ ${oldCreditLimit.toLocaleString('vi-VN')} đ (thời hạn: ${oldMaxDebtDays} ngày) thành ${newCreditLimit.toLocaleString('vi-VN')} đ (thời hạn: ${newMaxDebtDays} ngày). Lý do: ${dto.reason.trim()}`;
+    const auditSummary = `Điều chỉnh hạn mức công nợ đại lý ${currentEntity.agencyCode} (${currentEntity.agencyName}) từ ${oldCreditLimit.toLocaleString('vi-VN')} đ (thời hạn: ${oldMaxDebtDays} ngày) thành ${newCreditLimit.toLocaleString('vi-VN')} đ (thời hạn: ${newMaxDebtDays} ngày). Lý do: ${cleanReason}`;
 
     // Khởi tạo đối tượng CreditLimitLog để lưu lịch sử
     const logItem = new CreditLimitLog({
@@ -494,10 +532,10 @@ export class CreditLimitService implements OnModuleInit {
       oldMaxDebtDays,
       newMaxDebtDays,
       oldPaymentTerms: String(oldValues.paymentTerms),
-      newPaymentTerms: currentEntity.paymentTerms,
-      oldTemporaryLimit: Number(currentEntity.temporaryCreditLimit || 0),
-      newTemporaryLimit: Number(dto.temporaryCreditLimit ?? currentEntity.temporaryCreditLimit ?? 0),
-      reason: dto.reason.trim(),
+      newPaymentTerms: resolvedPaymentTerms,
+      oldTemporaryLimit: oldTempLimit,
+      newTemporaryLimit: newTempLimit,
+      reason: cleanReason,
       performedBy: actorName,
       performedByRole: String(actorRole),
       performedAt: new Date(),
@@ -522,7 +560,7 @@ export class CreditLimitService implements OnModuleInit {
           [
             newCreditLimit,
             newMaxDebtDays,
-            dto.paymentTerms ?? currentEntity.paymentTerms,
+            resolvedPaymentTerms,
             agencyId,
           ],
         );
@@ -593,13 +631,13 @@ export class CreditLimitService implements OnModuleInit {
     await this.customersService.updateCustomerCredit(agencyId, {
       creditLimit: newCreditLimit,
       maxDebtDays: newMaxDebtDays,
-      paymentTerms: dto.paymentTerms,
+      paymentTerms: resolvedPaymentTerms,
     });
 
     // 5. Cập nhật AgencyCreditLimit Entity
     currentEntity.creditLimit = newCreditLimit;
     currentEntity.maxDebtDays = newMaxDebtDays;
-    if (dto.paymentTerms) currentEntity.paymentTerms = dto.paymentTerms;
+    if (resolvedPaymentTerms) currentEntity.paymentTerms = resolvedPaymentTerms;
     if (dto.temporaryCreditLimit !== undefined) {
       currentEntity.temporaryCreditLimit = dto.temporaryCreditLimit;
     }
