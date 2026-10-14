@@ -58,7 +58,7 @@ const SEED_ORDERS_DATA: RawOrderSeed[] = [
     deliveryPoint: {
       id: 'dp-dl-0001-1',
       name: 'Kho Tổng Phú Nhuận',
-      address: '123 Nguyễn Trọng Tuyển, P.8, Q.Phú Nhuận, TP.HCM',
+      address: '123 Nguyễn Trọng Tuyển, Phường 8, Quận Phú Nhuận, TP.HCM',
       receiverName: 'Anh Nguyễn Minh Khang',
       phone: '0901234561',
       roadNote: 'Đường 2 chiều, xe tải 5T vào thoải mái, giao giờ hành chính',
@@ -1108,7 +1108,7 @@ const SEED_ORDERS_DATA: RawOrderSeed[] = [
     deliveryPoint: {
       id: 'dp-dl-0001-1',
       name: 'Kho Tổng Phú Nhuận',
-      address: '123 Nguyễn Trọng Tuyển, P.8, Q.Phú Nhuận, TP.HCM',
+      address: '123 Nguyễn Trọng Tuyển, Phường 8, Quận Phú Nhuận, TP.HCM',
       receiverName: 'Anh Nguyễn Minh Khang',
       phone: '0901234561',
       roadNote: 'Giao giờ hành chính',
