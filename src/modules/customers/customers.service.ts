@@ -778,7 +778,29 @@ export class CustomersService implements OnModuleInit {
    * Tìm đại lý theo ID
    */
   async getCustomerById(id: string): Promise<CustomerEntity> {
-    const customer = this.customers.get(id);
+    let customer = this.customers.get(id);
+    if (!customer) {
+      customer = Array.from(this.customers.values()).find(
+        (c) =>
+          c.id === id ||
+          c.code === id ||
+          (c.code && id && c.code.toLowerCase() === id.toLowerCase()) ||
+          (c.id && id && c.id.replace('cust-dl-', 'cust-') === id.replace('cust-dl-', 'cust-')),
+      );
+    }
+    if (!customer) {
+      // Tìm lại trong INITIAL_AGENCIES phòng trường hợp chưa nạp vào map
+      const seedMatch = INITIAL_AGENCIES.find(
+        (c) =>
+          c.id === id ||
+          c.code === id ||
+          (c.id && id && c.id.replace('cust-dl-', 'cust-') === id.replace('cust-dl-', 'cust-')),
+      );
+      if (seedMatch) {
+        customer = new CustomerEntity(seedMatch);
+        this.customers.set(customer.id, customer);
+      }
+    }
     if (!customer) {
       throw new NotFoundException(`Không tìm thấy đại lý có ID: ${id}`);
     }
