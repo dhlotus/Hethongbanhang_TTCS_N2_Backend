@@ -15,6 +15,7 @@ import { GetProductsFilterDto } from './dto/get-products-filter.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductEntity } from './entities/product.entity';
 import { ProductUnitEntity } from './entities/product-unit.entity';
+import { ProductPriceHistory } from './entities/product-price-history.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
@@ -26,6 +27,7 @@ import {
 import { ProductUnitDto } from './dto/product-unit.dto';
 import { OrdersService } from '../orders/orders.service';
 import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
+import { randomUUID } from 'crypto';
 
 /**
  * Service Quản lý Sản phẩm & SKU Hàng hóa (SN-138 & SN-20):
@@ -37,6 +39,12 @@ import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 @Injectable()
 export class ProductsService implements OnModuleInit {
   private products = new Map<string, ProductEntity>();
+
+  /**
+   * Lưu trữ lịch sử giá trong bộ nhớ (In-memory fallback & cache) - SN-29
+   * Key: productId hoặc SKU (lowercase)
+   */
+  private priceHistories = new Map<string, ProductPriceHistory[]>();
 
   /**
    * Danh sách ID/SKU đã phát sinh giao dịch đơn hàng (order_items) hoặc kho (inventory_transactions)
@@ -126,8 +134,30 @@ export class ProductsService implements OnModuleInit {
       this.seedInitialProducts();
     }
     if (this.dbService?.isConnected()) {
+      await this.ensurePriceHistoryTable();
       await this.loadProductsFromDatabase();
       await this.loadPersistedStockBalances();
+    }
+  }
+
+  private async ensurePriceHistoryTable(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      await this.dbService.query(`
+        CREATE TABLE IF NOT EXISTS product_price_histories (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          product_id VARCHAR(255) NOT NULL,
+          old_price NUMERIC(15, 2) NOT NULL,
+          new_price NUMERIC(15, 2) NOT NULL,
+          changed_by VARCHAR(255) NOT NULL,
+          changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_product_price_histories_product_id ON product_price_histories(product_id);
+        CREATE INDEX IF NOT EXISTS idx_product_price_histories_changed_at ON product_price_histories(changed_at DESC);
+      `);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[ProductsService] Lỗi khởi tạo bảng product_price_histories:', msg);
     }
   }
 
@@ -182,36 +212,56 @@ export class ProductsService implements OnModuleInit {
          LEFT JOIN categories pcat ON c.parent_id = pcat.id;`,
       );
 
-      for (const row of rows) {
-        const existing = Array.from(this.products.values()).find(
-          (p) =>
-            p.sku.toUpperCase() === row.sku.toUpperCase() ||
-            p.id === row.id ||
-            (row.sku.toUpperCase() === 'LH-MILK-POWDER-900G' && p.sku.toUpperCase() === 'LH-MILK-900G'),
-        );
-        const catName = row.category_name || 'Đồ uống & Nước giải khát';
-        const parentName = row.parent_category_name || catName;
-        const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
-        const costPrice = Number(row.cost_price) || 0;
+      if (rows && rows.length > 0) {
+        // Khi PostgreSQL đã có sản phẩm thực tế, loại bỏ hoàn toàn mock tĩnh để tránh lệch Foreign Key
+        this.products.clear();
 
-        if (existing) {
-          existing.sku = row.sku;
-          if (row.category_id) {
-            existing.categoryId = String(row.category_id);
-            existing.category = fullCat;
-            existing.parentCategory = parentName;
-            existing.subCategory = catName;
+        // Tải danh sách đơn vị tính quy đổi của từng sản phẩm từ PostgreSQL
+        let unitsByProductId = new Map<string, ProductUnitEntity[]>();
+        try {
+          const unitRows = await this.dbService!.query<{
+            id: string;
+            product_id: string;
+            unit_name: string;
+            conversion_factor: string | number;
+            is_base_unit: boolean;
+          }>(
+            `SELECT id, product_id, unit_name, conversion_factor, is_base_unit FROM product_units;`
+          );
+          for (const u of unitRows) {
+            const list = unitsByProductId.get(u.product_id) || [];
+            list.push(
+              new ProductUnitEntity({
+                id: u.id,
+                unitName: u.unit_name,
+                conversionRate: Number(u.conversion_factor) || 1,
+                isBaseUnit: Boolean(u.is_base_unit),
+              }),
+            );
+            unitsByProductId.set(u.product_id, list);
           }
-          if (costPrice > 0) {
-            existing.costPrice = costPrice;
+        } catch {
+          // Fallback nếu bảng product_units trống
+        }
+
+        for (const row of rows) {
+          const catName = row.category_name || 'Đồ uống & Nước giải khát';
+          const parentName = row.parent_category_name || catName;
+          const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
+          const costPrice = Number(row.cost_price) || 0;
+
+          const productUnits = unitsByProductId.get(row.id) || [];
+          if (productUnits.length === 0) {
+            productUnits.push(
+              new ProductUnitEntity({
+                id: `unit-${row.id}-base`,
+                unitName: row.base_unit || 'Cái',
+                conversionRate: 1,
+                isBaseUnit: true,
+              }),
+            );
           }
-          if (row.base_unit) {
-            existing.baseUnit = row.base_unit;
-          }
-          if (row.name) {
-            existing.name = row.name;
-          }
-        } else {
+
           const entity = new ProductEntity({
             id: row.id,
             sku: row.sku,
@@ -220,7 +270,8 @@ export class ProductsService implements OnModuleInit {
             category: fullCat,
             parentCategory: parentName,
             subCategory: catName,
-            baseUnit: row.base_unit,
+            baseUnit: row.base_unit || 'Cái',
+            units: productUnits,
             costPrice,
             price: Math.round(costPrice * 1.35),
             stockQuantity: 100,
@@ -261,7 +312,7 @@ export class ProductsService implements OnModuleInit {
         price: 520000,
         costPrice: 380000,
         margin: 26.92,
-        stockQuantity: 340,
+        stockQuantity: 1500,
         status: ProductStatus.ACTIVE,
         hasTransactions: true,
         imageUrl:
@@ -694,37 +745,119 @@ export class ProductsService implements OnModuleInit {
   }
 
   /**
-   * Lấy lịch sử thay đổi giá của 1 sản phẩm (SN-29)
+   * Ghi nhận lịch sử điều chỉnh giá bán sản phẩm (SN-29)
+   * Bảng này chỉ cho phép INSERT và SELECT (không sửa, không xóa)
    */
-  async getPriceHistory(productId: string): Promise<any[]> {
-    if (!this.dbService?.isConnected()) {
-      return []; // Fallback khi không có DB
-    }
-    
-    // Kiểm tra sản phẩm có tồn tại không
-    await this.findById(productId);
+  public async recordPriceHistory(
+    product: ProductEntity,
+    oldPrice: number,
+    newPrice: number,
+    changedBy: string,
+  ): Promise<ProductPriceHistory> {
+    const historyId = randomUUID();
+    const changedAt = new Date();
 
-    try {
-      const rows = await this.dbService.query(
-        `SELECT id, product_id, old_price, new_price, changed_by, changed_at
-         FROM product_price_histories
-         WHERE product_id = $1
-         ORDER BY changed_at DESC`,
-        [productId]
-      );
-      
-      return rows.map(row => ({
-        id: row.id,
-        productId: row.product_id,
-        oldPrice: Number(row.old_price),
-        newPrice: Number(row.new_price),
-        changedBy: row.changed_by,
-        changedAt: new Date(row.changed_at),
-      }));
-    } catch (err) {
-      console.error(`[ProductsService] Lỗi khi lấy lịch sử giá SP ${productId}:`, err);
-      return [];
+    const historyRecord = new ProductPriceHistory({
+      id: historyId,
+      productId: product.id,
+      oldPrice,
+      newPrice,
+      changedBy: changedBy || 'Quản trị viên',
+      changedAt,
+    });
+
+    // 1. Lưu vào in-memory cache cho cả product.id và product.sku
+    const key = product.id.toLowerCase().trim();
+    const currentList = this.priceHistories.get(key) || [];
+    currentList.unshift(historyRecord);
+    this.priceHistories.set(key, currentList);
+
+    if (product.sku) {
+      const skuKey = product.sku.toLowerCase().trim();
+      if (skuKey !== key) {
+        const skuList = this.priceHistories.get(skuKey) || [];
+        skuList.unshift(historyRecord);
+        this.priceHistories.set(skuKey, skuList);
+      }
     }
+
+    // 2. Lưu vào PostgreSQL nếu đã kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `INSERT INTO product_price_histories (id, product_id, old_price, new_price, changed_by, changed_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [historyId, product.id, oldPrice, newPrice, changedBy || 'Quản trị viên', changedAt],
+        );
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[ProductsService] Lỗi khi lưu lịch sử giá SP ${product.id} vào DB:`, errorMsg);
+      }
+    }
+
+    return historyRecord;
+  }
+
+  /**
+   * Lấy lịch sử thay đổi giá của 1 sản phẩm (SN-29)
+   * Trả về danh sách sắp xếp theo thời gian mới nhất lên đầu (ORDER BY changedAt DESC)
+   */
+  async getPriceHistory(productIdOrSku: string): Promise<ProductPriceHistory[]> {
+    // Kiểm tra sản phẩm có tồn tại trên hệ thống không
+    const product = await this.findById(productIdOrSku);
+
+    // 1. Truy vấn từ cơ sở dữ liệu PostgreSQL nếu có kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        const rows = await this.dbService.query<{
+          id: string;
+          product_id: string;
+          old_price: string | number;
+          new_price: string | number;
+          changed_by: string;
+          changed_at: string | Date;
+        }>(
+          `SELECT id, product_id, old_price, new_price, changed_by, changed_at
+           FROM product_price_histories
+           WHERE product_id = $1 OR product_id = $2
+           ORDER BY changed_at DESC`,
+          [product.id, product.sku],
+        );
+
+        if (rows && rows.length > 0) {
+          const dbRecords = rows.map(
+            (row) =>
+              new ProductPriceHistory({
+                id: row.id,
+                productId: row.product_id,
+                oldPrice: Number(row.old_price),
+                newPrice: Number(row.new_price),
+                changedBy: row.changed_by,
+                changedAt: new Date(row.changed_at),
+              }),
+          );
+
+          // Cập nhật lại cache in-memory
+          const key = product.id.toLowerCase().trim();
+          this.priceHistories.set(key, dbRecords);
+
+          return dbRecords;
+        }
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[ProductsService] Lỗi khi lấy lịch sử giá SP ${product.id}:`, errorMsg);
+      }
+    }
+
+    // 2. Tra cứu từ in-memory cache nếu DB chưa có bản ghi hoặc chưa kết nối
+    const key = product.id.toLowerCase().trim();
+    const skuKey = product.sku ? product.sku.toLowerCase().trim() : '';
+    const memList =
+      this.priceHistories.get(key) ||
+      (skuKey ? this.priceHistories.get(skuKey) : []) ||
+      [];
+
+    return [...memList].sort((a, b) => b.changedAt.getTime() - a.changedAt.getTime());
   }
 
   /**
@@ -1033,15 +1166,7 @@ export class ProductsService implements OnModuleInit {
       
       // BẮT ĐẦU LOGIC SN-29: LƯU LỊCH SỬ GIÁ
       if (oldPrice !== newPrice) {
-        if (this.dbService?.isConnected()) {
-          this.dbService.query(
-            `INSERT INTO product_price_histories (product_id, old_price, new_price, changed_by)
-             VALUES ($1, $2, $3, $4)`,
-            [product.id, oldPrice, newPrice, updatedBy]
-          ).catch(err => {
-            console.error(`[ProductsService] Lỗi khi lưu lịch sử giá SP ${product.id}:`, err);
-          });
-        }
+        await this.recordPriceHistory(product, oldPrice, newPrice, updatedBy);
       }
       // KẾT THÚC LOGIC SN-29
       
