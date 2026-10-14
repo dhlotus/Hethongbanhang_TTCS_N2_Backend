@@ -102,18 +102,18 @@ describe('Lock / Unlock Dealer Transactions (SN-31 / SN-36)', () => {
 
   it('4. Mở khóa đại lý khôi phục khả năng tạo đơn bình thường (SN-36)', async () => {
     // Khóa
-    await customersService.lockCustomer('cust-003', {
+    await customersService.lockCustomer('cust-001', {
       reason: 'Tạm dừng để kiểm tra hợp đồng',
     });
 
     // Mở khóa
-    const unlocked = await customersService.unlockCustomer('cust-003');
+    const unlocked = await customersService.unlockCustomer('cust-001');
     expect(unlocked.status).toBe(CustomerStatus.ACTIVE);
     expect(unlocked.lockReason).toBeUndefined();
 
     // Tạo đơn mới bình thường
     const orderDto: CreateOrderDto = {
-      customerId: 'cust-003',
+      customerId: 'cust-001',
       lines: [
         {
           productId: 'prod-003',

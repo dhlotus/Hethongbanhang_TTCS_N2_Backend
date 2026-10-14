@@ -38,13 +38,11 @@ export class AgencyService implements OnModuleInit {
     "cust-dl-0003",
     "cust-001",
     "cust-002",
-    "cust-003",
     "DL-0001",
     "DL-0002",
     "DL-0003",
     "DL-HCM-001",
     "DL-HCM-002",
-    "DL-HCM-003",
   ]);
 
   constructor(
