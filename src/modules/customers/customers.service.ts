@@ -55,6 +55,7 @@ export class CustomersService implements OnModuleInit {
   ) {
     this.seedInitialCustomers();
     this.loadCustomersFromDisk();
+    this.loadAssignmentHistoriesFromDisk();
   }
 
   async onModuleInit(): Promise<void> {
@@ -62,6 +63,7 @@ export class CustomersService implements OnModuleInit {
       this.seedInitialCustomers();
     }
     this.loadCustomersFromDisk();
+    this.loadAssignmentHistoriesFromDisk();
   }
 
   private getStorageFilePath(): string {
@@ -104,6 +106,36 @@ export class CustomersService implements OnModuleInit {
       fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
     } catch (err) {
       console.warn('[CUSTOMERS_SERVICE] Lỗi khi lưu dữ liệu đại lý ra đĩa:', err);
+    }
+  }
+
+  private getAssignmentHistoriesFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'customer-assignment-histories.json');
+  }
+
+  private loadAssignmentHistoriesFromDisk(): void {
+    try {
+      const filePath = this.getAssignmentHistoriesFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<CustomerAssignmentHistoryEntity>> = JSON.parse(content);
+      this.assignmentHistories = rawList.map((item) => new CustomerAssignmentHistoryEntity(item));
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi nạp dữ liệu lịch sử phân công từ đĩa:', err);
+    }
+  }
+
+  private saveAssignmentHistoriesToDisk(): void {
+    try {
+      const filePath = this.getAssignmentHistoriesFilePath();
+      fs.writeFileSync(filePath, JSON.stringify(this.assignmentHistories, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi lưu dữ liệu lịch sử phân công ra đĩa:', err);
     }
   }
 
@@ -1073,6 +1105,8 @@ export class CustomersService implements OnModuleInit {
     });
 
     this.assignmentHistories.unshift(history);
+    this.saveCustomersToDisk();
+    this.saveAssignmentHistoriesToDisk();
     return customer;
   }
 
@@ -1144,6 +1178,9 @@ export class CustomersService implements OnModuleInit {
       transferred.push(c);
     }
 
+    this.saveCustomersToDisk();
+    this.saveAssignmentHistoriesToDisk();
+
     return {
       message: `Chuyển giao thành công ${transferred.length} đại lý`,
       transferBatchId: batchId,
@@ -1177,6 +1214,17 @@ export class CustomersService implements OnModuleInit {
     }
     if (query?.transferBatchId) {
       list = list.filter((h) => h.transferBatchId === query.transferBatchId);
+    }
+    if (query?.search && query.search.trim()) {
+      const s = query.search.trim().toLowerCase();
+      list = list.filter(
+        (h) =>
+          h.customerName?.toLowerCase().includes(s) ||
+          h.customerCode?.toLowerCase().includes(s) ||
+          h.reason?.toLowerCase().includes(s) ||
+          h.fromSalesRepName?.toLowerCase().includes(s) ||
+          h.toSalesRepName?.toLowerCase().includes(s),
+      );
     }
 
     const page = Number(query?.page) || 1;
