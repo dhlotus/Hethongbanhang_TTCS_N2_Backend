@@ -19,6 +19,7 @@ export class UpdateWarehouseDto {
   phone?: string;
 
   @IsOptional()
+  @ValidateIf((o) => Boolean(o.managerId))
   @Matches(WAREHOUSE_MANAGER_ID_PATTERN, { message: 'Người phụ trách không hợp lệ' })
   managerId?: string;
 
