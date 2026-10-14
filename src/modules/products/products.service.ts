@@ -203,13 +203,26 @@ export class ProductsService implements OnModuleInit {
         image_url?: string;
         created_at: Date;
         updated_at: Date;
+        price?: string | number;
+        stock_quantity?: string | number;
       }>(
         `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at,
                 c.name as category_name, c.code as category_code,
-                pcat.name as parent_category_name
+                pcat.name as parent_category_name,
+                COALESCE(pli.price, ROUND(p.cost_price * 1.35)) as price,
+                COALESCE(inv.on_hand, 0) as stock_quantity
          FROM products p
          LEFT JOIN categories c ON p.category_id = c.id
-         LEFT JOIN categories pcat ON c.parent_id = pcat.id;`,
+         LEFT JOIN categories pcat ON c.parent_id = pcat.id
+         LEFT JOIN LATERAL (
+           SELECT price FROM price_list_items 
+           WHERE product_id = p.id 
+           ORDER BY created_at ASC LIMIT 1
+         ) pli ON true
+         LEFT JOIN LATERAL (
+           SELECT SUM(on_hand) as on_hand FROM inventories 
+           WHERE product_id = p.id
+         ) inv ON true;`,
       );
 
       if (rows && rows.length > 0) {
@@ -249,6 +262,8 @@ export class ProductsService implements OnModuleInit {
           const parentName = row.parent_category_name || catName;
           const fullCat = row.parent_category_name ? `${parentName} / ${catName}` : catName;
           const costPrice = Number(row.cost_price) || 0;
+          const sellingPrice = Number(row.price) || Math.round(costPrice * 1.35);
+          const stock = Number(row.stock_quantity) || 0;
 
           const productUnits = unitsByProductId.get(row.id) || [];
           if (productUnits.length === 0) {
@@ -273,8 +288,8 @@ export class ProductsService implements OnModuleInit {
             baseUnit: row.base_unit || 'Cái',
             units: productUnits,
             costPrice,
-            price: Math.round(costPrice * 1.35),
-            stockQuantity: 100,
+            price: sellingPrice,
+            stockQuantity: stock,
             status: (row.status as ProductStatus) || ProductStatus.ACTIVE,
             imageUrl: row.image_url,
             hasTransactions: false,
@@ -608,6 +623,10 @@ export class ProductsService implements OnModuleInit {
       category,
       status,
     } = filterDto;
+
+    if (this.dbService?.isConnected()) {
+      await this.loadProductsFromDatabase();
+    }
 
     let items = Array.from(this.products.values());
 
