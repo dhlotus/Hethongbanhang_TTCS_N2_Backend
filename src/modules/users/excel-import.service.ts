@@ -464,6 +464,19 @@ export class ExcelImportService {
       return;
     }
 
+    // Chặn lỗ hổng bảo mật: Tuyệt đối không cho phép tạo tài khoản Đại lý / Khách hàng (CUSTOMER / AGENCY) qua file Excel nhân sự
+    const normalizedRole = String(resolvedRole).toUpperCase();
+    if (
+      normalizedRole === UserRole.CUSTOMER ||
+      normalizedRole === 'CUSTOMER' ||
+      normalizedRole === 'AGENCY'
+    ) {
+      errors.push(
+        'Không được phép tạo tài khoản Đại lý / Khách hàng B2B qua tính năng import nhân sự. Tài khoản Đại lý chỉ được cấp tự động thông qua quy trình tạo Hồ sơ Đại lý.',
+      );
+      return;
+    }
+
     const isValidRole = (Object.values(UserRole) as string[]).includes(resolvedRole);
     if (!isValidRole) {
       errors.push(EXCEL_IMPORT_MESSAGES.ROLE_INVALID(data.role));

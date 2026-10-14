@@ -6,5 +6,8 @@ export interface ICurrentUser {
   roles: UserRole[];
   username?: string;
   avatarUrl?: string | null;
+  customerId?: string | null;
+  customerCode?: string | null;
+  agencyId?: string | null;
 }
 

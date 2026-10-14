@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   forwardRef,
   Get,
   HttpCode,
@@ -137,14 +138,62 @@ export class CustomersController {
   }
 
   /**
+   * Lấy công nợ của chính đại lý đang đăng nhập (Cổng B2B - Cách ly dữ liệu)
+   * GET /api/customers/portal/debt-status
+   * Tự động trích xuất agencyId từ Token, chặn 403 nếu không có đại lý hợp lệ
+   */
+  @Get('portal/debt-status')
+  @UseGuards(JwtAuthGuard)
+  async getPortalDebtStatus(
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<CustomerDebtStatusDto> {
+    const agencyId = currentUser.agencyId || currentUser.customerId;
+    if (!agencyId) {
+      throw new ForbiddenException(
+        'Tài khoản của bạn chưa được liên kết với hồ sơ Đại lý hợp lệ.',
+      );
+    }
+    return this.customersService.getCustomerDebtStatus(agencyId);
+  }
+
+  /**
+   * Lấy thông tin hồ sơ của chính đại lý đang đăng nhập (Cổng B2B - Cách ly dữ liệu)
+   * GET /api/customers/portal/profile
+   */
+  @Get('portal/profile')
+  @UseGuards(JwtAuthGuard)
+  async getPortalProfile(
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    const agencyId = currentUser.agencyId || currentUser.customerId;
+    if (!agencyId) {
+      throw new ForbiddenException(
+        'Tài khoản của bạn chưa được liên kết với hồ sơ Đại lý hợp lệ.',
+      );
+    }
+    return this.customersService.getCustomerById(agencyId);
+  }
+
+  /**
    * Kiểm tra tình trạng công nợ của đại lý trước khi lập đơn (SN-41)
    * GET /api/customers/:id/debt-status
    */
   @Get(':id/debt-status')
-  @Public()
+  @UseGuards(JwtAuthGuard)
   async getCustomerDebtStatus(
     @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<CustomerDebtStatusDto> {
+    // Nếu caller là Đại lý (CUSTOMER), cấm tuyệt đối việc xem công nợ của đại lý khác!
+    if (currentUser?.roles?.includes(UserRole.CUSTOMER)) {
+      const myAgencyId = currentUser.agencyId || currentUser.customerId;
+      if (!myAgencyId || (id !== myAgencyId && id !== 'me' && id !== 'portal')) {
+        throw new ForbiddenException(
+          'Bạn không có quyền truy cập thông tin công nợ của đại lý khác.',
+        );
+      }
+      return this.customersService.getCustomerDebtStatus(myAgencyId);
+    }
     return this.customersService.getCustomerDebtStatus(id);
   }
 
@@ -153,8 +202,23 @@ export class CustomersController {
    * GET /api/customers/:id
    */
   @Get(':id')
-  @Public()
-  async getCustomerById(@Param('id') id: string): Promise<CustomerEntity> {
+  @UseGuards(JwtAuthGuard)
+  async getCustomerById(
+    @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<CustomerEntity> {
+    if (currentUser?.roles?.includes(UserRole.CUSTOMER)) {
+      const myAgencyId = currentUser.agencyId || currentUser.customerId;
+      if (id === 'me' || id === 'portal') {
+        if (!myAgencyId) throw new ForbiddenException('Tài khoản đại lý không hợp lệ.');
+        return this.customersService.getCustomerById(myAgencyId);
+      }
+      if (!myAgencyId || id !== myAgencyId) {
+        throw new ForbiddenException(
+          'Bạn không có quyền xem thông tin hồ sơ của đại lý khác.',
+        );
+      }
+    }
     return this.customersService.getCustomerById(id);
   }
 
@@ -163,10 +227,23 @@ export class CustomersController {
    * GET /api/customers/:id/delivery-points
    */
   @Get(':id/delivery-points')
-  @Public()
+  @UseGuards(JwtAuthGuard)
   async getDeliveryPoints(
     @Param('id') customerId: string,
+    @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<DeliveryPointEntity[]> {
+    if (currentUser?.roles?.includes(UserRole.CUSTOMER)) {
+      const myAgencyId = currentUser.agencyId || currentUser.customerId;
+      if (customerId === 'me' || customerId === 'portal') {
+        if (!myAgencyId) throw new ForbiddenException('Tài khoản đại lý không hợp lệ.');
+        return this.customersService.getDeliveryPoints(myAgencyId);
+      }
+      if (!myAgencyId || customerId !== myAgencyId) {
+        throw new ForbiddenException(
+          'Bạn không có quyền xem điểm giao hàng của đại lý khác.',
+        );
+      }
+    }
     return this.customersService.getDeliveryPoints(customerId);
   }
 
