@@ -24,6 +24,11 @@ import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
+import {
+  BulkTransferTerritoryResult,
+  PaginatedAssignmentHistoryResult,
+  PaginatedCustomersWithUnassignedResult,
+} from './interfaces/customer-assignment.interface';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-35)
@@ -598,6 +603,11 @@ export class CustomersService implements OnModuleInit {
       });
     }
 
+    // Lọc chỉ đại lý chưa phân công nhân sự phụ trách (SN-35)
+    if (query?.unassignedOnly) {
+      list = list.filter((c) => !c.salesRepId || c.salesRepId === '');
+    }
+
     // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone
     if (query?.search) {
       const q = query.search.toLowerCase().trim();
@@ -974,7 +984,10 @@ export class CustomersService implements OnModuleInit {
   /**
    * Alias tìm kiếm & lọc danh sách đại lý (SN-35)
    */
-  async findAll(query?: any, currentUser?: ICurrentUser): Promise<any> {
+  async findAll(
+    query?: FilterCustomersDto,
+    currentUser?: ICurrentUser,
+  ): Promise<PaginatedCustomersWithUnassignedResult> {
     const res = await this.filterCustomers(query, currentUser);
     const unassignedCount = Array.from(this.customers.values()).filter(
       (c) => !c.salesRepId || c.salesRepId === '',
@@ -1040,7 +1053,7 @@ export class CustomersService implements OnModuleInit {
   async bulkTransferTerritory(
     dto: BulkTransferTerritoryDto,
     currentUser?: ICurrentUser,
-  ): Promise<any> {
+  ): Promise<BulkTransferTerritoryResult> {
     if (dto.fromSalesRepId === dto.toSalesRepId) {
       throw new BadRequestException('Nhân sự bàn giao và tiếp nhận không được trùng nhau');
     }
@@ -1120,7 +1133,9 @@ export class CustomersService implements OnModuleInit {
   /**
    * Lấy lịch sử chuyển giao & phân công địa bàn (SN-35)
    */
-  async getAssignmentHistory(query?: QueryAssignmentHistoryDto): Promise<any> {
+  async getAssignmentHistory(
+    query?: QueryAssignmentHistoryDto,
+  ): Promise<PaginatedAssignmentHistoryResult> {
     let list = [...this.assignmentHistories];
     if (query?.customerId) {
       list = list.filter((h) => h.customerId === query.customerId);

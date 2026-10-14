@@ -30,6 +30,10 @@ import { AssignSalesRepDto } from './dto/assign-sales-rep.dto';
 import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
+import {
+  BulkTransferTerritoryResult,
+  PaginatedAssignmentHistoryResult,
+} from './interfaces/customer-assignment.interface';
 
 /**
  * Controller Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32, SN-35 & SN-37)
@@ -55,7 +59,9 @@ export class CustomersController {
    */
   @Get('assignment-history')
   @Public()
-  async getAssignmentHistory(@Query() query: QueryAssignmentHistoryDto): Promise<any> {
+  async getAssignmentHistory(
+    @Query() query: QueryAssignmentHistoryDto,
+  ): Promise<PaginatedAssignmentHistoryResult> {
     return this.customersService.getAssignmentHistory(query);
   }
 
@@ -69,7 +75,7 @@ export class CustomersController {
   async bulkTransferTerritory(
     @Body() dto: BulkTransferTerritoryDto,
     @CurrentUser() currentUser?: ICurrentUser,
-  ): Promise<any> {
+  ): Promise<BulkTransferTerritoryResult> {
     return this.customersService.bulkTransferTerritory(dto, currentUser);
   }
 
