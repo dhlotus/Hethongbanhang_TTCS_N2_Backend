@@ -23,6 +23,9 @@ export class WarehousesService {
 
   async findAll(): Promise<WarehouseEntity[]> {
     if (!this.databaseService?.isConnected()) {
+      await this.databaseService?.ensureConnection?.();
+    }
+    if (!this.databaseService?.isConnected()) {
       return [
         {
           id: DEFAULT_WAREHOUSE_ID,
@@ -71,6 +74,9 @@ export class WarehousesService {
   }
 
   async listManagers(): Promise<WarehouseManagerEntity[]> {
+    if (!this.databaseService?.isConnected()) {
+      await this.databaseService?.ensureConnection?.();
+    }
     if (!this.databaseService?.isConnected()) {
       return [
         { id: '00000000-0000-0000-0000-000000000004', name: 'Đỗ Quốc Bảo' },

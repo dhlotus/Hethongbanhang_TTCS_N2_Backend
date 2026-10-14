@@ -103,6 +103,36 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Đảm bảo kết nối tới PostgreSQL luôn sẵn sàng (Tự động kết nối lại nếu ban đầu bị mất kết nối)
+   */
+  async ensureConnection(): Promise<boolean> {
+    if (this.connected && this.pool) {
+      return true;
+    }
+    try {
+      const config = getDatabaseConnectionConfig();
+      if (this.pool) {
+        await this.pool.end().catch(() => {});
+      }
+      this.pool = new Pool(config);
+      const client = await this.pool.connect();
+      const res = await client.query('SELECT current_database() as db_name, version();');
+      client.release();
+
+      this.connected = true;
+      const dbName = res.rows[0]?.db_name || config.database;
+      this.logger.log(`[PostgreSQL] Kết nối thành công tới database: ${dbName}`);
+      await this.ensureEssentialTables();
+      return true;
+    } catch (err: unknown) {
+      this.connected = false;
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[PostgreSQL] Chưa thể kết nối cơ sở dữ liệu: ${message}`);
+      return false;
+    }
+  }
+
+  /**
    * Kiểm tra trạng thái kết nối tới PostgreSQL
    */
   isConnected(): boolean {
@@ -117,7 +147,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     params?: unknown[],
   ): Promise<T[]> {
     if (!this.pool || !this.connected) {
-      throw new Error('Cơ sở dữ liệu PostgreSQL chưa sẵn sàng hoặc mất kết nối!');
+      const ok = await this.ensureConnection();
+      if (!ok || !this.pool) {
+        throw new Error('Cơ sở dữ liệu PostgreSQL chưa sẵn sàng hoặc mất kết nối!');
+      }
     }
     const result = await this.pool.query<T>(text, params);
     return result.rows;
@@ -128,8 +161,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
    */
   async getClient(): Promise<PoolClient> {
     if (!this.pool || !this.connected) {
-      throw new Error('Cơ sở dữ liệu PostgreSQL chưa sẵn sàng hoặc mất kết nối!');
+      const ok = await this.ensureConnection();
+      if (!ok || !this.pool) {
+        throw new Error('Cơ sở dữ liệu PostgreSQL chưa sẵn sàng hoặc mất kết nối!');
+      }
     }
     return await this.pool.connect();
   }
 }
+
