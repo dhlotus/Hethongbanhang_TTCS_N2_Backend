@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
-import { databaseConnectionConfig } from './database.config';
+import { databaseConnectionConfig, getDatabaseConnectionConfig } from './database.config';
 
 /**
  * Service quản lý kết nối và thực thi truy vấn tới cơ sở dữ liệu PostgreSQL
@@ -18,7 +18,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     try {
-      this.pool = new Pool(databaseConnectionConfig);
+      const config = getDatabaseConnectionConfig();
+      this.pool = new Pool(config);
 
       // Thử kết nối kiểm tra
       const client = await this.pool.connect();
@@ -26,7 +27,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       client.release();
 
       this.connected = true;
-      const dbName = res.rows[0]?.db_name || databaseConnectionConfig.database;
+      const dbName = res.rows[0]?.db_name || config.database;
+
       this.logger.log(`[PostgreSQL] Kết nối thành công tới database: ${dbName}`);
 
       await this.ensureEssentialTables();
