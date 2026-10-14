@@ -50,6 +50,7 @@ describe('Customer Profile Management (SN-30)', () => {
         customerGroup: 'AGENT_LEVEL_2',
         region: 'Miền Nam',
         phone: '0901234568',
+        email: 'tienloimiennam@gmail.com',
         address: '50 Lê Duẩn, Q.1, TP.HCM',
         deliveryPointName: 'Kho Trung Tâm Quận 1',
         receiverName: 'Anh Hùng Kho',
@@ -70,6 +71,7 @@ describe('Customer Profile Management (SN-30)', () => {
         taxCode: '0101111222',
         region: 'Miền Bắc',
         phone: '0981111222',
+        email: 'daily01@gmail.com',
         address: 'Hà Nội',
       });
 
@@ -81,6 +83,7 @@ describe('Customer Profile Management (SN-30)', () => {
           taxCode: '0103333444',
           region: 'Miền Bắc',
           phone: '0983333444',
+          email: 'dailytrung@gmail.com',
           address: 'Hải Phòng',
         }),
       ).rejects.toThrow(BadRequestException);
@@ -93,6 +96,7 @@ describe('Customer Profile Management (SN-30)', () => {
         taxCode: '0105555666',
         region: 'Miền Trung',
         phone: '0945555666',
+        email: 'dailygoc@gmail.com',
         address: 'Đà Nẵng',
       });
 
@@ -104,6 +108,7 @@ describe('Customer Profile Management (SN-30)', () => {
           taxCode: '0107777888',
           region: 'Miền Trung',
           phone: '0947777888',
+          email: 'caseins@gmail.com',
           address: 'Huế',
         }),
       ).rejects.toThrow('Mã đại lý "dl-case-test" đã tồn tại trong hệ thống');
@@ -117,6 +122,7 @@ describe('Customer Profile Management (SN-30)', () => {
           taxCode: '0109999000',
           region: 'Miền Bắc',
           phone: '0989999000',
+          email: 'marong@gmail.com',
           address: 'Hà Nội',
         }),
       ).rejects.toThrow('Mã đại lý không được để trống.');
@@ -136,6 +142,7 @@ describe('Customer Profile Management (SN-30)', () => {
           customerGroup: group,
           region: 'Miền Nam',
           phone: `090000000${i}`,
+          email: `group${i}@gmail.com`,
           address: 'TP.HCM',
         });
 
@@ -156,8 +163,8 @@ describe('Customer Profile Management (SN-30)', () => {
     });
 
     it('phải ném lỗi khi xóa đại lý đã phát sinh giao dịch (hasTransactions = true)', async () => {
-      // cust-hp-001 có currentDebt = 0 nhưng có giao dịch
-      await expect(service.deleteCustomer('cust-hp-001', true)).rejects.toThrow(
+      // cust-hn-002 có giao dịch
+      await expect(service.deleteCustomer('cust-hn-002', true)).rejects.toThrow(
         'không thể xóa. Chỉ được phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE)',
       );
     });
@@ -179,6 +186,7 @@ describe('Customer Profile Management (SN-30)', () => {
         customerGroup: 'AGENT_LEVEL_2',
         region: 'Miền Bắc',
         phone: '0989999888',
+        email: 'clean01@gmail.com',
         address: 'Bắc Ninh',
       });
 

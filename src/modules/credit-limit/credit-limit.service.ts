@@ -58,6 +58,7 @@ export class CreditLimitService implements OnModuleInit {
   private async syncFromCustomers(): Promise<void> {
     const customers = await this.customersService.findAllCustomers();
     for (const c of customers) {
+      const existing = this.agencyCreditLimits.get(c.id);
       const entity = new AgencyCreditLimit({
         id: `crd-${c.id}`,
         agencyId: c.id,
@@ -69,16 +70,16 @@ export class CreditLimitService implements OnModuleInit {
         region: c.region,
         salesRepId: c.salesRepId,
         salesRepName: c.salesRepName,
-        creditLimit: c.creditLimit,
-        maxDebtDays: c.maxDebtDays,
+        creditLimit: existing?.creditLimit ?? c.creditLimit,
+        maxDebtDays: existing?.maxDebtDays ?? c.maxDebtDays,
         currentDebt: c.currentDebt,
-        paymentTerms: 'NET_30',
-        temporaryCreditLimit: 0,
-        allowOverLimitOrder: false,
+        paymentTerms: existing?.paymentTerms ?? 'NET_30',
+        temporaryCreditLimit: existing?.temporaryCreditLimit ?? 0,
+        allowOverLimitOrder: existing?.allowOverLimitOrder ?? false,
         status:
           c.status === CustomerStatus.LOCKED
             ? CreditStatus.BLOCKED
-            : undefined,
+            : existing?.status,
         createdAt: c.createdAt,
         updatedAt: c.updatedAt,
       });
@@ -269,9 +270,7 @@ export class CreditLimitService implements OnModuleInit {
   async getCreditLimits(
     query?: QueryCreditLimitDto,
   ): Promise<PaginatedCreditLimitResult> {
-    if (this.agencyCreditLimits.size === 0) {
-      await this.syncFromCustomers();
-    }
+    await this.syncFromCustomers();
 
     let items = Array.from(this.agencyCreditLimits.values());
 
@@ -295,14 +294,17 @@ export class CreditLimitService implements OnModuleInit {
       );
     }
 
-    const sortBy = query?.sortBy || 'debtUsagePercentage';
-    const sortOrder = query?.sortOrder || 'DESC';
+    const sortBy = query?.sortBy || 'agencyCode';
+    const sortOrder = query?.sortOrder || 'ASC';
 
     items.sort((a, b) => {
       let valA: number | string = 0;
       let valB: number | string = 0;
 
-      if (sortBy === 'creditLimit') {
+      if (sortBy === 'agencyCode') {
+        valA = a.agencyCode || a.agencyName || '';
+        valB = b.agencyCode || b.agencyName || '';
+      } else if (sortBy === 'creditLimit') {
         valA = a.creditLimit;
         valB = b.creditLimit;
       } else if (sortBy === 'currentDebt') {
@@ -318,8 +320,8 @@ export class CreditLimitService implements OnModuleInit {
         valA = a.agencyName;
         valB = b.agencyName;
       } else {
-        valA = a.updatedAt.getTime();
-        valB = b.updatedAt.getTime();
+        valA = a.agencyCode || a.agencyName || '';
+        valB = b.agencyCode || b.agencyName || '';
       }
 
       if (valA < valB) return sortOrder === 'ASC' ? -1 : 1;
