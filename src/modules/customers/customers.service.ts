@@ -1,11 +1,18 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DatabaseService } from '../../database/database.service';
+import type { PoolClient } from 'pg';
 import { CustomerEntity, CustomerStatus } from './entities/customer.entity';
 import { DeliveryPointEntity } from './entities/delivery-point.entity';
 import { CreateDeliveryPointDto } from './dto/create-delivery-point.dto';
@@ -15,6 +22,7 @@ import { LockCustomerDto } from './dto/lock-customer.dto';
 import { FilterCustomersDto } from './dto/filter-customers.dto';
 import { PaginatedCustomersResult } from './interfaces/paginated-customers.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { UserStatus } from '../../common/enums/user-status.enum';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { INITIAL_AGENCIES } from './agencies.seed';
 import { CustomerDebtStatusDto } from './dto/customer-debt-status.dto';
@@ -23,12 +31,13 @@ import { AssignSalesRepDto } from './dto/assign-sales-rep.dto';
 import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
-import { QueryCustomersDto } from './dto/query-customers.dto';
 import {
   BulkTransferTerritoryResult,
   PaginatedAssignmentHistoryResult,
   PaginatedCustomersWithUnassignedResult,
 } from './interfaces/customer-assignment.interface';
+import { matchesSearchTerm, removeVietnameseTones } from '../../common/utils/vietnamese.util';
+import { UsersService } from '../users/users.service';
 
 /**
  * Service Quản lý Đại lý & Điểm giao hàng (SN-31, SN-32 & SN-35)
@@ -38,13 +47,123 @@ export class CustomersService implements OnModuleInit {
   private readonly customers = new Map<string, CustomerEntity>();
   private assignmentHistories: CustomerAssignmentHistoryEntity[] = [];
 
-  constructor(@Optional() private readonly dbService?: DatabaseService) {
+  constructor(
+    @Optional() private readonly dbService?: DatabaseService,
+    @Optional()
+    @Inject(forwardRef(() => UsersService))
+    private readonly usersService?: UsersService,
+  ) {
     this.seedInitialCustomers();
+    this.loadCustomersFromDisk();
   }
 
   async onModuleInit(): Promise<void> {
     if (this.customers.size === 0) {
       this.seedInitialCustomers();
+    }
+    this.loadCustomersFromDisk();
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'customers.json');
+  }
+
+  private loadCustomersFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const rawList: Array<Partial<CustomerEntity>> = JSON.parse(content);
+      for (const item of rawList) {
+        if (!item.id) continue;
+        const existing = this.customers.get(item.id);
+        if (existing) {
+          Object.assign(existing, {
+            ...item,
+            createdAt: item.createdAt ? new Date(item.createdAt) : existing.createdAt,
+            updatedAt: item.updatedAt ? new Date(item.updatedAt) : existing.updatedAt,
+          });
+        } else {
+          this.customers.set(item.id, new CustomerEntity(item));
+        }
+      }
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi nạp dữ liệu đại lý từ đĩa:', err);
+    }
+  }
+
+  private saveCustomersToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.customers.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[CUSTOMERS_SERVICE] Lỗi khi lưu dữ liệu đại lý ra đĩa:', err);
+    }
+  }
+
+  /**
+   * Sinh mã đại lý tiếp theo (DL-0001, DL-0002, ...).
+   * - Lấy số thứ tự lớn nhất hiện có (DB + bộ nhớ) rồi cộng 1.
+   * - Vòng lặp kiểm tra trực tiếp trong DB (qua `client` của transaction nếu có)
+   *   và trong bộ nhớ; nếu mã đã tồn tại thì tăng số đếm và sinh lại.
+   * - Chỉ trả về mã khi xác nhận chưa ai dùng.
+   */
+  private async generateNextCustomerCode(client?: PoolClient): Promise<string> {
+    const prefix = 'DL-';
+    const codePattern = /^DL-(\d+)$/i;
+    const format = (n: number) => `${prefix}${String(n).padStart(4, '0')}`;
+
+    // 1. Số lớn nhất trong bộ nhớ
+    let maxNum = 0;
+    const memoryCodes = new Set<string>();
+    for (const c of this.customers.values()) {
+      const code = c.code?.trim().toUpperCase();
+      if (!code) continue;
+      memoryCodes.add(code);
+      const m = codePattern.exec(code);
+      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+    }
+
+    // 2. Số lớn nhất trong Database (đọc real-time; dùng client của transaction nếu có)
+    const useDb = Boolean(client) || Boolean(this.dbService?.isConnected());
+    const queryRows = async (sql: string, params: unknown[] = []): Promise<any[]> => {
+      if (client) {
+        return (await client.query(sql, params)).rows;
+      }
+      return this.dbService!.query(sql, params);
+    };
+
+    if (useDb) {
+      const maxRows = await queryRows(
+        `SELECT COALESCE(MAX(CAST(SUBSTRING(code FROM 4) AS BIGINT)), 0) AS max_num
+           FROM customers
+          WHERE code ~* '^DL-[0-9]+$'`,
+      );
+      maxNum = Math.max(maxNum, Number(maxRows?.[0]?.max_num ?? 0));
+    }
+
+    // 3. Vòng lặp đảm bảo mã chưa tồn tại
+    let num = maxNum + 1;
+    for (;;) {
+      const candidate = format(num);
+      let exists = memoryCodes.has(candidate);
+
+      if (!exists && useDb) {
+        const found = await queryRows(
+          'SELECT 1 FROM customers WHERE UPPER(code) = UPPER($1) LIMIT 1',
+          [candidate],
+        );
+        exists = found.length > 0;
+      }
+
+      if (!exists) return candidate;
+      num++;
     }
   }
 
@@ -93,79 +212,11 @@ export class CustomersService implements OnModuleInit {
         salesRepId: 'usr-sales-002',
         salesRepName: 'Trần Văn Nam',
         creditLimit: 150000000,
-        currentDebt: 12000000,
+        currentDebt: 128000000,
         maxDebtDays: 30,
         phone: '0981234562',
         email: 'hadong.mart@lohasales.vn',
         address: '45 Quang Trung, Q. Hà Đông, Hà Nội',
-        status: CustomerStatus.ACTIVE,
-      }),
-      new CustomerEntity({
-        id: 'cust-hp-001',
-        code: 'DL-HP-001',
-        name: 'Đại Lý Cảng Hải Phòng Mart',
-        taxCode: '0208765431',
-        customerGroup: 'AGENT_LEVEL_2',
-        region: 'Miền Bắc',
-        salesRepId: undefined,
-        salesRepName: undefined,
-        creditLimit: 100000000,
-        currentDebt: 0,
-        maxDebtDays: 30,
-        phone: '0931234561',
-        email: 'haiphong.cang@lohasales.vn',
-        address: '88 Lê Hồng Phong, TP. Hải Phòng',
-        status: CustomerStatus.ACTIVE,
-      }),
-      new CustomerEntity({
-        id: 'cust-qn-001',
-        code: 'DL-QN-001',
-        name: 'Siêu Thị Tiêu Dùng Hạ Long',
-        taxCode: '1401234561',
-        customerGroup: 'AGENT_LEVEL_2',
-        region: 'Miền Bắc',
-        salesRepId: undefined,
-        salesRepName: undefined,
-        creditLimit: 80000000,
-        currentDebt: 0,
-        maxDebtDays: 30,
-        phone: '0931234562',
-        email: 'halong.store@lohasales.vn',
-        address: '12 Lê Thánh Tông, TP. Hạ Long, Quảng Ninh',
-        status: CustomerStatus.ACTIVE,
-      }),
-      new CustomerEntity({
-        id: 'cust-dn-001',
-        code: 'DL-DN-001',
-        name: 'Đại Lý Phân Phối Đà Nẵng Xanh',
-        taxCode: '0401234561',
-        customerGroup: 'AGENT_LEVEL_1',
-        region: 'Miền Trung',
-        salesRepId: undefined,
-        salesRepName: undefined,
-        creditLimit: 200000000,
-        currentDebt: 0,
-        maxDebtDays: 30,
-        phone: '0941234561',
-        email: 'danang.green@lohasales.vn',
-        address: '56 Nguyễn Văn Linh, Q. Hải Châu, TP. Đà Nẵng',
-        status: CustomerStatus.ACTIVE,
-      }),
-      new CustomerEntity({
-        id: 'cust-hue-001',
-        code: 'DL-HUE-001',
-        name: 'Cửa Hàng Thực Dưỡng Cố Đô Huế',
-        taxCode: '3301234561',
-        customerGroup: 'AGENT_LEVEL_2',
-        region: 'Miền Trung',
-        salesRepId: undefined,
-        salesRepName: undefined,
-        creditLimit: 60000000,
-        currentDebt: 0,
-        maxDebtDays: 30,
-        phone: '0941234562',
-        email: 'codo.hue@lohasales.vn',
-        address: '20 Hùng Vương, TP. Huế',
         status: CustomerStatus.ACTIVE,
       }),
     ];
@@ -279,51 +330,6 @@ export class CustomersService implements OnModuleInit {
             receiverName: 'Anh Lê Thanh Bình',
             phone: '0918889900',
             roadNote: 'Giao hàng trước 11h sáng để kịp sắp xếp lên kệ bán lẻ',
-            isDefault: false,
-          }),
-        ],
-      }),
-      new CustomerEntity({
-        id: 'cust-003',
-        code: 'DL-HCM-003',
-        name: 'Siêu Thị Mini Phương Nam Mart',
-        taxCode: '0318903456',
-        customerGroup: 'RETAIL',
-        region: 'Miền Nam',
-        salesRepId: 'usr-sale-01',
-        salesRepName: 'Trần Văn Long',
-        creditLimit: 30000000,
-        currentDebt: 0,
-        maxDebtDays: 15,
-        phone: '0923456789',
-        email: 'phuongnammart@gmail.com',
-        address: '789 Hoàng Văn Thụ, P.4, Q.Tân Bình, TP.HCM',
-        status: CustomerStatus.ACTIVE,
-        deliveryPoints: [
-          new DeliveryPointEntity({
-            id: 'dp-003-1',
-            customerId: 'cust-003',
-            name: 'Điểm Bán Tân Bình (Mặt Tiền)',
-            address: '789 Hoàng Văn Thụ, Phường 4, Quận Tân Bình, TP.HCM',
-            ward: 'Phường 4',
-            district: 'Quận Tân Bình',
-            province: 'TP. Hồ Chí Minh',
-            receiverName: 'Chị Đỗ Thu Phương',
-            phone: '0923456789',
-            roadNote: 'Giao vào bãi đỗ xe phía sau siêu thị mini, có thang máy vận chuyển hàng',
-            isDefault: true,
-          }),
-          new DeliveryPointEntity({
-            id: 'dp-003-2',
-            customerId: 'cust-003',
-            name: 'Kho Bảo Quản Lạnh Củ Chi',
-            address: '105 Tỉnh Lộ 8, Thị trấn Củ Chi, Huyện Củ Chi, TP.HCM',
-            ward: 'Thị trấn Củ Chi',
-            district: 'Huyện Củ Chi',
-            province: 'TP. Hồ Chí Minh',
-            receiverName: 'Bác Sáu Hùng',
-            phone: '0921112233',
-            roadNote: 'Kho đông lạnh, yêu cầu xe tải thùng kín hoặc xe lạnh, giao sau 13h30',
             isDefault: false,
           }),
         ],
@@ -453,38 +459,6 @@ export class CustomersService implements OnModuleInit {
         ],
       }),
       new CustomerEntity({
-        id: 'cust-007',
-        code: 'DL-CTH-001',
-        name: 'Đại Lý Bách Hóa Miền Tây',
-        taxCode: '1801667788',
-        customerGroup: 'RETAIL',
-        region: 'Miền Nam',
-        salesRepId: 'usr-sale-02',
-        salesRepName: 'Nguyễn Thị Hằng',
-        creditLimit: 25000000,
-        currentDebt: 0,
-        maxDebtDays: 15,
-        phone: '0966778899',
-        email: 'mientaymart.ct@gmail.com',
-        address: '15 Trần Văn Khéo, P.Cái Khế, Q.Ninh Kiều, Cần Thơ',
-        status: CustomerStatus.INACTIVE,
-        deliveryPoints: [
-          new DeliveryPointEntity({
-            id: 'dp-007-1',
-            customerId: 'cust-007',
-            name: 'Cửa hàng Cái Khế',
-            address: '15 Trần Văn Khéo, Phường Cái Khế, Quận Ninh Kiều, Cần Thơ',
-            ward: 'Phường Cái Khế',
-            district: 'Quận Ninh Kiều',
-            province: 'Cần Thơ',
-            receiverName: 'Chị Huỳnh Ánh',
-            phone: '0966778899',
-            roadNote: 'Mặt tiền chợ đêm, giao buổi sáng',
-            isDefault: true,
-          }),
-        ],
-      }),
-      new CustomerEntity({
         id: 'cust-008',
         code: 'DL-HN-001',
         name: 'Đại lý Sữa Hà Nội',
@@ -529,13 +503,13 @@ export class CustomersService implements OnModuleInit {
   async findAllCustomers(query?: QueryCustomerDto): Promise<CustomerEntity[]> {
     let result = Array.from(this.customers.values());
 
-    if (query?.search) {
-      const q = query.search.toLowerCase().trim();
+    if (query?.search && query.search.trim()) {
+      const q = query.search.trim();
       result = result.filter(
         (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.code.toLowerCase().includes(q) ||
-          c.phone.includes(q),
+          matchesSearchTerm(c.name, q) ||
+          matchesSearchTerm(c.code, q) ||
+          matchesSearchTerm(c.phone, q),
       );
     }
 
@@ -554,7 +528,7 @@ export class CustomersService implements OnModuleInit {
    * Tìm kiếm và lọc danh sách đại lý phân quyền & phân trang chuẩn mực (SN-37)
    * - Nếu role là SALES_REP (nhân viên kinh doanh thông thường):
    *   Tự động mặc định chỉ lọc các đại lý được gán cho chính user đó phụ trách (trừ khi là ADMIN hoặc SALES_MANAGER)
-   * - Tìm kiếm nhanh (search): Không phân biệt hoa thường theo Mã (code), Tên (name), Số điện thoại (phone)
+   * - Tìm kiếm nhanh (search): Hỗ trợ cả tiếng Việt CÓ DẤU và KHÔNG DẤU theo Mã (code), Tên (name), Số điện thoại (phone), Địa chỉ (address), MST (taxCode)
    * - Kết hợp linh hoạt: region, customerGroup, salesRepId, status
    * - Phân trang đầy đủ: page, limit, total, totalPages
    */
@@ -583,64 +557,71 @@ export class CustomersService implements OnModuleInit {
     // 2. Lọc theo nhân viên phụ trách chỉ định (dành cho Admin / Quản lý)
     if (query?.salesRepId && query.salesRepId !== 'ALL') {
       const targetRepId = query.salesRepId;
+      if (targetRepId === 'UNASSIGNED') {
+        list = list.filter(
+          (c) => !c.salesRepId || c.salesRepId === '' || c.salesRepId === 'unassigned',
+        );
+      } else {
+        list = list.filter((c) => {
+          return c.salesRepId === targetRepId || c.salesRep?.id === targetRepId;
+        });
+      }
+    }
+
+    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone, address, taxCode (hỗ trợ cả có dấu và không dấu)
+    if (query?.search && query.search.trim()) {
+      const q = query.search.trim();
+      list = list.filter(
+        (c) =>
+          matchesSearchTerm(c.code, q) ||
+          matchesSearchTerm(c.name, q) ||
+          matchesSearchTerm(c.phone, q) ||
+          matchesSearchTerm(c.address, q) ||
+          matchesSearchTerm(c.taxCode, q),
+      );
+    }
+
+    // 4. Lọc theo Khu vực / Địa bàn kinh doanh (hỗ trợ cả tiếng Việt và alias)
+    if (query?.region && query.region !== 'ALL') {
+      const reg = query.region.toLowerCase().trim();
+      const normReg = removeVietnameseTones(reg);
       list = list.filter((c) => {
-        if (c.salesRepId === targetRepId || c.salesRep?.id === targetRepId) {
-          return true;
-        }
-        if (
-          (targetRepId === 'usr-sales-002' || targetRepId === 'usr-sale-01') &&
-          (c.salesRepId === 'usr-sale-01' || c.salesRepId === 'usr-sales-002')
-        ) {
-          return true;
-        }
-        if (
-          (targetRepId === 'usr-sale-02' || targetRepId === '00000000-0000-0000-0000-000000000013') &&
-          (c.salesRepId === 'usr-sale-02' || c.salesRepId === '00000000-0000-0000-0000-000000000013')
-        ) {
-          return true;
-        }
+        if (!c.region) return false;
+        const cReg = c.region.toLowerCase().trim();
+        const normCReg = removeVietnameseTones(cReg);
+        if (cReg === reg || normCReg === normReg) return true;
+        if (reg === 'south' && (normCReg.includes('nam') || normCReg === 'mien nam')) return true;
+        if (reg === 'central' && (normCReg.includes('trung') || normCReg === 'mien trung')) return true;
+        if (reg === 'north' && (normCReg.includes('bac') || normCReg === 'mien bac')) return true;
         return false;
       });
     }
 
     // Lọc chỉ đại lý chưa phân công nhân sự phụ trách (SN-35)
     if (query?.unassignedOnly) {
-      list = list.filter((c) => !c.salesRepId || c.salesRepId === '');
+      list = list.filter((c) => !c.salesRepId || c.salesRepId === '' || c.salesRepId === 'unassigned');
     }
-
-    // 3. Tìm kiếm nhanh (Full-text/Partial search) theo code, name, phone
-    if (query?.search) {
-      const q = query.search.toLowerCase().trim();
-      list = list.filter(
-        (c) =>
-          c.code.toLowerCase().includes(q) ||
-          c.name.toLowerCase().includes(q) ||
-          c.phone.includes(q) ||
-          (c.address && c.address.toLowerCase().includes(q)),
-      );
-    }
-
-    // 4. Lọc theo Khu vực / Địa bàn kinh doanh
-    if (query?.region && query.region !== 'ALL') {
-      const reg = query.region.toLowerCase().trim();
-      list = list.filter((c) => c.region && c.region.toLowerCase() === reg);
-    }
-
     // 5. Lọc theo Phân nhóm khách hàng
     if (query?.customerGroup && query.customerGroup !== 'ALL') {
-      list = list.filter((c) => c.customerGroup === query.customerGroup);
+      const grp = query.customerGroup.toUpperCase().trim();
+      list = list.filter((c) => c.customerGroup && c.customerGroup.toUpperCase().trim() === grp);
     }
 
     // 6. Lọc theo Trạng thái hoạt động
     if (query?.status && (query.status as string) !== 'ALL') {
-      list = list.filter((c) => c.status === query.status);
+      const st = (query.status as string).toUpperCase().trim();
+      list = list.filter((c) => c.status && c.status.toUpperCase().trim() === st);
     }
 
-    // 7. Phân trang kết quả
+    // 7. Phân trang kết quả & Thống kê tổng hợp toàn bộ danh sách
+    const total = list.length;
+    const activeCount = list.filter((c) => c.status === CustomerStatus.ACTIVE).length;
+    const totalCreditLimit = list.reduce((sum, c) => sum + (c.creditLimit || 0), 0);
+    const totalCurrentDebt = list.reduce((sum, c) => sum + (c.currentDebt || 0), 0);
+
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
-    const total = list.length;
-    const totalPages = Math.ceil(total / limit) || 1;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
     const startIndex = (page - 1) * limit;
     const data = list.slice(startIndex, startIndex + limit);
 
@@ -650,6 +631,9 @@ export class CustomersService implements OnModuleInit {
       page,
       limit,
       totalPages,
+      activeCount,
+      totalCreditLimit,
+      totalCurrentDebt,
     };
   }
 
@@ -657,7 +641,29 @@ export class CustomersService implements OnModuleInit {
    * Tìm đại lý theo ID
    */
   async getCustomerById(id: string): Promise<CustomerEntity> {
-    const customer = this.customers.get(id);
+    let customer = this.customers.get(id);
+    if (!customer) {
+      customer = Array.from(this.customers.values()).find(
+        (c) =>
+          c.id === id ||
+          c.code === id ||
+          (c.code && id && c.code.toLowerCase() === id.toLowerCase()) ||
+          (c.id && id && c.id.replace('cust-dl-', 'cust-') === id.replace('cust-dl-', 'cust-')),
+      );
+    }
+    if (!customer) {
+      // Tìm lại trong INITIAL_AGENCIES phòng trường hợp chưa nạp vào map
+      const seedMatch = INITIAL_AGENCIES.find(
+        (c) =>
+          c.id === id ||
+          c.code === id ||
+          (c.id && id && c.id.replace('cust-dl-', 'cust-') === id.replace('cust-dl-', 'cust-')),
+      );
+      if (seedMatch) {
+        customer = new CustomerEntity(seedMatch);
+        this.customers.set(customer.id, customer);
+      }
+    }
     if (!customer) {
       throw new NotFoundException(`Không tìm thấy đại lý có ID: ${id}`);
     }
@@ -709,6 +715,7 @@ export class CustomersService implements OnModuleInit {
 
     customer.deliveryPoints.push(newPoint);
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return newPoint;
   }
 
@@ -744,6 +751,7 @@ export class CustomersService implements OnModuleInit {
 
     point.updatedAt = new Date();
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return point;
   }
 
@@ -766,6 +774,7 @@ export class CustomersService implements OnModuleInit {
 
     targetPoint.updatedAt = new Date();
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return targetPoint;
   }
 
@@ -791,6 +800,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
     return {
       success: true,
       message: 'Đã xóa điểm giao hàng thành công',
@@ -816,6 +826,7 @@ export class CustomersService implements OnModuleInit {
     customer.lockedAt = new Date();
     customer.lockedBy = currentUser?.fullName || currentUser?.userId || 'Hệ thống';
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -828,6 +839,14 @@ export class CustomersService implements OnModuleInit {
       } catch {
         // Fallback in-memory
       }
+    }
+
+    if (this.usersService) {
+      void this.usersService.syncUserStatus(
+        customer.userId || customer.email || '',
+        UserStatus.LOCKED,
+        customer.lockReason,
+      );
     }
 
     return customer;
@@ -854,6 +873,7 @@ export class CustomersService implements OnModuleInit {
     }
 
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -881,6 +901,7 @@ export class CustomersService implements OnModuleInit {
     customer.lockedAt = undefined;
     customer.lockedBy = undefined;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -893,6 +914,13 @@ export class CustomersService implements OnModuleInit {
       } catch {
         // Fallback in-memory
       }
+    }
+
+    if (this.usersService) {
+      void this.usersService.syncUserStatus(
+        customer.userId || customer.email || '',
+        UserStatus.ACTIVE,
+      );
     }
 
     return customer;
@@ -909,6 +937,7 @@ export class CustomersService implements OnModuleInit {
     const customer = await this.getCustomerById(customerId);
     customer.status = status;
     customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
 
     if (this.dbService?.isConnected()) {
       try {
@@ -1165,36 +1194,284 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
-   * Tạo đại lý mới (SN-35)
+   * Tạo đại lý mới (SN-30 & SN-35)
+   * - Tự động sinh tài khoản Đại lý B2B tương ứng với email người dùng nhập
+   * - Mật khẩu mặc định: "123456"
+   * - Sử dụng Database Transaction (Rollback nếu tạo user hoặc đại lý lỗi)
+   * - Liên kết khóa ngoại user_id hai chiều
+   * - Hiển thị ngay trên Quản lý người dùng và đăng nhập được vào Cổng đặt hàng B2B
    */
   async createCustomer(dto: CreateCustomerDto): Promise<CustomerEntity> {
-    const newId = `cust-${Date.now()}`;
-    let salesRepName: string | undefined;
-    if (dto.salesRepId === 'usr-sales-002') salesRepName = 'Trần Văn Nam';
-    else if (dto.salesRepId === 'usr-sale-01') salesRepName = 'Trần Văn Long';
-    else if (dto.salesRepId === 'usr-sale-02') salesRepName = 'Lê Thị Thu Thảo';
+    const cleanEmail = (dto.email || '').trim().toLowerCase();
+    if (!cleanEmail) {
+      throw new BadRequestException('Vui lòng nhập địa chỉ email liên hệ để hệ thống kích hoạt tài khoản Đại lý B2B.');
+    }
 
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      throw new BadRequestException(`Địa chỉ email "${cleanEmail}" không đúng định dạng.`);
+    }
+
+    // 1. Kiểm tra trùng email trong hệ thống tài khoản Users
+    const existingUser = await this.usersService?.findByEmailOrUsername(cleanEmail);
+    if (existingUser) {
+      throw new BadRequestException(`Email "${cleanEmail}" đã được sử dụng bởi một tài khoản khác trong hệ thống.`);
+    }
+
+    // 2. Kiểm tra trùng email trong danh sách đại lý Customers
+    const existingCustomerEmail = Array.from(this.customers.values()).find(
+      (c) => c.email && c.email.trim().toLowerCase() === cleanEmail,
+    );
+    if (existingCustomerEmail) {
+      throw new BadRequestException(`Đã tồn tại hồ sơ đại lý sử dụng email "${cleanEmail}" (${existingCustomerEmail.code}).`);
+    }
+
+    let trimmedCode: string = dto.code?.trim() || '';
+    const autoGenerateCode = !trimmedCode;
+    const dbConnected = Boolean(this.dbService?.isConnected());
+
+    if (!autoGenerateCode) {
+      // Kiểm tra tính duy nhất của mã nhập tay (không phân biệt hoa/thường)
+      const normalizedCode = trimmedCode.toUpperCase();
+      const existingCustomer = Array.from(this.customers.values()).find(
+        (c) => c.code && c.code.trim().toUpperCase() === normalizedCode,
+      );
+      if (existingCustomer) {
+        throw new BadRequestException(
+          `Mã đại lý "${trimmedCode}" đã tồn tại trong hệ thống. Vui lòng nhập mã khác.`,
+        );
+      }
+    } else if (!dbConnected) {
+      // Chế độ bộ nhớ (không có PostgreSQL)
+      trimmedCode = await this.generateNextCustomerCode();
+    }
+
+    const newId = `cust-${Date.now()}`;
+    const userId = crypto.randomUUID();
+    const username = cleanEmail.length <= 50 ? cleanEmail : cleanEmail.split('@')[0].slice(0, 50);
+    const defaultPassword = '123456';
+    const passwordHash = bcrypt.hashSync(defaultPassword, 10);
+
+    let salesRepName: string | undefined = dto.salesRepName;
+    if (!salesRepName && dto.salesRepId) {
+      if (dto.salesRepId === 'usr-sales-002') salesRepName = 'Trần Văn Nam';
+      else if (dto.salesRepId === 'usr-sale-01') salesRepName = 'Trần Văn Long';
+      else if (dto.salesRepId === 'usr-sale-02') salesRepName = 'Nguyễn Thị Hằng';
+      else if (dto.salesRepId === 'usr-sale-03') salesRepName = 'Phạm Minh Tuấn';
+    }
+
+    const deliveryPoints: DeliveryPointEntity[] = [];
+    if (dto.deliveryPointName?.trim()) {
+      deliveryPoints.push(
+        new DeliveryPointEntity({
+          id: `dp-${newId.replace('cust-', '')}-1`,
+          customerId: newId,
+          name: dto.deliveryPointName.trim(),
+          address: dto.address?.trim() || 'Trụ sở chính',
+          receiverName: dto.receiverName?.trim() || dto.name.trim(),
+          phone: dto.phone.trim(),
+          isDefault: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      );
+    }
+
+    // 3. Sử dụng Database Transaction (nếu có PostgreSQL kết nối): Tạo User và Customer đồng thời
+    if (dbConnected) {
+      const client = await this.dbService!.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // Sinh mã tự động BÊN TRONG transaction; khóa advisory để 2 request không sinh trùng mã
+        if (autoGenerateCode) {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['customers_code_seq']);
+          trimmedCode = await this.generateNextCustomerCode(client);
+        }
+
+        // Tạo tài khoản User (Role ID 7 = CUSTOMER)
+        await client.query(
+          `INSERT INTO users (id, username, email, password_hash, full_name, phone, role_id, status, failed_attempts, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NOW(), NOW())`,
+          [
+            userId,
+            username,
+            cleanEmail,
+            passwordHash,
+            dto.name.trim(),
+            dto.phone?.trim() || null,
+            7,
+            'ACTIVE',
+          ],
+        );
+
+        // Tạo hồ sơ đại lý liên kết user_id
+        const customerDbId = crypto.randomUUID();
+        await client.query(
+          `INSERT INTO customers (id, code, name, region, customer_group, tax_code, phone, email, credit_limit, current_debt, max_debt_days, status, user_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
+          [
+            customerDbId,
+            trimmedCode,
+            dto.name.trim(),
+            dto.region?.trim() || 'Miền Nam',
+            dto.customerGroup || 'AGENT_LEVEL_2',
+            dto.taxCode?.trim() || null,
+            dto.phone.trim(),
+            cleanEmail,
+            dto.creditLimit ?? 0,
+            0,
+            dto.maxDebtDays ?? 30,
+            'ACTIVE',
+            userId,
+          ],
+        );
+
+        await client.query('COMMIT');
+      } catch (dbErr: any) {
+        await client.query('ROLLBACK');
+        const detail = dbErr?.detail || dbErr?.message || String(dbErr);
+        throw new BadRequestException(`Lỗi tạo đại lý và tài khoản B2B: ${detail}`);
+      } finally {
+        client.release();
+      }
+    }
+
+    // 4. Đồng bộ tạo tài khoản người dùng vào UsersService (Map bộ nhớ & users.json)
+    if (this.usersService) {
+      await this.usersService.createDealerUser({
+        id: userId,
+        email: cleanEmail,
+        username,
+        fullName: dto.name.trim(),
+        phone: dto.phone?.trim(),
+        passwordHash,
+        customerId: newId,
+        customerCode: trimmedCode,
+        status: UserStatus.ACTIVE,
+      });
+    }
+
+    // 5. Lưu hồ sơ đại lý vào memory & customers.json
     const newCustomer = new CustomerEntity({
       id: newId,
-      code: dto.code,
-      name: dto.name,
-      region: dto.region,
+      code: trimmedCode,
+      name: dto.name.trim(),
+      region: dto.region?.trim() || 'Miền Nam',
       customerGroup: dto.customerGroup || 'AGENT_LEVEL_2',
-      taxCode: dto.taxCode,
+      taxCode: dto.taxCode?.trim(),
       salesRepId: dto.salesRepId,
       salesRepName,
-      phone: dto.phone,
-      email: dto.email,
-      address: dto.address,
+      salesRep: dto.salesRepId
+        ? { id: dto.salesRepId, name: salesRepName || '' }
+        : undefined,
+      phone: dto.phone.trim(),
+      email: cleanEmail,
+      address: dto.address?.trim(),
       creditLimit: dto.creditLimit ?? 0,
+      currentDebt: 0,
       maxDebtDays: dto.maxDebtDays ?? 30,
       status: CustomerStatus.ACTIVE,
-      deliveryPoints: [],
+      userId,
+      deliveryPoints,
     });
 
     this.customers.set(newId, newCustomer);
+    this.saveCustomersToDisk();
+
     return newCustomer;
   }
+
+  /**
+   * Xóa hồ sơ đại lý (SN-30 AC4)
+   * - Chặn xóa nếu đại lý đã phát sinh giao dịch hoặc còn công nợ, chỉ cho phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE).
+   * - Khi xóa thành công: Tự động xóa vĩnh viễn tài khoản người dùng B2B liên kết khỏi hệ thống.
+   */
+  async deleteCustomer(
+    id: string,
+    hasTransactions = false,
+  ): Promise<{ success: boolean; message: string; customerId: string }> {
+    const customer = await this.getCustomerById(id);
+
+    const hasDebt = (customer.currentDebt || 0) > 0;
+    const isTransacted = hasDebt || hasTransactions;
+
+    if (isTransacted) {
+      throw new BadRequestException(
+        `Đại lý "${customer.name}" (${customer.code}) đã phát sinh giao dịch hoặc còn công nợ (${(customer.currentDebt || 0).toLocaleString('vi-VN')} đ), không thể xóa. Chỉ được phép chuyển sang trạng thái Ngừng giao dịch (INACTIVE).`,
+      );
+    }
+
+    const linkedUserId = customer.userId;
+    const linkedEmail = customer.email;
+
+    // Database Transaction: Xóa đại lý và xóa tài khoản user liên kết
+    if (this.dbService?.isConnected()) {
+      const client = await this.dbService.getClient();
+      try {
+        await client.query('BEGIN');
+        await client.query(`UPDATE customers SET user_id = NULL WHERE id::text = $1 OR code = $1;`, [id]);
+        await client.query(`DELETE FROM customers WHERE id::text = $1 OR code = $1;`, [id]);
+        if (linkedUserId) {
+          await client.query(`DELETE FROM users WHERE id::text = $1;`, [linkedUserId]);
+        } else if (linkedEmail) {
+          await client.query(`DELETE FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $1;`, [linkedEmail.toLowerCase()]);
+        }
+        await client.query('COMMIT');
+      } catch (dbErr) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException(`Lỗi khi xóa hồ sơ đại lý: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
+      } finally {
+        client.release();
+      }
+    }
+
+    // Xóa khỏi bộ nhớ customers và lưu ra file customers.json
+    this.customers.delete(customer.id);
+    this.saveCustomersToDisk();
+
+    // Xóa tài khoản người dùng tương ứng khỏi UsersService và users.json
+    if (this.usersService) {
+      await this.usersService.deleteUserByIdOrEmail(linkedUserId || linkedEmail || '');
+    }
+
+    return {
+      success: true,
+      message: `Đã xóa hồ sơ đại lý "${customer.name}" (${customer.code}) và tài khoản đăng nhập B2B liên kết thành công.`,
+      customerId: customer.id,
+    };
+  }
+
+  /**
+   * Ngừng giao dịch với đại lý (SN-30 AC4: Chuyển sang trạng thái INACTIVE)
+   */
+  async deactivateCustomer(id: string): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(id);
+    customer.status = CustomerStatus.INACTIVE;
+    customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers SET status = $1, updated_at = NOW() WHERE id = $2 OR code = $2;`,
+          [CustomerStatus.INACTIVE, id],
+        );
+      } catch {
+        // Fallback in-memory
+      }
+    }
+
+    if (this.usersService) {
+      void this.usersService.syncUserStatus(
+        customer.userId || customer.email || '',
+        UserStatus.INACTIVE,
+      );
+    }
+
+    return customer;
+  }
 }
+
 
 

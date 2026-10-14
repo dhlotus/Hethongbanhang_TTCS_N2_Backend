@@ -16,6 +16,8 @@ import { MoveProductsDto } from './dto/move-products.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { CategoryEntity } from './entities/category.entity';
 import { CategoryTreeNode } from './interfaces/category-tree.interface';
+import { ProductEntity } from '../products/entities/product.entity';
+import { PaginatedProductsResponse } from '../products/interfaces/paginated-products.interface';
 
 /**
  * Service Quản lý Nhóm Hàng Đa Cấp (Tree Structure) - SN-150 / SN-22 (Sprint 2):
@@ -155,18 +157,45 @@ export class CategoriesService implements OnModuleInit {
 
   /**
    * Lấy danh sách sản phẩm thuộc một nhóm hàng và toàn bộ nhóm con/cháu bên dưới
-   * GET /api/categories/:id/products
+   * Hỗ trợ phân trang: GET /api/categories/:id/products?page=...&limit=...
    */
-  async getProductsByCategoryId(idOrCode: string): Promise<any[]> {
+  async getProductsByCategoryId(
+    idOrCode: string,
+    page?: number,
+    limit?: number,
+  ): Promise<PaginatedProductsResponse | ProductEntity[]> {
     const category = await this.findById(idOrCode);
-    if (!this.productsService) return [];
+    if (!this.productsService) {
+      if (page !== undefined || limit !== undefined) {
+        return { data: [], total: 0, page: page || 1, limit: limit || 10, totalPages: 0 };
+      }
+      return [];
+    }
     const descendantIds = this.getDescendantIds(category.id);
     const targetIds = [category.id, ...descendantIds];
-    return this.productsService.findProductsByBranch(
+    const allProducts = this.productsService.findProductsByBranch(
       targetIds,
       category.code,
       category.name,
     );
+
+    if (page !== undefined || limit !== undefined) {
+      const p = Math.max(1, Number(page) || 1);
+      const l = Math.max(1, Number(limit) || 10);
+      const total = allProducts.length;
+      const totalPages = Math.ceil(total / l);
+      const start = (p - 1) * l;
+      const data = allProducts.slice(start, start + l);
+      return {
+        data,
+        total,
+        page: p,
+        limit: l,
+        totalPages,
+      };
+    }
+
+    return allProducts;
   }
 
   /**

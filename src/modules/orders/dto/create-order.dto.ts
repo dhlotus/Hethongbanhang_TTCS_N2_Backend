@@ -96,6 +96,42 @@ export class CreateOrderLineDto {
   @IsOptional()
   @IsNumber()
   stockAvailable?: number;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Số lượng thực giao phải là số' })
+  @Min(0, { message: 'Số lượng thực giao không được âm' })
+  deliveredQuantity?: number;
+
+  @IsOptional()
+  @IsString()
+  shortDeliveryReason?: string;
+}
+
+/**
+ * DTO cho sản phẩm đặt hàng từ Agency Portal
+ */
+export class CreateOrderItemDto {
+  @IsNotEmpty({ message: 'ID sản phẩm không được để trống' })
+  @IsString()
+  productId: string;
+
+  @IsNumber({}, { message: 'Số lượng phải là số' })
+  @Min(1, { message: 'Số lượng phải ≥ 1' })
+  quantity: number;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Đơn giá phải là số' })
+  @Min(0, { message: 'Đơn giá không được âm' })
+  price?: number;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Chiết khấu phải là số' })
+  @Min(0)
+  discountPercent?: number;
+
+  @IsOptional()
+  @IsString()
+  unit?: string;
 }
 
 /**
@@ -113,12 +149,23 @@ export class CreateOrderDto {
 
   @IsOptional()
   @IsString()
+  deliveryAddress?: string;
+
+  @IsOptional()
+  @IsString()
   deliveryDate?: string;
 
+  @IsOptional()
   @IsArray({ message: 'Danh sách dòng hàng phải là mảng' })
   @ValidateNested({ each: true })
   @Type(() => CreateOrderLineDto)
-  lines: CreateOrderLineDto[];
+  lines?: CreateOrderLineDto[];
+
+  @IsOptional()
+  @IsArray({ message: 'Danh sách sản phẩm phải là mảng' })
+  @ValidateNested({ each: true })
+  @Type(() => CreateOrderItemDto)
+  items?: CreateOrderItemDto[];
 
   @IsOptional()
   @IsString()
@@ -131,6 +178,18 @@ export class CreateOrderDto {
   @IsOptional()
   @IsEnum(OrderStatus, { message: 'Trạng thái đơn hàng không hợp lệ' })
   status?: OrderStatus;
+
+  @IsOptional()
+  @IsString()
+  salesRepId?: string;
+
+  @IsOptional()
+  @IsString()
+  salesRepName?: string;
+
+  @IsOptional()
+  @IsString()
+  createdSource?: string;
 }
 
 /**
@@ -145,3 +204,54 @@ export class UpdateOrderStatusDto {
   @IsString()
   reason?: string;
 }
+
+/**
+ * DTO đặt lại dòng hàng (Re-order item - SN-174)
+ */
+export class ReorderLineItemDto {
+  @IsNotEmpty({ message: 'Mã SKU không được để trống' })
+  @IsString()
+  productSku: string;
+
+  @IsOptional()
+  @IsString()
+  productId?: string;
+
+  @IsInt({ message: 'Số lượng đặt lại phải là số nguyên' })
+  @Min(1, { message: 'Số lượng đặt lại phải ≥ 1' })
+  quantity: number;
+
+  @IsOptional()
+  @IsString()
+  unit?: string;
+}
+
+/**
+ * DTO đặt lại đơn hàng cũ (Re-order - SN-174)
+ */
+export class ReorderDto {
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReorderLineItemDto)
+  items?: ReorderLineItemDto[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  selectedLineIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  deliveryDate?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DeliveryPointInputDto)
+  deliveryPoint?: DeliveryPointInputDto;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+

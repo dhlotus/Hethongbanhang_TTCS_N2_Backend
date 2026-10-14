@@ -12,6 +12,7 @@ import * as path from 'path';
 import { BCRYPT_SALT_ROUNDS } from '../../common/constants/auth.constant';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
+import { DatabaseService } from '../../database/database.service';
 import { MailService } from '../mail/mail.service';
 import {
   AVATAR_MESSAGES,
@@ -134,13 +135,20 @@ export class UsersService implements OnModuleInit {
     ],
   ]);
 
-  constructor(@Optional() private readonly mailService?: MailService) {
+  constructor(
+    @Optional() private readonly mailService?: MailService,
+    @Optional() private readonly dbService?: DatabaseService,
+  ) {
     this.seedInitialUsersSync();
   }
 
   async onModuleInit(): Promise<void> {
     if (this.users.size === 0) {
       this.seedInitialUsersSync();
+    }
+    this.loadUsersFromDisk();
+    if (this.dbService?.isConnected()) {
+      await this.loadUsersFromDatabase();
     }
   }
 
@@ -193,11 +201,50 @@ export class UsersService implements OnModuleInit {
         id: 'usr-sales-002',
         email: 'sales@loha.vn',
         username: 'sales',
-        fullName: 'Trần Văn Nam (Nhân Viên Kinh Doanh)',
+        fullName: 'Trần Văn Nam',
         phone: '0923456789',
         role: UserRole.SALES_REP,
         status: UserStatus.ACTIVE,
-        assignedWarehouse: 'Địa bàn TP. Hồ Chí Minh',
+        assignedWarehouse: 'Địa bàn Miền Bắc',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-sale-01',
+        email: 'long.tran@loha.vn',
+        username: 'long_tran',
+        fullName: 'Trần Văn Long',
+        phone: '0907000001',
+        role: UserRole.SALES_REP,
+        status: UserStatus.ACTIVE,
+        assignedWarehouse: 'Địa bàn Miền Nam',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-sale-02',
+        email: 'hang.nguyen@loha.vn',
+        username: 'hang_nguyen',
+        fullName: 'Nguyễn Thị Hằng',
+        phone: '0907000002',
+        role: UserRole.SALES_REP,
+        status: UserStatus.ACTIVE,
+        assignedWarehouse: 'Địa bàn Miền Nam',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-sale-03',
+        email: 'tuan.pham@loha.vn',
+        username: 'tuan_pham',
+        fullName: 'Phạm Minh Tuấn',
+        phone: '0907000003',
+        role: UserRole.SALES_REP,
+        status: UserStatus.ACTIVE,
+        assignedWarehouse: 'Địa bàn Miền Bắc',
         passwordHash,
         failedAttempts: 0,
         lockedUntil: null,
@@ -206,7 +253,7 @@ export class UsersService implements OnModuleInit {
         id: 'usr-salesmgr-003',
         email: 'salesmanager@loha.vn',
         username: 'salesmanager',
-        fullName: 'Lê Hoàng Trưởng Phòng (Quản Lý Kinh Doanh)',
+        fullName: 'Lê Hoàng',
         phone: '0934567890',
         role: UserRole.SALES_MANAGER,
         status: UserStatus.ACTIVE,
@@ -252,18 +299,6 @@ export class UsersService implements OnModuleInit {
         failedAttempts: 0,
         lockedUntil: null,
       },
-      {
-        id: 'usr-cust-007',
-        email: 'dealer@loha.vn',
-        username: 'dealer',
-        fullName: 'Đại Lý Cửa Hàng Minh Khang (B2B)',
-        phone: '0978901234',
-        role: UserRole.CUSTOMER,
-        status: UserStatus.ACTIVE,
-        passwordHash,
-        failedAttempts: 0,
-        lockedUntil: null,
-      },
     ];
 
     for (const user of initialUsers) {
@@ -293,8 +328,29 @@ export class UsersService implements OnModuleInit {
       const content = fs.readFileSync(filePath, 'utf-8');
       if (!content.trim()) return;
       const rawList: Array<Partial<UserEntity>> = JSON.parse(content);
+      
+      const isMock = (fullName?: string, username?: string) => {
+        if (!fullName && !username) return false;
+        return (
+          /Nhân Viên \d+/i.test(fullName || '') ||
+          /vũ văn bảy/i.test(fullName || '') ||
+          /nguyễn văn một/i.test(fullName || '') ||
+          /nguyen van a/i.test(fullName || '') ||
+          (username || '').startsWith('employee_') ||
+          (username || '').startsWith('test_')
+        );
+      };
+
+      // Dọn sạch các user mock khỏi Map
+      for (const [id, u] of this.users.entries()) {
+        if (isMock(u.fullName, u.username)) {
+          this.users.delete(id);
+        }
+      }
+
       for (const item of rawList) {
         if (!item.id) continue;
+        if (isMock(item.fullName, item.username)) continue;
         const existing = this.users.get(item.id);
         if (existing) {
           Object.assign(existing, {
@@ -318,6 +374,95 @@ export class UsersService implements OnModuleInit {
       fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
     } catch (err) {
       console.warn('[USERS_SERVICE] Lỗi khi lưu dữ liệu người dùng ra đĩa:', err);
+    }
+  }
+
+  private async loadUsersFromDatabase(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      const rows = await this.dbService.query<{
+        id: string;
+        username: string;
+        email: string;
+        password_hash: string;
+        full_name: string;
+        phone: string | null;
+        role_code: string;
+        status: string;
+        failed_attempts: number;
+        locked_until: Date | null;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT u.id, u.username, u.email, u.password_hash, u.full_name, u.phone,
+                r.code as role_code, u.status, u.failed_attempts, u.locked_until,
+                u.created_at, u.updated_at
+         FROM users u
+         JOIN roles r ON u.role_id = r.id;`,
+      );
+
+      for (const row of rows) {
+        const entity = new UserEntity({
+          id: row.id,
+          username: row.username,
+          email: row.email,
+          fullName: row.full_name,
+          phone: row.phone || undefined,
+          role: (row.role_code as UserRole) || UserRole.SALES_REP,
+          roles: [(row.role_code as UserRole) || UserRole.SALES_REP],
+          status: (row.status as UserStatus) || UserStatus.ACTIVE,
+          passwordHash: row.password_hash,
+          failedAttempts: row.failed_attempts || 0,
+          lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
+          createdAt: new Date(row.created_at),
+          updatedAt: new Date(row.updated_at),
+        });
+        this.users.set(entity.id, entity);
+      }
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi nạp users từ PostgreSQL:', err);
+    }
+  }
+
+  public async saveUserToDatabase(user: UserEntity): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      const roleIdMap: Record<string, number> = {
+        ADMIN: 1,
+        SALES_MANAGER: 2,
+        SALES_REP: 3,
+        WAREHOUSE_MANAGER: 4,
+        WAREHOUSE_KEEPER: 5,
+        ACCOUNTANT: 6,
+        CUSTOMER: 7,
+      };
+      const roleId = roleIdMap[user.role] || 3;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
+      const userId = isUuid ? user.id : crypto.randomUUID();
+
+      await this.dbService.query(
+        `INSERT INTO users (id, username, email, password_hash, full_name, phone, role_id, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (username) DO UPDATE
+         SET email = EXCLUDED.email,
+             full_name = EXCLUDED.full_name,
+             phone = EXCLUDED.phone,
+             role_id = EXCLUDED.role_id,
+             status = EXCLUDED.status,
+             updated_at = CURRENT_TIMESTAMP`,
+        [
+          userId,
+          user.username,
+          user.email,
+          user.passwordHash,
+          user.fullName,
+          user.phone || null,
+          roleId,
+          user.status,
+        ],
+      );
+    } catch (dbErr) {
+      console.warn('[USERS_SERVICE] Lỗi lưu user vào PostgreSQL:', dbErr);
     }
   }
 
@@ -408,8 +553,6 @@ export class UsersService implements OnModuleInit {
     'quanlykho@loha.vn': 'warehousemanager@loha.vn',
     'ketoan@loha.vn': 'accountant@loha.vn',
     'ketoancongno@loha.vn': 'accountant@loha.vn',
-    'daily@loha.vn': 'dealer@loha.vn',
-    'khachhang@loha.vn': 'dealer@loha.vn',
   };
 
   /**
@@ -558,6 +701,18 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('Vai trò người dùng không được để trống.');
     }
 
+    // 2.1. Rào chắn bảo mật: Chặn cứng tạo tài khoản Đại lý / Khách hàng B2B (CUSTOMER / AGENCY) qua API nhân sự
+    const hasForbiddenRole = roles.some((r) => {
+      const roleStr = String(r).toUpperCase();
+      return roleStr === UserRole.CUSTOMER || roleStr === 'CUSTOMER' || roleStr === 'AGENCY';
+    });
+
+    if (hasForbiddenRole) {
+      throw new BadRequestException(
+        'Không được phép tạo tài khoản Đại lý / Khách hàng B2B qua tính năng quản lý nhân sự. Tài khoản Đại lý chỉ được cấp tự động thông qua quy trình tạo Hồ sơ Đại lý.',
+      );
+    }
+
     // 3. Ràng buộc cứng: Nhân sự thuộc vai trò kho bắt buộc phải gắn với ít nhất một kho
     const isWarehouseStaff =
       roles.includes(UserRole.WAREHOUSE_KEEPER) ||
@@ -597,6 +752,7 @@ export class UsersService implements OnModuleInit {
     this.users.set(newUser.id, newUser);
     if (!options?.skipDiskSync) {
       this.saveUsersToDisk();
+      await this.saveUserToDatabase(newUser);
     }
 
     // 5. Gửi email kích hoạt tài khoản kèm mật khẩu tạm tới hộp thư nhân viên mới
@@ -632,10 +788,15 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Lưu toàn bộ dữ liệu người dùng ra đĩa (Dùng sau khi hoàn thành batch import)
+   * Lưu toàn bộ dữ liệu người dùng ra đĩa và cơ sở dữ liệu PostgreSQL (Dùng sau khi hoàn thành batch import)
    */
-  public flushUsersToDisk(): void {
+  public async flushUsersToDisk(): Promise<void> {
     this.saveUsersToDisk();
+    if (this.dbService?.isConnected()) {
+      for (const user of this.users.values()) {
+        await this.saveUserToDatabase(user);
+      }
+    }
   }
 
 
@@ -768,8 +929,9 @@ export class UsersService implements OnModuleInit {
     user.updatedAt = new Date();
     this.users.set(user.id, user);
 
-    // Lưu dữ liệu cập nhật ra đĩa vĩnh viễn
+    // Lưu dữ liệu cập nhật ra đĩa và PostgreSQL vĩnh viễn
     this.saveUsersToDisk();
+    await this.saveUserToDatabase(user);
 
     return user.toSafeUser();
   }
@@ -867,6 +1029,7 @@ export class UsersService implements OnModuleInit {
 
     this.users.set(user.id, user);
     this.saveUsersToDisk();
+    await this.saveUserToDatabase(user);
 
     // 3. Kiểm tra đại lý do nhân sự phụ trách khi khóa (SN-15)
     const assignedCustomers = this.getAssignedCustomers(user.id);
@@ -1099,6 +1262,132 @@ export class UsersService implements OnModuleInit {
     this.users.set(user.id, user);
 
     return user.toSafeUser();
+  }
+
+  /**
+   * Tạo tài khoản Đại lý B2B đồng bộ (gọi tự động từ CustomersService khi tạo đại lý mới)
+   */
+  async createDealerUser(data: {
+    id: string;
+    email: string;
+    username: string;
+    fullName: string;
+    phone?: string;
+    passwordHash: string;
+    customerId?: string;
+    customerCode?: string;
+    status?: UserStatus;
+  }): Promise<UserEntity> {
+    const entity = new UserEntity({
+      id: data.id,
+      email: data.email,
+      username: data.username,
+      fullName: data.fullName,
+      phone: data.phone || '',
+      passwordHash: data.passwordHash,
+      role: UserRole.CUSTOMER,
+      roles: [UserRole.CUSTOMER],
+      status: data.status || UserStatus.ACTIVE,
+      customerId: data.customerId || null,
+      customerCode: data.customerCode || null,
+      failedAttempts: 0,
+      lockedUntil: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    this.users.set(entity.id, entity);
+    this.saveUsersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      await this.saveUserToDatabase(entity);
+    }
+
+    return entity;
+  }
+
+  /**
+   * Xóa tài khoản người dùng theo ID hoặc Email (dùng khi xóa hồ sơ đại lý)
+   */
+  async deleteUserByIdOrEmail(userIdOrEmail: string): Promise<boolean> {
+    const rawNormalized = (userIdOrEmail || '').trim().toLowerCase();
+    if (!rawNormalized) return false;
+
+    let targetUserId: string | null = null;
+    for (const user of this.users.values()) {
+      if (
+        user.id.toLowerCase() === rawNormalized ||
+        user.email.toLowerCase() === rawNormalized ||
+        user.username.toLowerCase() === rawNormalized
+      ) {
+        targetUserId = user.id;
+        break;
+      }
+    }
+
+    if (!targetUserId) return false;
+
+    this.users.delete(targetUserId);
+    this.saveUsersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `DELETE FROM users WHERE id::text = $1 OR LOWER(email) = $2 OR LOWER(username) = $2`,
+          [targetUserId, rawNormalized],
+        );
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi xóa user khỏi DB:', err);
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Đồng bộ trạng thái tài khoản người dùng (ACTIVE, LOCKED, INACTIVE)
+   */
+  async syncUserStatus(
+    userIdOrEmail: string,
+    status: UserStatus,
+    lockReason?: string,
+  ): Promise<void> {
+    const rawNormalized = (userIdOrEmail || '').trim().toLowerCase();
+    if (!rawNormalized) return;
+
+    let targetUser: UserEntity | null = null;
+    for (const user of this.users.values()) {
+      if (
+        user.id.toLowerCase() === rawNormalized ||
+        user.email.toLowerCase() === rawNormalized ||
+        user.username.toLowerCase() === rawNormalized
+      ) {
+        targetUser = user;
+        break;
+      }
+    }
+
+    if (!targetUser) return;
+
+    targetUser.status = status;
+    if (lockReason !== undefined) {
+      targetUser.lockReason = lockReason;
+    }
+    targetUser.updatedAt = new Date();
+    this.users.set(targetUser.id, targetUser);
+    this.saveUsersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE users SET status = $1, updated_at = NOW()
+           WHERE id::text = $2 OR LOWER(email) = $3`,
+          [status, targetUser.id, rawNormalized],
+        );
+      } catch (err) {
+        // Fallback in-memory
+      }
+    }
   }
 }
 

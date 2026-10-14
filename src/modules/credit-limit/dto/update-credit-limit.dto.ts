@@ -8,7 +8,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 /**
  * DTO Khai báo & Cập nhật Hạn mức Công nợ Đại lý (SN-34)
@@ -36,7 +36,8 @@ export class UpdateCreditLimitDto {
   /**
    * Lý do thay đổi hạn mức công nợ (BẮT BUỘC cho kiểm toán)
    */
-  @IsNotEmpty({ message: 'Lý do thay đổi hạn mức là bắt buộc' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsNotEmpty({ message: 'Lý do thay đổi hạn mức là bắt buộc và không được để trống' })
   @IsString({ message: 'Lý do thay đổi phải là chuỗi ký tự' })
   @MinLength(5, { message: 'Lý do thay đổi phải có ít nhất 5 ký tự' })
   reason: string;

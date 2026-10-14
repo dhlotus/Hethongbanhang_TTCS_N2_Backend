@@ -31,7 +31,7 @@ import { PriceBooksService } from './price-books.service';
  * - /api/price-lists
  * - /api/price-books
  */
-@Controller(['price-lists', 'price-books'])
+@Controller('price-books')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class PriceBooksController {
   constructor(private readonly priceBooksService: PriceBooksService) {}

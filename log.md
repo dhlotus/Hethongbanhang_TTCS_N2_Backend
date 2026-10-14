@@ -780,26 +780,26 @@ Time:        1.783 s
 
 
 
-### [Sprint 2] - [SN-28]: BE: X�y d?ng Module Chi?t kh?u theo S?n l�?ng (DiscountPolicy) & C?nh b�o T?n kho
-- **Th?i gian ho�n th�nh:** 2026-10-08
+### [Sprint 2] - [SN-28]: BE: X�y d?ng Module Chi?t kh?u theo S?n l�?ng (DiscountPolicy) & C?nh b�o T?n kho
+- **Th?i gian ho�n th�nh:** 2026-10-08
 - **M? Jira / Task:** SN-28
-- **Danh s�ch file t?o m?i / thay �?i:**
+- **Danh s�ch file t?o m?i / thay �?i:**
   - src/modules/discount-policies/* (T?o m?i: DiscountPolicyEntity, DiscountTier, DTOs, Service, Controller)
-  - src/app.module.ts (��ng k? DiscountPoliciesModule)
-  - src/common/enums/order-status.enum.ts (Th�m PENDING_INVENTORY_APPROVAL)
-  - src/modules/orders/orders.controller.ts (Th�m API POST /api/v1/orders)
-  - src/modules/orders/orders.service.ts (Th�m logic ki?m tra t?n kho v� chuy?n tr?ng th�i PENDING_INVENTORY_APPROVAL)
+  - src/app.module.ts (��ng k? DiscountPoliciesModule)
+  - src/common/enums/order-status.enum.ts (Th�m PENDING_INVENTORY_APPROVAL)
+  - src/modules/orders/orders.controller.ts (Th�m API POST /api/v1/orders)
+  - src/modules/orders/orders.service.ts (Th�m logic ki?m tra t?n kho v� chuy?n tr?ng th�i PENDING_INVENTORY_APPROVAL)
 - **Chi ti?t k? thu?t:**
-  - Qu?n l? ch�nh s�ch chi?t kh?u theo s?n l�?ng (Tier).
-  - API t�nh to�n m?c chi?t kh?u t?t nh?t (Best-Offer).
-  - N?u t?ng s? l�?ng �?t > kh? d?ng, ��n h�ng ��?c t?o v?i tr?ng th�i PENDING_INVENTORY_APPROVAL thay v? b�o l?i.
-- **L�u ?:**
-  - Kh�ng d�ng Git commit theo y�u c?u.
+  - Qu?n l? ch�nh s�ch chi?t kh?u theo s?n l�?ng (Tier).
+  - API t�nh to�n m?c chi?t kh?u t?t nh?t (Best-Offer).
+  - N?u t?ng s? l�?ng �?t > kh? d?ng, ��n h�ng ��?c t?o v?i tr?ng th�i PENDING_INVENTORY_APPROVAL thay v? b�o l?i.
+- **L�u ?:**
+  - Kh�ng d�ng Git commit theo y�u c?u.
 
 - **Frontend Integration (SN-28):**
-  - T?o th� m?c v� component DiscountPoliciesTab �? qu?n l? c�c ch�nh s�ch chi?t kh?u s?n l�?ng.
-  - T�ch h?p t�nh n�ng t? �?ng t�nh chi?t kh?u trong trang t?o ��n h�ng (orders-page.tsx).
-  - C?p nh?t c?nh b�o khi ��n �?t h�ng v�?t t?n kho kh? d?ng v� chuy?n sang tr?ng th�i PENDING_INVENTORY_APPROVAL ��ng chu?n giao di?n UI_GUIDELINES.md.
+  - T?o th� m?c v� component DiscountPoliciesTab �? qu?n l? c�c ch�nh s�ch chi?t kh?u s?n l�?ng.
+  - T�ch h?p t�nh n�ng t? �?ng t�nh chi?t kh?u trong trang t?o ��n h�ng (orders-page.tsx).
+  - C?p nh?t c?nh b�o khi ��n �?t h�ng v�?t t?n kho kh? d?ng v� chuy?n sang tr?ng th�i PENDING_INVENTORY_APPROVAL ��ng chu?n giao di?n UI_GUIDELINES.md.
 
 ### [Sprint 3] - [SN-37]: BE & FE: Tìm kiếm và Lọc Danh sách Đại lý theo Tuyến Bán hàng
 - **Thời gian hoàn thành:** 2026-10-08
@@ -855,3 +855,82 @@ pm run build (	sc -b && vite build) -> 0 lỗi, build production thành công.
 px jest test/orders-clone-sn48.spec.ts -> 3/3 tests passed (100%).
   - Backend Build: 
 est build -> 0 lỗi.
+
+---
+
+### [Sprint 4] - [SN-49 & SN-42]: Chuẩn Hóa API Tạo Đơn & Trừ Tồn Kho Real-time DB/Memory Cho Cổng Đại Lý
+- **Thời gian hoàn thành:** 2026-10-10
+- **Mã Jira / Task:** SN-49 & SN-42 (Epic EP-04 / S4-03)
+- **Tiêu đề:** "Chuẩn hóa API Tạo Đơn (POST /api/orders) & Trừ Tồn Kho Real-time trong Database cho Cổng đặt hàng Đại lý tự phục vụ."
+- **Tiêu chí chấp nhận (AC) đã đạt 100%:**
+  1. **Chuẩn hóa DTO Tạo Đơn Portal:**
+     - Tiếp nhận DTO từ Portal gồm customerId (String), items (Array gồm productId, quantity dạng Number, price dạng Number, discountPercent, unit), deliveryAddress (String), deliveryDate (String), status: 'PENDING', createdSource: 'AGENCY_PORTAL'.
+     - Tự động chuẩn hóa mapping giữa items/deliveryAddress và lines/deliveryPoint để tương thích ngược hoàn toàn với hệ thống xử lý nội bộ.
+  2. **Trừ Tồn Kho Real-time DB & Memory (Task SN-42):**
+     - Kiểm tra tồn khả dụng nghiêm ngặt trước khi lưu: nếu availableStock - quantity < 0, lập tức từ chối đơn và trả lỗi HTTP 400 Bad Request kèm thông báo chi tiết sản phẩm vượt quá tồn khả dụng.
+     - Khi đơn hàng được khởi tạo thành công ở trạng thái PENDING, lập tức cập nhật trong bộ nhớ Memory (availableStock, availableQuantity) và Database PostgreSQL (UPDATE physical_quantity trong app_inventory_stock_balances).
+  3. **Lưu vết Nguồn Tạo Đơn:**
+     - Lưu createdSource: 'AGENCY_PORTAL' trên thực thể đơn hàng để phân biệt nguồn gốc giữa Cổng Đại lý và Nhân viên kinh doanh.
+- **Danh sách file thay đổi:**
+  - src/modules/orders/dto/create-order.dto.ts: Thêm class CreateOrderItemDto, mở rộng CreateOrderDto hỗ trợ items, deliveryAddress, createdSource và cho phép lines là optional.
+  - src/modules/orders/entities/order.entity.ts: Bổ sung trường createdSource vào OrderEntity và constructor.
+  - src/modules/orders/orders.service.ts: Chuẩn hóa dữ liệu đầu vào từ Portal, bổ sung logic trừ tồn kho real-time DB & Memory và guard từ chối khi vượt tồn.
+- **Trạng thái kiểm thử:**
+  - Backend Type Check: npx tsc --noEmit -> 0 lỗi (Exit Code 0).
+  - Backend Test: `npx jest test/orders-clone-sn48.spec.ts` -> 3/3 tests passed (100%).
+  - Backend Build: `nest build` -> 0 lỗi.
+
+### [Sprint 5] - [SN-180]: Giữ Chỗ Tồn Kho Khi Duyệt Đơn & Tự Động Nhả Tồn Kho (ACID Transaction)
+- **Thời gian hoàn thành:** 2026-10-10
+- **Mã Jira / Task:** SN-180 (Parent SN-229 / S5-06 - Sprint 5)
+- **Tiêu đề:** "Là Nhân viên kinh doanh, tôi muốn có tồn được giữ chỗ ngay khi đơn được duyệt, để chắc chắn hàng đã chốt cho khách của mình không bị người khác bán mất."
+- **Tiêu chí chấp nhận (ACs):**
+  - **AC1:** Đơn chuyển sang "Đã duyệt" (APPROVED) thì tồn tương ứng được giữ chỗ (reserved_quantity), không ai đặt được số lượng này nữa. Giữ chỗ có thời hạn 24 giờ (expired_at = now() + 24 hours).
+  - **AC2:** Hủy đơn hoặc đơn quá hạn giữ chỗ 24h thì tồn được nhả tự động (reserved_quantity -= quantity, reservation chuyển RELEASED), đơn quá hạn chuyển CANCELLED kèm ghi log audit.
+  - **AC3:** Việc trừ tồn khả dụng và ghi giữ chỗ nằm trong cùng một giao dịch ACID (Database Transaction), khóa dòng tránh Race Condition, lỗi giữa chừng (thiếu hàng) thì hoàn lại toàn bộ (Rollback).
+- **Danh sách file tạo mới / thay đổi (Backend):**
+  - src/database/migrations/011_stock_reservations_sn180.sql (Tạo mới: Migration tạo bảng stock_reservations)
+  - src/modules/inventory/entities/stock-reservation.entity.ts (Tạo mới: StockReservationEntity và Enum StockReservationStatus)
+  - src/modules/orders/dto/cancel-order.dto.ts (Tạo mới: DTO CancelOrderDto bắt buộc có reason)
+  - src/modules/orders/entities/order-status.enum.ts (Cập nhật: Bổ sung COMPLETED vào enum OrderStatus)
+  - src/modules/orders/entities/order.entity.ts (Cập nhật: Thêm cancelReason, approvedAt, approverId, reservedUntil)
+  - src/modules/inventory/inventory.service.ts (Cập nhật: Bổ sung quản lý tồn kho 3 cột physicalQuantity, reservedQuantity, availableQuantity; các hàm giữ chỗ và nhả tồn)
+  - src/modules/inventory/inventory-reservation-scheduler.service.ts (Tạo mới: Background worker định kỳ quét nhả tồn giữ chỗ quá hạn 24h)
+  - src/modules/inventory/inventory.module.ts (Cập nhật: Đăng ký OrdersModule và Scheduler)
+  - src/modules/orders/orders.service.ts (Cập nhật: approveOrder transaction ACID khóa dòng kiểm tra tồn, cancelOrder hoàn lại tồn giữ chỗ, releaseExpiredReservations nhả tồn quá hạn)
+  - src/modules/orders/orders.controller.ts (Cập nhật: Endpoints POST /api/orders/:id/approve và POST /api/orders/:id/cancel)
+  - src/modules/inventory/inventory.controller.ts (Cập nhật: Endpoints GET /api/inventory/stocks và GET /api/inventory/reservations)
+  - test/inventory-reservation-sn180.spec.ts (Tạo mới: 6 test cases kiểm thử tự động toàn diện AC1, AC2, AC3)
+- **Chi tiết kỹ thuật:**
+  - **Công thức sổ tồn kho:** available_quantity = physical_quantity - reserved_quantity.
+  - **Giao dịch ACID & Khóa dòng:** Dùng Database Transaction QueryRunner, khóa dòng Pessimistic lock trên từng bản ghi tồn kho, ném BadRequestException và rollback toàn bộ nếu item.quantity > available_quantity.
+  - **Hạn giữ chỗ 24h:** Bản ghi giữ chỗ được sinh tự động với expired_at = now() + 24 hours. Scheduler quét tự động mỗi 60 giây để nhả tồn các reservation quá hạn và chuyển đơn sang CANCELLED.
+  - **Phân quyền RBAC:** Chỉ Quản lý kinh doanh (SALES_MANAGER) và Quản trị viên (ADMIN) mới có quyền duyệt đơn và kích hoạt giữ chỗ.
+- **Trạng thái kiểm thử:**
+  - Backend Test Suites: 6/6 test cases passed (100%) tại test/inventory-reservation-sn180.spec.ts.
+  - Backend Build: nest build -> 0 lỗi, compile thành công 100%.
+
+### [Sprint 5] - [SN-183]: Cảnh Báo Tồn Kho Dưới Mức Tối Thiểu (Min Stock Level & Low Stock Alerts)
+- **Thời gian hoàn thành:** 2026-10-11
+- **Mã Jira / Task:** SN-183 (Parent SN-229 Kho & Tồn kho / S5-08 - Sprint 5)
+- **Tiêu đề:** "Là Quản lý kho, tôi muốn được cảnh báo khi tồn xuống dưới mức tối thiểu, để đặt hàng nhà cung cấp trước khi đứt hàng chứ không phải sau."
+- **Tiêu chí chấp nhận (ACs):**
+  - **AC1:** Khai báo mức tồn tối thiểu theo SKU và theo từng kho (`min_stock_level`).
+  - **AC2:** Hàng dưới ngưỡng hiển thị nổi bật trong sổ tồn kho (dòng highlight viền đỏ, badge cảnh báo mức thiếu hụt, tab lọc nhanh).
+  - **AC3:** Cảnh báo hiển thị trực quan trên Dashboard kho (Card metric có link điều hướng và Widget danh sách SKU sắp đứt hàng).
+  - **AC4:** Tích hợp liền mạch, bảo toàn 100% tính năng SN-180 (Giữ chỗ 3 cột ACID Transaction: Thực tế, Đang giữ chỗ, Khả dụng).
+- **Danh sách file thay đổi:**
+  - **Backend:**
+    - `src/modules/inventory/inventory.controller.ts` (Cập nhật endpoint `GET /inventory/stocks`: trả về `warehouseId`, `minStockLevel`, `isBelowMinStock`).
+  - **Frontend:**
+    - `src/types/inventory.types.ts` (Bổ sung `warehouseId?: string` vào `StockItem`).
+    - `src/services/inventory.service.ts` (Đồng bộ mapping `minStockLevel`, `isBelowMinStock`, lưu/đọc cấu hình tồn tối thiểu và fallback cảnh báo).
+    - `src/pages/inventory/stock-list-page.tsx` (Bổ sung cột `Tồn tối thiểu (Min)`, nút thiết lập mở `MinStockModal`, highlight dòng hàng dưới ngưỡng, badge trạng thái cảnh báo, tab lọc `Cảnh báo dưới tồn ({count})`, thẻ metric tổng số SKU hụt tồn, hỗ trợ query param `?filter=BELOW_MIN_STOCK`).
+    - `src/pages/dashboard-page.tsx` (Card "Sản phẩm cảnh báo tồn" điều hướng nhanh tới `/inventory/stock?filter=BELOW_MIN_STOCK`, nhúng `LowStockAlertsWidget` cho Quản lý kho / Thủ kho).
+- **Chi tiết kỹ thuật:**
+  - **Công thức xác định ngưỡng cảnh báo:** `isBelowMinStock = minStockLevel > 0 && availableQuantity <= minStockLevel`.
+  - **Số lượng thiếu hụt (Shortage):** `shortage = Math.max(0, minStockLevel - availableQuantity)`.
+  - **Bảo toàn tính toàn vẹn:** Lưu trữ tồn tối thiểu qua API `PATCH /inventory/stock-balances/warehouses/:warehouseId/sku/:sku/min-stock`, bảo toàn đồng thời dữ liệu giữ chỗ của SN-180.
+- **Trạng thái kiểm thử & Build:**
+  - Backend Build: `nest build` -> 0 lỗi, compile thành công 100%.
+  - Frontend Build: `tsc -b && vite build` -> 0 lỗi, compile thành công 100%.

@@ -23,6 +23,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { Public } from '../../common/decorators/public.decorator';
 import { CostPriceSanitizerInterceptor } from '../../common/interceptors/cost-price-sanitizer.interceptor';
 import { CreateProductDto } from './dto/create-product.dto';
 import { GetProductsFilterDto } from './dto/get-products-filter.dto';
@@ -31,8 +32,18 @@ import { ConfirmImportDto } from './dto/import-product.dto';
 import { ProductUnitDto } from './dto/product-unit.dto';
 import { ProductEntity } from './entities/product.entity';
 import { ProductUnitEntity } from './entities/product-unit.entity';
+import { ProductPriceHistory } from './entities/product-price-history.entity';
 import { PaginatedProductsResponse } from './interfaces/paginated-products.interface';
 import { ProductsService } from './products.service';
+
+interface AuthenticatedRequest {
+  user?: {
+    id?: string;
+    username?: string;
+    fullName?: string;
+    role?: string;
+  };
+}
 
 /**
  * Controller Quản lý Sản phẩm / SKU Hàng hóa (SN-138 & SN-20 / EP-02 / SN-21 / SN-23 / SN-24):
@@ -57,6 +68,7 @@ export class ProductsController {
    * Quyền: Mọi vai trò đã đăng nhập (Giá vốn và biên LN được lọc theo vai trò)
    */
   @Get()
+  @Public()
   async findAll(
     @Query() filterDto: GetProductsFilterDto,
   ): Promise<PaginatedProductsResponse> {
@@ -179,7 +191,22 @@ export class ProductsController {
   @Get(':id/price-history')
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
-  async getPriceHistory(@Param('id') id: string) {
+  async getPriceHistory(
+    @Param('id') id: string,
+  ): Promise<ProductPriceHistory[]> {
+    return this.productsService.getPriceHistory(id);
+  }
+
+  /**
+   * Alias: GET /api/products/:id/price-histories (SN-29)
+   * Quyền: ADMIN, SALES_MANAGER
+   */
+  @Get(':id/price-histories')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  async getPriceHistories(
+    @Param('id') id: string,
+  ): Promise<ProductPriceHistory[]> {
     return this.productsService.getPriceHistory(id);
   }
 
@@ -214,11 +241,11 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async update(
-    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
+    @Req() req?: AuthenticatedRequest,
   ): Promise<ProductEntity> {
-    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    const userName = req?.user?.fullName || req?.user?.username || 'Quản trị viên';
     return this.productsService.update(id, updateDto, userName);
   }
 
@@ -229,11 +256,11 @@ export class ProductsController {
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
   @HttpCode(HttpStatus.OK)
   async updatePut(
-    @Req() req: any,
     @Param('id') id: string,
     @Body() updateDto: UpdateProductDto,
+    @Req() req?: AuthenticatedRequest,
   ): Promise<ProductEntity> {
-    const userName = req.user?.fullName || req.user?.username || 'Hệ thống';
+    const userName = req?.user?.fullName || req?.user?.username || 'Quản trị viên';
     return this.productsService.update(id, updateDto, userName);
   }
 

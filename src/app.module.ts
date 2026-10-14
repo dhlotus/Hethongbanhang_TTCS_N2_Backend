@@ -19,6 +19,11 @@ import { DiscountPoliciesModule } from './modules/discount-policies/discount-pol
 import { CreditLimitModule } from './modules/credit-limit/credit-limit.module';
 import { DatabaseModule } from './database/database.module';
 import { MailModule } from './modules/mail/mail.module';
+import { AgencyModule } from './modules/agencies/agency.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { GoodsReceiptsModule } from './modules/inventory-receipts/goods-receipts.module';
+import { WarehousesModule } from './modules/warehouses/warehouses.module';
+import { InternalTransfersModule } from './modules/inventory-transfers/internal-transfers.module';
 
 @Module({
   imports: [
@@ -35,6 +40,8 @@ import { MailModule } from './modules/mail/mail.module';
     CreditLimitModule,
     OrdersModule,
     InventoryModule,
+    GoodsReceiptsModule,
+    InternalTransfersModule,
     SuppliersModule,
     DiscountPoliciesModule,
     ShipmentsModule,
@@ -42,6 +49,9 @@ import { MailModule } from './modules/mail/mail.module';
     ReturnsModule,
     ReportsModule,
     AuditLogsModule,
+    AgencyModule,
+    DashboardModule,
+    WarehousesModule,
   ],
 })
 export class AppModule { }

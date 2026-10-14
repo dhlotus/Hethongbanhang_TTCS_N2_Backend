@@ -8,7 +8,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { Public } from '../../common/decorators/public.decorator';
 
-@Controller('api/v1/discount-policies')
+@Controller(['api/v1/discount-policies', 'v1/discount-policies', 'discount-policies'])
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class DiscountPoliciesController {
   constructor(private readonly discountPoliciesService: DiscountPoliciesService) {}
@@ -20,13 +20,13 @@ export class DiscountPoliciesController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  @Public()
   findAll() {
     return this.discountPoliciesService.findAll();
   }
 
   @Get(':id')
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  @Public()
   findOne(@Param('id') id: string) {
     return this.discountPoliciesService.findById(id);
   }
@@ -39,20 +39,27 @@ export class DiscountPoliciesController {
 
   @Delete(':id')
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
-  remove(@Param('id') id: string) {
-    this.discountPoliciesService.remove(id);
+  async remove(@Param('id') id: string) {
+    await this.discountPoliciesService.remove(id);
     return { success: true };
   }
 
   @Post('calculate')
   @Public()
-  calculateDiscount(@Body() body: { productId: string; productSku?: string; categoryId: string; quantity: number }) {
-    const discount = this.discountPoliciesService.calculateBestDiscount(
-      body.productId,
-      body.categoryId,
-      body.quantity,
-      body.productSku,
-    );
-    return { discount };
+  calculateDiscount(@Body() body: any) {
+    const result = this.discountPoliciesService.calculateFinalPriceAndDiscount({
+      productId: body.productId,
+      productSku: body.productSku,
+      productName: body.productName,
+      categoryId: body.categoryId || '',
+      quantity: Number(body.quantity) || 1,
+      listPrice: body.listPrice !== undefined ? Number(body.listPrice) : undefined,
+      agencyId: body.agencyId,
+      customerId: body.customerId,
+    });
+    return {
+      discount: result.discountPercent,
+      ...result,
+    };
   }
 }

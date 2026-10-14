@@ -1,12 +1,12 @@
-import { IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Min, ValidateIf } from 'class-validator';
 
 /**
  * DTO Thêm mới Đại lý (SN-35)
  */
 export class CreateCustomerDto {
-  @IsNotEmpty({ message: 'Mã đại lý không được để trống' })
+  @IsOptional()
   @IsString({ message: 'Mã đại lý phải là chuỗi' })
-  code: string;
+  code?: string;
 
   @IsNotEmpty({ message: 'Tên đại lý không được để trống' })
   @IsString({ message: 'Tên đại lý phải là chuỗi' })
@@ -22,8 +22,8 @@ export class CreateCustomerDto {
 
   @IsNotEmpty({ message: 'Mã số thuế không được để trống' })
   @IsString({ message: 'Mã số thuế phải là chuỗi' })
-  @Matches(/^[0-9]{10}(-[0-9]{3})?$|^[0-9]{13}$/, {
-    message: 'Mã số thuế phải gồm 10 chữ số (hoặc 13 chữ số / 10 số kèm mã chi nhánh 3 số, ví dụ 0312345678-001)',
+  @Matches(/^[0-9]{10,13}(-[0-9]{3})?$/, {
+    message: 'Mã số thuế phải gồm chữ số (từ 10 đến 13 chữ số, ví dụ 12 chữ số)',
   })
   taxCode: string;
 
@@ -39,6 +39,7 @@ export class CreateCustomerDto {
   phone: string;
 
   @IsOptional()
+  @ValidateIf((o) => o.email !== undefined && o.email !== null && o.email !== '')
   @IsEmail({}, { message: 'Email không đúng định dạng' })
   email?: string;
 
@@ -55,6 +56,18 @@ export class CreateCustomerDto {
   @IsNumber({}, { message: 'Số ngày nợ tối đa phải là số' })
   @Min(0, { message: 'Số ngày nợ tối đa không được âm' })
   maxDebtDays?: number;
+
+  @IsOptional()
+  @IsString()
+  salesRepName?: string;
+
+  @IsOptional()
+  @IsString()
+  deliveryPointName?: string;
+
+  @IsOptional()
+  @IsString()
+  receiverName?: string;
 }
 
 /**

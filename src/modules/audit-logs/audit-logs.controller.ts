@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Param,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -10,6 +11,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { AuditLogsService, PaginatedAuditLogsResult } from './audit-logs.service';
 import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
+import { AuditLogEntity } from './entities/audit-log.entity';
 
 /**
  * Controller Nhật ký Kiểm toán hệ thống (Audit Logs - Task SN-142 / SN-19):
@@ -18,7 +20,7 @@ import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
  */
 @Controller('audit-logs')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
 export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}
 
@@ -31,5 +33,14 @@ export class AuditLogsController {
     @Query() query: QueryAuditLogsDto,
   ): Promise<PaginatedAuditLogsResult> {
     return this.auditLogsService.findAll(query);
+  }
+
+  /**
+   * Lấy chi tiết một bản ghi nhật ký kiểm toán theo ID
+   * GET /api/audit-logs/:id
+   */
+  @Get(':id')
+  async findOne(@Param('id') id: string): Promise<AuditLogEntity> {
+    return this.auditLogsService.findById(id);
   }
 }

@@ -9,4 +9,7 @@ export interface PaginatedCustomersResult {
   page: number;
   limit: number;
   totalPages: number;
+  activeCount?: number;
+  totalCreditLimit?: number;
+  totalCurrentDebt?: number;
 }

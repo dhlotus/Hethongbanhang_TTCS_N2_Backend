@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, OnModuleInit, Optional, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { AuditAction, AuditEntity } from '../../common/enums';
 import { UsersService } from '../users/users.service';
@@ -328,6 +328,22 @@ export class AuditLogsService implements OnModuleInit {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.max(1, Math.min(100, Number(query.limit || 20)));
 
+    const getCleanDatePart = (str?: string): string | null => {
+      if (!str) return null;
+      const match = str.trim().match(/^\d{4}-\d{2}-\d{2}/);
+      return match ? match[0] : null;
+    };
+
+    const getVietnamDateStr = (date: Date | string): string => {
+      try {
+        const d = new Date(date);
+        if (isNaN(d.getTime())) return '';
+        return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(d);
+      } catch {
+        return new Date(date).toISOString().slice(0, 10);
+      }
+    };
+
     // 1. TRUY VẤN TRỰC TIẾP TỪ CƠ SỞ DỮ LIỆU POSTGRESQL (NẾU KẾT NỐI SẴN SÀNG)
     if (this.dbService?.isConnected()) {
       try {
@@ -335,33 +351,32 @@ export class AuditLogsService implements OnModuleInit {
         const params: unknown[] = [];
         let paramIdx = 1;
 
-        // Lọc theo khoảng thời gian
-        if (query.startDate) {
-          const start = new Date(query.startDate);
-          if (!isNaN(start.getTime())) {
-            start.setHours(0, 0, 0, 0);
-            whereClauses.push(`a.created_at >= $${paramIdx++}`);
-            params.push(start);
-          }
+        // Chuẩn hóa và lọc theo khoảng thời gian múi giờ Việt Nam (UTC+7)
+        const cleanStart = getCleanDatePart(query.startDate || query.date_from);
+        if (cleanStart) {
+          whereClauses.push(`(a.created_at AT TIME ZONE '+07:00')::date >= $${paramIdx++}::date`);
+          params.push(cleanStart);
         }
 
-        if (query.endDate) {
-          const end = new Date(query.endDate);
-          if (!isNaN(end.getTime())) {
-            end.setHours(23, 59, 59, 999);
-            whereClauses.push(`a.created_at <= $${paramIdx++}`);
-            params.push(end);
-          }
+        const cleanEnd = getCleanDatePart(query.endDate || query.date_to);
+        if (cleanEnd) {
+          whereClauses.push(`(a.created_at AT TIME ZONE '+07:00')::date <= $${paramIdx++}::date`);
+          params.push(cleanEnd);
         }
 
-        // Lọc theo người thực hiện (userId)
+        // Lọc theo người thực hiện (userId, username hoặc tên nhân viên)
         if (query.userId && query.userId !== 'ALL') {
-          whereClauses.push(`a.user_id::text = $${paramIdx++}`);
-          params.push(query.userId);
+          whereClauses.push(`(
+            a.user_id::text = $${paramIdx} OR
+            u.username ILIKE $${paramIdx} OR
+            u.full_name ILIKE $${paramIdx}
+          )`);
+          params.push(query.userId.trim());
+          paramIdx++;
         }
 
         // Lọc theo phân hệ nghiệp vụ tác động
-        const targetEntity = query.entityName || query.entity;
+        const targetEntity = query.entityName || query.entity || query.module;
         if (targetEntity && targetEntity !== 'ALL') {
           whereClauses.push(`UPPER(a.entity_name) = UPPER($${paramIdx++})`);
           params.push(targetEntity);
@@ -373,13 +388,15 @@ export class AuditLogsService implements OnModuleInit {
           params.push(query.action);
         }
 
-        // Tìm kiếm chuỗi văn bản tự do trực tiếp trên cơ sở dữ liệu
-        if (query.searchUser?.trim()) {
-          const searchPattern = `%${query.searchUser.trim()}%`;
+        // Tìm kiếm tự do theo tên người thực hiện (fullName), username, email, IP hoặc nội dung
+        const searchKeyword = (query.searchUser || query.search || query.q)?.trim();
+        if (searchKeyword) {
+          const searchPattern = `%${searchKeyword}%`;
           whereClauses.push(`(
             u.full_name ILIKE $${paramIdx} OR
             u.username ILIKE $${paramIdx} OR
             u.email ILIKE $${paramIdx} OR
+            a.user_id::text ILIKE $${paramIdx} OR
             a.entity_id ILIKE $${paramIdx} OR
             a.ip_address ILIKE $${paramIdx} OR
             a.old_values::text ILIKE $${paramIdx} OR
@@ -478,33 +495,40 @@ export class AuditLogsService implements OnModuleInit {
     // 2. TÌM KIẾM TRÊN DỮ LIỆU BỘ NHỚ (KHI CSDL CHƯA SẴN SÀNG HOẶC FALLBACK)
     let filtered = [...this.auditLogs];
 
-    // 1. Lọc theo khoảng thời gian (startDate, endDate)
-    if (query.startDate) {
-      const start = new Date(query.startDate);
-      if (!isNaN(start.getTime())) {
-        start.setHours(0, 0, 0, 0);
-        filtered = filtered.filter((log) => new Date(log.created_at) >= start);
-      }
+    // 1. Lọc theo khoảng thời gian chuẩn hóa theo múi giờ Việt Nam (UTC+7)
+    const cleanStartFallback = getCleanDatePart(query.startDate || query.date_from);
+    if (cleanStartFallback) {
+      filtered = filtered.filter((log) => getVietnamDateStr(log.created_at) >= cleanStartFallback);
     }
 
-    if (query.endDate) {
-      const end = new Date(query.endDate);
-      if (!isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        filtered = filtered.filter((log) => new Date(log.created_at) <= end);
-      }
+    const cleanEndFallback = getCleanDatePart(query.endDate || query.date_to);
+    if (cleanEndFallback) {
+      filtered = filtered.filter((log) => getVietnamDateStr(log.created_at) <= cleanEndFallback);
     }
 
-    // 2. Lọc theo người thực hiện (userId)
+    // 2. Lọc theo người thực hiện (userId, username hoặc tên)
     if (query.userId && query.userId !== 'ALL') {
-      filtered = filtered.filter((log) => log.user_id === query.userId);
+      const targetUser = query.userId.toLowerCase().trim();
+      const allUsers = (await this.usersService.findAll({ limit: 200 })).data;
+      const matchedIds = new Set<string>();
+      for (const u of allUsers) {
+        if (
+          u.id.toLowerCase() === targetUser ||
+          u.username.toLowerCase() === targetUser ||
+          u.fullName.toLowerCase() === targetUser
+        ) {
+          matchedIds.add(u.id.toLowerCase());
+        }
+      }
+      matchedIds.add(targetUser);
+      filtered = filtered.filter((log) => matchedIds.has(log.user_id?.toLowerCase() || ''));
     }
 
-    // 3. Lọc theo phân hệ tác động (entityName hoặc entity)
-    const targetEntity = query.entityName || query.entity;
-    if (targetEntity && targetEntity !== 'ALL') {
+    // 3. Lọc theo phân hệ tác động (entityName hoặc entity hoặc module)
+    const targetEntityFallback = query.entityName || query.entity || query.module;
+    if (targetEntityFallback && targetEntityFallback !== 'ALL') {
       filtered = filtered.filter(
-        (log) => log.entity_name.toUpperCase() === targetEntity.toUpperCase(),
+        (log) => log.entity_name.toUpperCase() === targetEntityFallback.toUpperCase(),
       );
     }
 
@@ -515,32 +539,28 @@ export class AuditLogsService implements OnModuleInit {
       );
     }
 
-    // 5. Tìm kiếm tự do theo tên người dùng, email, mã đối tượng hoặc nội dung JSON
-    if (query.searchUser?.trim()) {
-      const q = query.searchUser.trim().toLowerCase();
-      const matchedUserIds = new Set<string>();
-
-      // Tìm trong danh sách users
-      const allUsers = (await this.usersService.findAll({ limit: 100 })).data;
+    // 5. Tìm kiếm tự do theo tên người thực hiện (fullName), username, email, mã đối tượng hoặc nội dung JSON
+    const searchKeywordFallback = (query.searchUser || query.search || query.q)?.trim();
+    if (searchKeywordFallback) {
+      const q = searchKeywordFallback.toLowerCase();
+      const allUsers = (await this.usersService.findAll({ limit: 200 })).data;
+      const userMap = new Map<string, string>();
       for (const u of allUsers) {
-        if (
-          u.fullName.toLowerCase().includes(q) ||
-          u.username.toLowerCase().includes(q) ||
-          u.email.toLowerCase().includes(q)
-        ) {
-          matchedUserIds.add(u.id);
-        }
+        userMap.set(u.id.toLowerCase(), `${u.fullName} ${u.username} ${u.email}`.toLowerCase());
       }
 
-      filtered = filtered.filter(
-        (log) =>
-          matchedUserIds.has(log.user_id) ||
-          log.ip_address.toLowerCase().includes(q) ||
-          log.entity_id.toLowerCase().includes(q) ||
+      filtered = filtered.filter((log) => {
+        const userInfoText = userMap.get(log.user_id?.toLowerCase() || '') || '';
+        return (
+          userInfoText.includes(q) ||
+          log.user_id?.toLowerCase().includes(q) ||
+          log.ip_address?.toLowerCase().includes(q) ||
+          log.entity_id?.toLowerCase().includes(q) ||
           (log.summary && log.summary.toLowerCase().includes(q)) ||
           JSON.stringify(log.old_values || {}).toLowerCase().includes(q) ||
-          JSON.stringify(log.new_values || {}).toLowerCase().includes(q),
-      );
+          JSON.stringify(log.new_values || {}).toLowerCase().includes(q)
+        );
+      });
     }
 
     // Sắp xếp giảm dần theo thời gian tạo (mới nhất lên trước)
@@ -571,5 +591,84 @@ export class AuditLogsService implements OnModuleInit {
       limit,
       totalPages,
     };
+  }
+
+  /**
+   * Lấy chi tiết một bản ghi Audit Log theo ID (GET /api/audit-logs/:id)
+   */
+  async findById(id: string): Promise<AuditLogEntity> {
+    if (this.dbService?.isConnected()) {
+      try {
+        const rows = await this.dbService.query<{
+          id: string;
+          user_id: string;
+          action: AuditAction;
+          entity_name: AuditEntity;
+          entity_id: string;
+          old_values: Record<string, unknown> | null;
+          new_values: Record<string, unknown> | null;
+          ip_address: string;
+          created_at: Date;
+          user_full_name?: string;
+          user_email?: string;
+          user_role?: string;
+        }>(
+          `SELECT 
+             a.id,
+             a.user_id,
+             a.action,
+             a.entity_name,
+             a.entity_id,
+             a.old_values,
+             a.new_values,
+             a.ip_address,
+             a.created_at,
+             u.full_name AS user_full_name,
+             u.email AS user_email,
+             COALESCE(r.code, 'ADMIN') AS user_role
+           FROM audit_logs a
+           LEFT JOIN users u ON a.user_id = u.id
+           LEFT JOIN roles r ON u.role_id = r.id
+           WHERE a.id = $1
+           LIMIT 1;`,
+          [id],
+        );
+
+        if (rows && rows.length > 0) {
+          const r = rows[0];
+          return new AuditLogEntity({
+            id: r.id,
+            user_id: r.user_id,
+            action: r.action,
+            entity_name: r.entity_name,
+            entity_id: r.entity_id,
+            old_values: r.old_values,
+            new_values: r.new_values,
+            ip_address: r.ip_address,
+            created_at: r.created_at,
+            user: {
+              id: r.user_id,
+              full_name: r.user_full_name || 'Người dùng hệ thống',
+              email: r.user_email || '',
+              role: r.user_role || 'ADMIN',
+              ip_address: r.ip_address,
+            },
+          });
+        }
+      } catch {
+        // Fallback sang in-memory
+      }
+    }
+
+    const found = this.auditLogs.find((l) => l.id === id);
+    if (!found) {
+      throw new NotFoundException(`Không tìm thấy bản ghi nhật ký với mã: ${id}`);
+    }
+
+    const userInfo = await this.joinUserInfo(found);
+    return new AuditLogEntity({
+      ...found,
+      user: userInfo,
+    });
   }
 }
