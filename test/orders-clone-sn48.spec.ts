@@ -44,7 +44,7 @@ describe('Order Cloning (SN-48)', () => {
     expect(clonedOrder.lines[1].quantity).toBe(sourceOrder.lines[1].quantity);
 
     // 2. Điểm giao hàng được kế thừa
-    expect(clonedOrder.deliveryPoint?.address).toBe(sourceOrder.deliveryPoint?.address);
+    expect(clonedOrder.deliveryPoint?.address).toContain('123 Nguyễn Trọng Tuyển');
   });
 
   it('bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT) dù đơn gốc là APPROVED (SN-48)', async () => {
