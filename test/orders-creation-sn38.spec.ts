@@ -3,6 +3,13 @@ import { OrdersService } from '../src/modules/orders/orders.service';
 import { CreateOrderDto } from '../src/modules/orders/dto/create-order.dto';
 import { OrderStatus } from '../src/modules/orders/entities/order-status.enum';
 
+/**
+ * [SN-38]: Là Nhân viên kinh doanh, tôi muốn lên đơn hàng cho đại lý ngay tại điểm bán,
+ * để chốt đơn nhanh và đại lý ký nhận ngay.
+ * - AC1: Điểm giao hàng & ngày hẹn giao chuẩn hóa
+ * - AC2: Tính toán tiền hàng và chiết khấu tức thời theo bảng giá
+ * - AC3: Lưu nháp đơn hàng (DRAFT) và phục hồi để tiếp tục thao tác
+ */
 describe('Order Creation & Live Calculation (SN-38 & SN-39)', () => {
   let customersService: CustomersService;
   let ordersService: OrdersService;
