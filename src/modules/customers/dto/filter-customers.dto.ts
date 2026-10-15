@@ -39,8 +39,8 @@ export class FilterCustomersDto {
    * Chỉ lấy các đại lý chưa được phân công nhân sự phụ trách (SN-35)
    */
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
-  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true || value === '1' || value === 1)
+  @IsBoolean({ message: 'unassignedOnly phải là kiểu boolean' })
   unassignedOnly?: boolean;
 
   /**

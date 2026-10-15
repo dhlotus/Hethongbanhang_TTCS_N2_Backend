@@ -164,5 +164,25 @@ describe('[SN-35] Phan cong Nhan vien Kinh doanh theo Dai ly va Khu vuc', () => 
       const afterC1 = await service.findById(c1.id);
       expect(afterC1.salesRepId).toBe('usr-salesmgr-003');
     });
+
+    it('TC-10: Lay danh sach NVKD kha dung kem so dai ly dang phu trach', async () => {
+      const reps = await service.getAvailableSalesReps();
+      expect(reps.length).toBeGreaterThanOrEqual(4);
+      expect(reps[0]).toHaveProperty('assignedCustomerCount');
+      expect(typeof reps[0].assignedCustomerCount).toBe('number');
+    });
+
+    it('TC-11: Nem BadRequestException khi nhan su ban giao khong co dai ly nao de chuyen', async () => {
+      await expect(
+        service.bulkTransferTerritory(
+          {
+            fromSalesRepId: 'usr-non-existent-rep',
+            toSalesRepId: 'usr-salesmgr-003',
+            reason: 'Thu nghiem chuyen tu nhan su khong co dai ly',
+          },
+          mockManagerUser,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 });

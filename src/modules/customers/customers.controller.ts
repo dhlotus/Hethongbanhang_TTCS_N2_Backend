@@ -37,6 +37,7 @@ import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
 import {
   BulkTransferTerritoryResult,
   PaginatedAssignmentHistoryResult,
+  SalesRepOption,
 } from './interfaces/customer-assignment.interface';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -73,6 +74,16 @@ export class CustomersController {
   @Public()
   async createCustomer(@Body() dto: CreateCustomerDto): Promise<CustomerEntity> {
     return this.customersService.createCustomer(dto);
+  }
+
+  /**
+   * Lấy danh sách nhân viên kinh doanh khả dụng để phân công & chuyển giao (SN-35)
+   * GET /api/customers/sales-reps
+   */
+  @Get('sales-reps')
+  @Public()
+  async getAvailableSalesReps(): Promise<SalesRepOption[]> {
+    return this.customersService.getAvailableSalesReps();
   }
 
   /**

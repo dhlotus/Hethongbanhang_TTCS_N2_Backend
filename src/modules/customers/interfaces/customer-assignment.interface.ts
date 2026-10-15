@@ -41,3 +41,18 @@ export interface PaginatedAssignmentHistoryResult {
 export interface PaginatedCustomersWithUnassignedResult extends PaginatedCustomersResult {
   unassignedCount: number;
 }
+
+/**
+ * Cấu trúc thông tin nhân viên kinh doanh khả dụng để phân công & chuyển giao địa bàn (SN-35)
+ */
+export interface SalesRepOption {
+  id: string;
+  fullName: string;
+  name?: string;
+  username?: string;
+  email?: string;
+  phone?: string;
+  role?: string;
+  status?: string;
+  assignedCustomerCount: number;
+}
