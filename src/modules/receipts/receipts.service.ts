@@ -351,65 +351,30 @@ export class ReceiptsService {
         currentY += row3Height;
         doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
 
-        // --- ROW 4: Hình thức thu (Có khung badge và icon vector) ---
-        const row4Height = 40;
+        // --- ROW 4: Hình thức thu (Chỉ hiển thị tên hình thức thu) ---
+        const row4Height = 36;
         doc
           .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Hình thức thu:', leftCol, currentY + 13);
-
-        // Badge viên thuốc trắng bo viền
-        doc.roundedRect(valCol, currentY + 8, 160, 24, 4).fillAndStroke('#ffffff', '#cbd5e1');
-
-        // Vẽ icon thẻ ngân hàng vector (thay cho emoji tránh lỗi font)
-        const cardX = valCol + 10;
-        const cardY = currentY + 14;
-        doc.roundedRect(cardX, cardY, 15, 11, 2).strokeColor('#4f46e5').lineWidth(0.9).stroke();
-        doc.rect(cardX, cardY + 3, 15, 2.5).fillColor('#6366f1').fill();
-
-        doc
-          .fontSize(9.5)
+          .text('Hình thức thu:', leftCol, currentY + 11)
           .font(fontBold)
           .fillColor('#1e293b')
-          .text(data.paymentMethodLabel, cardX + 21, currentY + 13.5);
+          .text(data.paymentMethodLabel, valCol, currentY + 11);
 
         currentY += row4Height;
         doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
 
-        // --- ROW 5: Người thu tiền (Có badge Kế toán công nợ và icon vector checkmark) ---
-        const row5Height = 40;
+        // --- ROW 5: Người thu tiền (Chỉ hiển thị họ tên người thu) ---
+        const row5Height = 36;
         doc
           .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Người thu tiền:', leftCol, currentY + 13)
+          .text('Người thu tiền:', leftCol, currentY + 11)
           .font(fontBold)
           .fillColor('#0f172a')
-          .text(data.collectorName, valCol, currentY + 13);
-
-        const collectorWidth = doc.widthOfString(data.collectorName);
-        // Badge Kế toán công nợ
-        const badgeX = valCol + collectorWidth + 14;
-        doc.roundedRect(badgeX, currentY + 9, 110, 20, 10).fillAndStroke('#eef2ff', '#c7d2fe');
-
-        // Vẽ icon dấu tích vector (thay cho emoji checkmark tránh lỗi font)
-        const checkX = badgeX + 8;
-        const checkY = currentY + 14;
-        doc.circle(checkX + 5, checkY + 4.5, 4.5).fillColor('#4338ca').fill();
-        doc
-          .moveTo(checkX + 3, checkY + 4.5)
-          .lineTo(checkX + 4.5, checkY + 6.5)
-          .lineTo(checkX + 7.5, checkY + 3)
-          .strokeColor('#ffffff')
-          .lineWidth(1)
-          .stroke();
-
-        doc
-          .fontSize(8.5)
-          .font(fontBold)
-          .fillColor('#4338ca')
-          .text('Kế toán công nợ', checkX + 13, currentY + 13);
+          .text(data.collectorName, valCol, currentY + 11);
 
         currentY += row5Height;
         doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
