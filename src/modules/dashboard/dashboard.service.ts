@@ -153,9 +153,9 @@ export class DashboardService {
     highRiskAgencies.sort((a, b) => b.overdueAmount - a.overdueAmount);
     const topHighRisk = highRiskAgencies.slice(0, 10);
 
-    // Calculate Low Stock
+    // Calculate Low Stock (Chỉ đếm sản phẩm SẮP ĐỨT: còn tồn khả dụng > 0 và <= 10)
     for (const product of allProducts) {
-      if (product.availableStock !== undefined && product.availableStock <= 10) { // Assuming < 10 is low stock
+      if (product.availableStock !== undefined && product.availableStock > 0 && product.availableStock <= 10) {
         lowStockAlertCount++;
       }
     }

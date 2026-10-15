@@ -880,6 +880,15 @@ export class OrdersService implements OnModuleInit {
 
     await this.saveOrder(newOrder);
 
+    // Cập nhật công nợ thực tế sau khi tạo đơn (nếu không phải là đơn DRAFT)
+    if (newOrder.status !== OrderStatus.DRAFT && newOrder.grandTotal > 0 && customer.id) {
+      try {
+        await this.customersService.adjustCustomerDebt(customer.id, newOrder.grandTotal);
+      } catch (debtErr) {
+        this.logger.warn(`Không thể cập nhật công nợ sau đơn hàng: ${debtErr}`);
+      }
+    }
+
     // Đánh dấu Bảng giá đã phát sinh đơn hàng (Ràng buộc đơn hàng hasOrders = true)
     if (newOrder.priceListId && this.priceListsService) {
       await this.priceListsService.markPriceListHasOrders(newOrder.priceListId);
@@ -1254,6 +1263,17 @@ export class OrdersService implements OnModuleInit {
         }
       }
 
+      // Hoàn trả công nợ khi hủy đơn
+      if (order.grandTotal > 0 && order.customerId) {
+        await client.query(
+          `UPDATE customers SET current_debt = GREATEST(0, COALESCE(current_debt, 0) - $1), updated_at = NOW() WHERE id = $2 OR code = $2`,
+          [order.grandTotal, order.customerId],
+        );
+        try {
+          await this.customersService.adjustCustomerDebt(order.customerId, -order.grandTotal);
+        } catch {}
+      }
+
       await client.query('COMMIT');
       return order;
     } catch (error) {
@@ -1290,6 +1310,15 @@ export class OrdersService implements OnModuleInit {
           line.productId || line.productSku,
           line.baseQuantity || line.quantity,
         );
+      }
+    }
+
+    // Hoàn trả công nợ khi hủy đơn in-memory
+    if (order.grandTotal > 0 && order.customerId) {
+      try {
+        await this.customersService.adjustCustomerDebt(order.customerId, -order.grandTotal);
+      } catch (err) {
+        this.logger.warn(`Lỗi hoàn trả nợ: ${err}`);
       }
     }
 
@@ -1654,6 +1683,14 @@ export class OrdersService implements OnModuleInit {
 
     this.applyApprovalDecision(order, dto.action);
     await this.saveOrder(order);
+
+    if (dto.action === OrderApprovalAction.REJECT && order.grandTotal > 0 && order.customerId) {
+      try {
+        await this.customersService.adjustCustomerDebt(order.customerId, -order.grandTotal);
+      } catch (err) {
+        this.logger.warn(`Lỗi hoàn trả nợ khi từ chối đơn: ${err}`);
+      }
+    }
     const history = this.memoryApprovalHistory.get(orderId) ?? [];
     history.push(
       new OrderApprovalHistoryEntity({
@@ -1821,6 +1858,7 @@ export class OrdersService implements OnModuleInit {
         );
       }
     }
+    const previousStatus = order.status;
     order.status = dto.status;
     order.updatedAt = new Date();
     if (this.databaseService?.isConnected() && dto.status === OrderStatus.CANCELLED) {
@@ -1831,6 +1869,21 @@ export class OrdersService implements OnModuleInit {
         [order.id],
       );
     }
+
+    // Hoàn trả công nợ khi hủy đơn
+    if (
+      dto.status === OrderStatus.CANCELLED &&
+      previousStatus !== OrderStatus.CANCELLED &&
+      order.grandTotal > 0 &&
+      order.customerId
+    ) {
+      try {
+        await this.customersService.adjustCustomerDebt(order.customerId, -order.grandTotal);
+      } catch (debtErr) {
+        this.logger.warn(`Lỗi hoàn trả nợ khi cập nhật trạng thái hủy đơn: ${debtErr}`);
+      }
+    }
+
     await this.saveOrder(order);
     return order;
   }

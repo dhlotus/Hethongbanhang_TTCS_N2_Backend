@@ -884,6 +884,32 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
+   * Điều chỉnh dư nợ thực tế của đại lý khi tạo đơn hoặc hủy đơn (Real-time Debt Synchronization)
+   */
+  async adjustCustomerDebt(customerId: string, delta: number): Promise<CustomerEntity> {
+    const customer = await this.getCustomerById(customerId);
+    const prevDebt = Number(customer.currentDebt) || 0;
+    const newDebt = Math.max(0, prevDebt + delta);
+    customer.currentDebt = newDebt;
+    customer.updatedAt = new Date();
+    this.saveCustomersToDisk();
+
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE customers 
+           SET current_debt = GREATEST(0, COALESCE(current_debt, 0) + $1), updated_at = NOW() 
+           WHERE id = $2 OR code = $2;`,
+          [delta, customerId],
+        );
+      } catch (err) {
+        console.warn(`Lỗi cập nhật current_debt DB cho đại lý ${customerId}:`, err);
+      }
+    }
+    return customer;
+  }
+
+  /**
    * Mở khóa giao dịch với đại lý (SN-36)
    */
   async unlockCustomer(id: string): Promise<CustomerEntity> {
