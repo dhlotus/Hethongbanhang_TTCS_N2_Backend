@@ -12,6 +12,7 @@ export interface IAuthUserInfo {
   warehouseCode?: string | null;
   assignedWarehouseCode?: string | null;
   warehouseName?: string | null;
+  warehouseIds?: string[];
   warehouses?: Array<{ id: string; code: string; name: string; isPrimary?: boolean }>;
   avatarUrl?: string | null;
 }

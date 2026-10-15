@@ -320,6 +320,15 @@ export class OrdersService implements OnModuleInit {
          updated_at = EXCLUDED.updated_at`,
       [order.id, order.orderCode, JSON.stringify(order), order.createdAt, order.updatedAt],
     );
+
+    if ((order as any).warehouseId) {
+      try {
+        await this.databaseService.query(
+          `UPDATE orders SET warehouse_id = $1::uuid WHERE id::text = $2 OR code = $3`,
+          [(order as any).warehouseId, order.id, order.orderCode],
+        );
+      } catch {}
+    }
   }
 
   /**
@@ -435,13 +444,18 @@ export class OrdersService implements OnModuleInit {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
     let warehouseId = DEFAULT_WAREHOUSE_ID;
+    let warehouseName = 'Kho Miền Nam (TP.HCM)';
     try {
-      const warehouseRows = await this.databaseService.query<{ warehouse_id: string }>(
-        'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
+      const warehouseRows = await this.databaseService.query<{ warehouse_id: string; name: string }>(
+        `SELECT a.warehouse_id, w.name
+         FROM app_agency_default_warehouses a
+         LEFT JOIN warehouses w ON w.id = a.warehouse_id
+         WHERE a.agency_key = $1`,
         [customerId],
       );
       if (warehouseRows[0]?.warehouse_id) {
         warehouseId = warehouseRows[0].warehouse_id;
+        warehouseName = warehouseRows[0].name || warehouseName;
       }
     } catch {
       // Fallback DEFAULT_WAREHOUSE_ID
@@ -466,14 +480,15 @@ export class OrdersService implements OnModuleInit {
     const requiredBySku = new Map<string, number>();
     for (const line of lines) {
       const sku = line.productSku.trim().toUpperCase();
-      const required = Math.round(line.quantity * line.conversionRate);
+      const conversionRate = line.conversionRate > 0 ? line.conversionRate : 1;
+      const required = Math.round(line.quantity * conversionRate);
       requiredBySku.set(sku, (requiredBySku.get(sku) ?? 0) + required);
     }
     for (const [sku, required] of requiredBySku) {
       const available = availableBySku.get(sku) ?? 0;
       if (required > available) {
         throw new BadRequestException(
-          `Sản phẩm ${sku} vượt quá tồn khả dụng tại kho của đại lý (còn ${available}, cần ${required}).`,
+          `Sản phẩm ${sku} không đủ tồn khả dụng tại kho của đại lý (${warehouseName}: còn ${available}, cần ${required}). Không thể đặt vượt quá số lượng kho được gán.`,
         );
       }
     }
@@ -846,6 +861,40 @@ export class OrdersService implements OnModuleInit {
       const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
       orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
     }
+    let assignedWarehouseId = dto.warehouseId || DEFAULT_WAREHOUSE_ID;
+    let assignedWarehouseName = dto.warehouseName || 'Kho Miền Nam (TP.HCM)';
+    let assignedWarehouseCode = 'KHO-MN-01';
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        const whRows = await this.databaseService.query<{ warehouse_id: string; code: string; name: string }>(
+          `SELECT w.id as warehouse_id, w.code, w.name
+           FROM app_agency_default_warehouses a
+           JOIN warehouses w ON w.id = a.warehouse_id
+           WHERE a.agency_key = $1 OR a.agency_key = $2
+           LIMIT 1`,
+          [customer.id, customer.code],
+        );
+        if (whRows[0]) {
+          assignedWarehouseId = whRows[0].warehouse_id;
+          assignedWarehouseName = whRows[0].name;
+          assignedWarehouseCode = whRows[0].code;
+        } else if (dto.warehouseId) {
+          const customWh = await this.databaseService.query<{ id: string; code: string; name: string }>(
+            `SELECT id, code, name FROM warehouses WHERE id::text = $1 OR code = $1 LIMIT 1`,
+            [dto.warehouseId],
+          );
+          if (customWh[0]) {
+            assignedWarehouseId = customWh[0].id;
+            assignedWarehouseName = customWh[0].name;
+            assignedWarehouseCode = customWh[0].code;
+          }
+        }
+      } catch {
+        // Fallback default warehouse
+      }
+    }
+
     const orderId = `ord-${randomUUID()}`;
     const orderCode = this.generateOrderCode();
 
@@ -874,6 +923,9 @@ export class OrdersService implements OnModuleInit {
       isCreditLimitExceeded,
       creditLimitExceededAmount,
       createdSource: dto.createdSource || (salesRep ? 'SALES_REP' : 'AGENCY_PORTAL'),
+      warehouseId: assignedWarehouseId,
+      warehouseName: assignedWarehouseName,
+      warehouseCode: assignedWarehouseCode,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -1261,6 +1313,58 @@ export class OrdersService implements OnModuleInit {
         [order.id],
       );
 
+      if (order.lines) {
+        let whId = (order as any).warehouseId;
+        if (!whId) {
+          try {
+            const resWh = await client.query<{ warehouse_id: string }>(
+              `SELECT warehouse_id FROM stock_reservations WHERE order_id = $1 AND warehouse_id IS NOT NULL LIMIT 1`,
+              [order.id],
+            );
+            if (resWh.rows[0]?.warehouse_id) {
+              whId = resWh.rows[0].warehouse_id;
+            }
+          } catch {}
+        }
+        if (!whId) {
+          try {
+            const resAppWh = await client.query<{ warehouse_id: string }>(
+              `SELECT warehouse_id FROM app_order_inventory_reservations WHERE order_id = $1 AND warehouse_id IS NOT NULL LIMIT 1`,
+              [order.id],
+            );
+            if (resAppWh.rows[0]?.warehouse_id) {
+              whId = resAppWh.rows[0].warehouse_id;
+            }
+          } catch {}
+        }
+        if (!whId && order.customerId) {
+          try {
+            const agWh = await client.query<{ warehouse_id: string }>(
+              `SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1 OR agency_key = $2 LIMIT 1`,
+              [order.customerId, (order as any).customerCode],
+            );
+            if (agWh.rows[0]?.warehouse_id) {
+              whId = agWh.rows[0].warehouse_id;
+            }
+          } catch {}
+        }
+        if (!whId) {
+          whId = DEFAULT_WAREHOUSE_ID;
+        }
+
+        for (const line of order.lines) {
+          const qty = line.baseQuantity || line.quantity;
+          try {
+            await client.query(
+              `UPDATE inventories
+               SET allocated = GREATEST(0, allocated - $1), updated_at = CURRENT_TIMESTAMP
+               WHERE warehouse_id = $2::uuid AND product_id = (SELECT id FROM products WHERE UPPER(sku) = UPPER($3) LIMIT 1)`,
+              [qty, whId, line.productSku.trim()],
+            );
+          } catch {}
+        }
+      }
+
       order.status = OrderStatus.CANCELLED;
       order.cancelReason = reason.trim();
       order.updatedAt = new Date();
@@ -1269,6 +1373,13 @@ export class OrdersService implements OnModuleInit {
         `UPDATE app_order_records SET payload = $2::jsonb, updated_at = $3 WHERE id = $1`,
         [order.id, JSON.stringify(order), order.updatedAt],
       );
+
+      try {
+        await client.query(
+          `UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id::text = $1 OR code = $2`,
+          [order.id, order.orderCode],
+        );
+      } catch {}
 
       await client.query(
         `INSERT INTO app_order_approval_history
@@ -1301,7 +1412,7 @@ export class OrdersService implements OnModuleInit {
       // Hoàn trả công nợ khi hủy đơn
       if (order.grandTotal > 0 && order.customerId) {
         await client.query(
-          `UPDATE customers SET current_debt = GREATEST(0, COALESCE(current_debt, 0) - $1), updated_at = NOW() WHERE id = $2 OR code = $2`,
+          `UPDATE customers SET current_debt = GREATEST(0, COALESCE(current_debt, 0) - $1), updated_at = NOW() WHERE id::text = $2 OR code = $2`,
           [order.grandTotal, order.customerId],
         );
         try {
@@ -1604,18 +1715,32 @@ export class OrdersService implements OnModuleInit {
       throw new InternalServerErrorException('Dịch vụ tồn kho chưa được cấu hình.');
     }
     const linesBySku = this.groupOrderLinesBySku(order.lines);
-    let warehouseId = DEFAULT_WAREHOUSE_ID;
+    let warehouseId = (order as any).warehouseId;
+    let warehouseName = (order as any).warehouseName;
     try {
-      const warehouseRows = await client.query<{ warehouse_id: string }>(
-        'SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1',
-        [order.customerId],
-      );
-      if (warehouseRows.rows[0]?.warehouse_id) {
-        warehouseId = warehouseRows.rows[0].warehouse_id;
+      if (!warehouseId) {
+        const warehouseRows = await client.query<{ warehouse_id: string; name: string }>(
+          `SELECT a.warehouse_id, w.name
+           FROM app_agency_default_warehouses a
+           LEFT JOIN warehouses w ON w.id = a.warehouse_id
+           WHERE a.agency_key = $1 OR a.agency_key = $2`,
+          [order.customerId, (order as any).customerCode],
+        );
+        if (warehouseRows.rows[0]?.warehouse_id) {
+          warehouseId = warehouseRows.rows[0].warehouse_id;
+          warehouseName = warehouseRows.rows[0].name || warehouseName;
+        }
       }
     } catch {
       // Fallback DEFAULT_WAREHOUSE_ID
     }
+    if (!warehouseId) {
+      warehouseId = DEFAULT_WAREHOUSE_ID;
+      warehouseName = 'Kho Miền Nam (TP.HCM)';
+    }
+    (order as any).warehouseId = warehouseId;
+    (order as any).warehouseName = warehouseName;
+
     for (const [sku, lines] of [...linesBySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku]);
       const product = await this.productsService.findById(sku);
@@ -1626,11 +1751,11 @@ export class OrdersService implements OnModuleInit {
          WHERE product_sku = $1 AND warehouse_id = $2::uuid AND status = 'RESERVED'`,
         [sku, warehouseId],
       );
-      const required = lines.reduce((sum, line) => sum + line.baseQuantity, 0);
+      const required = lines.reduce((sum, line) => sum + (line.baseQuantity || line.quantity), 0);
       const available = physicalQuantity - Number(reservationResult.rows[0]?.reserved ?? 0);
       if (required > available) {
         throw new BadRequestException(
-          `Sản phẩm ${product?.name || sku} không đủ tồn khả dụng để duyệt đơn: tồn khả dụng còn ${available}, đơn yêu cầu ${required}.`,
+          `Sản phẩm ${product?.name || sku} không đủ tồn khả dụng tại ${warehouseName} để duyệt đơn: tồn khả dụng còn ${available}, đơn yêu cầu ${required}.`,
         );
       }
     }
@@ -1641,20 +1766,30 @@ export class OrdersService implements OnModuleInit {
 
     for (const line of order.lines) {
       const resId = `res-${order.id}-${line.id}`;
+      const lineBaseQty = line.baseQuantity || line.quantity;
       await client.query(
         `INSERT INTO stock_reservations
          (id, order_id, product_id, warehouse_id, quantity, status, expired_at, created_at)
          VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, CURRENT_TIMESTAMP)
          ON CONFLICT (id) DO UPDATE SET quantity = EXCLUDED.quantity, status = 'ACTIVE', expired_at = EXCLUDED.expired_at`,
-        [resId, order.id, line.productSku.trim().toUpperCase(), warehouseId, line.baseQuantity, expiredAt],
+        [resId, order.id, line.productSku.trim().toUpperCase(), warehouseId, lineBaseQty, expiredAt],
       );
 
       await client.query(
         `INSERT INTO app_order_inventory_reservations
          (order_id, order_line_id, product_sku, warehouse_id, base_quantity)
          VALUES ($1, $2, $3, $4::uuid, $5)`,
-        [order.id, line.id, line.productSku.trim().toUpperCase(), warehouseId, line.baseQuantity],
+        [order.id, line.id, line.productSku.trim().toUpperCase(), warehouseId, lineBaseQty],
       );
+
+      try {
+        await client.query(
+          `UPDATE inventories
+           SET allocated = LEAST(on_hand, allocated + $1), updated_at = CURRENT_TIMESTAMP
+           WHERE warehouse_id = $2::uuid AND product_id = (SELECT id FROM products WHERE UPPER(sku) = UPPER($3) LIMIT 1)`,
+          [lineBaseQty, warehouseId, line.productSku.trim()],
+        );
+      } catch {}
     }
   }
 

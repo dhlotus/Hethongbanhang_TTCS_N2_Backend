@@ -49,6 +49,9 @@ export class OrderEntity {
   reservedUntil?: Date;
   isShortDelivery?: boolean; // Cờ đánh dấu giao thiếu (SN-170)
   createdSource?: string; // Nguồn tạo đơn (SN-49)
+  warehouseId?: string;
+  warehouseName?: string;
+  warehouseCode?: string;
   createdAt: Date;
   updatedAt: Date;
 

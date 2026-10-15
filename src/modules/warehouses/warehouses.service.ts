@@ -1,10 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { CustomersService } from '../customers/customers.service';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 import { CreateLocationDto } from './dto/create-location.dto';
-import { DEFAULT_WAREHOUSE_ID } from './warehouse.constants';
+import {
+  DEFAULT_WAREHOUSE_ID,
+  STANDARD_WAREHOUSES,
+} from './warehouse.constants';
 import {
   AgencyWarehouseAssignmentEntity,
   AgencyWarehouseDetailEntity,
@@ -15,56 +18,90 @@ import {
 } from './entities/warehouse.entity';
 
 @Injectable()
-export class WarehousesService {
+export class WarehousesService implements OnModuleInit {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly customersService: CustomersService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureStandardWarehouses();
+  }
+
+  async ensureStandardWarehouses(): Promise<void> {
+    if (!this.databaseService?.isConnected()) {
+      await this.databaseService?.ensureConnection?.();
+    }
+    if (!this.databaseService?.isConnected()) return;
+
+    try {
+      // 1. Dọn dẹp kho cũ WH01 (nếu còn)
+      try {
+        await this.databaseService.query(
+          `DELETE FROM app_inventory_stock_balances WHERE warehouse_id = '11111111-0000-4000-8000-000000000001'`,
+        );
+        await this.databaseService.query(
+          `DELETE FROM warehouses WHERE id = '11111111-0000-4000-8000-000000000001'`,
+        );
+      } catch {}
+
+      // 2. Đồng bộ 4 kho chính chuẩn hóa
+      for (const wh of STANDARD_WAREHOUSES) {
+        await this.databaseService.query(
+          `INSERT INTO warehouses (id, code, name, address, phone, status, updated_at)
+           VALUES ($1, $2, $3, $4, $5, 'ACTIVE', CURRENT_TIMESTAMP)
+           ON CONFLICT (id) DO UPDATE SET
+             code = EXCLUDED.code,
+             name = EXCLUDED.name,
+             address = EXCLUDED.address,
+             phone = EXCLUDED.phone,
+             status = 'ACTIVE',
+             updated_at = CURRENT_TIMESTAMP`,
+          [wh.id, wh.code, wh.name, wh.address, wh.phone],
+        );
+      }
+
+      // 3. Đảm bảo chỉ có đúng 4 kho chuẩn
+      const validIds = STANDARD_WAREHOUSES.map((w) => w.id);
+      await this.databaseService.query(
+        `DELETE FROM warehouses WHERE id NOT IN ($1, $2, $3, $4)`,
+        validIds,
+      );
+    } catch (err) {
+      console.warn('[WarehousesService] Lỗi đồng bộ 4 kho chính:', err);
+    }
+  }
 
   async findAll(): Promise<WarehouseEntity[]> {
     if (!this.databaseService?.isConnected()) {
       await this.databaseService?.ensureConnection?.();
     }
     if (!this.databaseService?.isConnected()) {
-      return [
-        {
-          id: DEFAULT_WAREHOUSE_ID,
-          code: 'WH01',
-          name: 'Kho Tổng Miền Nam - LOHA WH01',
-          address: 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương',
-          phone: '0274379001',
-          managerId: null,
-          status: 'ACTIVE',
-          locationCount: 3,
-        },
-        {
-          id: '11111111-0000-0000-0000-000000000002',
-          code: 'KHO-MB-01',
-          name: 'Kho Phân Phối Hà Nội',
-          address: 'Lô CN-05 KCN Ninh Hiệp, Gia Lâm, Hà Nội',
-          phone: '0243889002',
-          managerId: null,
-          status: 'ACTIVE',
-          locationCount: 2,
-        },
-        {
-          id: '11111111-0000-0000-0000-000000000003',
-          code: 'KHO-MT-01',
-          name: 'Kho Vùng Tây Nam Bộ',
-          address: 'Đường số 3 KCN Trà Nóc 1, Bình Thủy, Cần Thơ',
-          phone: '0292389003',
-          managerId: null,
-          status: 'ACTIVE',
-          locationCount: 1,
-        },
-      ];
+      return STANDARD_WAREHOUSES.map((wh) => ({
+        id: wh.id,
+        code: wh.code,
+        name: wh.name,
+        address: wh.address,
+        phone: wh.phone,
+        managerId: null,
+        status: wh.status,
+        locationCount: 2,
+      }));
     }
     return this.databaseService.query<WarehouseEntity>(`
       SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
              w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
              COUNT(l.id)::int AS "locationCount"
       FROM warehouses w LEFT JOIN warehouse_locations l ON l.warehouse_id = w.id
-      GROUP BY w.id ORDER BY w.name
+      WHERE w.id IN ('11111111-0000-0000-0000-000000000001', '11111111-0000-0000-0000-000000000002', '11111111-0000-0000-0000-000000000003', '11111111-0000-0000-0000-000000000004')
+      GROUP BY w.id
+      ORDER BY CASE 
+        WHEN w.code = 'KHO-MB-01' THEN 1
+        WHEN w.code = 'KHO-MT-01' THEN 2
+        WHEN w.code = 'KHO-MN-01' THEN 3
+        WHEN w.code = 'KHO-WEST-01' THEN 4
+        ELSE 5
+      END
     `);
   }
 
@@ -250,6 +287,23 @@ export class WarehousesService {
       );
     }
     return { agencyId, defaultWarehouseId: warehouseId };
+  }
+
+  async assignAgencies(
+    warehouseId: string,
+    agencyIds: string[],
+  ): Promise<{ success: boolean; count: number }> {
+    await this.requireWarehouse(warehouseId);
+    for (const agencyId of agencyIds) {
+      if (!agencyId) continue;
+      await this.databaseService.query(
+        `INSERT INTO app_agency_default_warehouses (agency_key, warehouse_id)
+         VALUES ($1, $2::uuid)
+         ON CONFLICT (agency_key) DO UPDATE SET warehouse_id = EXCLUDED.warehouse_id`,
+        [agencyId, warehouseId],
+      );
+    }
+    return { success: true, count: agencyIds.length };
   }
 
   async delete(id: string): Promise<{ success: boolean; message: string }> {

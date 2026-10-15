@@ -166,18 +166,18 @@ export class GoodsReceiptsService implements OnModuleInit {
         );
       `);
 
-      // Đảm bảo kho mặc định WH01 tồn tại với UUID v4 chuẩn
+      // Đảm bảo kho mặc định KHO-MN-01 tồn tại với UUID v4 chuẩn
       await this.db.query(`
         INSERT INTO warehouses (id, code, name, address, phone, status)
-        VALUES ('${DEFAULT_WAREHOUSE_ID}', 'WH01', 'Kho Tổng Miền Nam - LOHA WH01', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '0274379001', 'ACTIVE')
-        ON CONFLICT (id) DO UPDATE SET code = 'WH01', name = 'Kho Tổng Miền Nam - LOHA WH01';
+        VALUES ('${DEFAULT_WAREHOUSE_ID}', 'KHO-MN-01', 'Kho Miền Nam (TP. Hồ Chí Minh)', 'Số 18 Đại lộ Độc Lập, KCN Sóng Thần 1, Dĩ An, Bình Dương', '02838890001', 'ACTIVE')
+        ON CONFLICT (id) DO UPDATE SET code = 'KHO-MN-01', name = 'Kho Miền Nam (TP. Hồ Chí Minh)';
       `);
 
       // Chuẩn hóa dữ liệu cũ nếu warehouse_id đang lưu chuỗi 'WH01'
       await this.db.query(`
         UPDATE goods_receipts 
         SET warehouse_id = '${DEFAULT_WAREHOUSE_ID}' 
-        WHERE warehouse_id = 'WH01' OR warehouse_id = '11111111-0000-0000-0000-000000000001';
+        WHERE warehouse_id::text = 'WH01' OR warehouse_id = '${DEFAULT_WAREHOUSE_ID}';
       `);
 
       this.logger.log('Đã tạo xong các bảng cho goods_receipts và đồng bộ kho mặc định.');

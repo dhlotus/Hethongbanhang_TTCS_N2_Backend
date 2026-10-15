@@ -23,6 +23,7 @@ export interface SafeUser {
   assignedWarehouseId?: string | null;
   warehouseCode?: string | null;
   assignedWarehouseCode?: string | null;
+  warehouseIds?: string[];
   warehouses?: UserWarehouseItem[];
   dateOfBirth?: string | null;
   gender?: string | null;
@@ -52,6 +53,7 @@ export class UserEntity {
   assignedWarehouseId?: string | null;
   warehouseCode?: string | null;
   assignedWarehouseCode?: string | null;
+  warehouseIds?: string[];
   warehouses?: UserWarehouseItem[];
   customerId?: string | null;
   customerCode?: string | null;
@@ -96,6 +98,13 @@ export class UserEntity {
     this.warehouseCode = partial.warehouseCode ?? (partial as any).assignedWarehouseCode ?? null;
     this.assignedWarehouseCode = this.warehouseCode;
     this.warehouses = partial.warehouses ?? [];
+    this.warehouseIds =
+      partial.warehouseIds ??
+      (this.warehouses.length > 0
+        ? this.warehouses.map((w) => w.id)
+        : this.warehouseId
+        ? [this.warehouseId]
+        : []);
     this.dateOfBirth = partial.dateOfBirth ?? null;
     this.gender = partial.gender ?? null;
     this.isIdentityLocked = partial.isIdentityLocked ?? false;
@@ -137,6 +146,7 @@ export class UserEntity {
       assignedWarehouseId: this.assignedWarehouseId,
       warehouseCode: this.warehouseCode,
       assignedWarehouseCode: this.assignedWarehouseCode,
+      warehouseIds: this.warehouseIds || (this.warehouseId ? [this.warehouseId] : []),
       warehouses: this.warehouses,
       customerId: this.customerId,
       customerCode: this.customerCode,

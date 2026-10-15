@@ -130,6 +130,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
+    let warehouseIds: string[] =
+      payload.warehouseIds ?? (warehouses.length > 0 ? warehouses.map((w) => w.id) : (warehouseId ? [warehouseId] : []));
+
     return {
       userId: payload.sub,
       email: payload.email,
@@ -143,6 +146,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       warehouseCode,
       warehouseName,
       assignedWarehouse,
+      warehouseIds,
       warehouses,
     };
   }

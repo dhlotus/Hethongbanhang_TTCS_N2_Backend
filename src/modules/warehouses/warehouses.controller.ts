@@ -25,7 +25,14 @@ export class WarehousesController {
   constructor(private readonly warehousesService: WarehousesService) {}
 
   @Get()
-  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
+  @Roles(
+    ...WAREHOUSE_MANAGER_ROLES,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+    UserRole.SALES_REP,
+  )
   findAll(): Promise<WarehouseEntity[]> {
     return this.warehousesService.findAll();
   }
@@ -82,6 +89,15 @@ export class WarehousesController {
     @Body() body: { warehouseId: string | null },
   ): Promise<AgencyWarehouseUpdateEntity> {
     return this.warehousesService.setAgencyDefaultWarehouse(agencyId, body.warehouseId);
+  }
+
+  @Post(':id/agencies')
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  assignAgencies(
+    @Param('id') id: string,
+    @Body() body: { agencyIds: string[] },
+  ): Promise<{ success: boolean; count: number }> {
+    return this.warehousesService.assignAgencies(id, body.agencyIds || []);
   }
 
   @Delete(':id')
