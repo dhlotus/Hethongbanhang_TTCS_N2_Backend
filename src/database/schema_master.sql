@@ -9,7 +9,6 @@ BEGIN;
 -- -----------------------------------------------------------------------------
 -- 0. EXTENSIONS
 -- -----------------------------------------------------------------------------
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- =============================================================================
@@ -28,7 +27,7 @@ CREATE TABLE IF NOT EXISTS roles (
 COMMENT ON TABLE roles IS 'Danh mục vai trò người dùng trong hệ thống (EP-01)';
 
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username VARCHAR(50) NOT NULL UNIQUE,
     email VARCHAR(150) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
@@ -48,7 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_users_role_id ON users(role_id);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash VARCHAR(255) NOT NULL UNIQUE,
     is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
@@ -61,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     action VARCHAR(50) NOT NULL,
     entity_name VARCHAR(100) NOT NULL,
@@ -97,7 +96,7 @@ CREATE INDEX IF NOT EXISTS idx_categories_parent_id ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_categories_path ON categories(path);
 
 CREATE TABLE IF NOT EXISTS suppliers (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     tax_code VARCHAR(50),
@@ -114,7 +113,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
 CREATE INDEX IF NOT EXISTS idx_suppliers_code ON suppliers(code);
 
 CREATE TABLE IF NOT EXISTS products (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sku VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     category_id INT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
@@ -138,7 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
 
 CREATE TABLE IF NOT EXISTS product_units (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     unit_name VARCHAR(50) NOT NULL,
     conversion_factor NUMERIC(10, 2) NOT NULL CHECK (conversion_factor > 0),
@@ -152,7 +151,7 @@ CREATE TABLE IF NOT EXISTS product_units (
 CREATE INDEX IF NOT EXISTS idx_product_units_product_id ON product_units(product_id);
 
 CREATE TABLE IF NOT EXISTS price_lists (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     customer_group VARCHAR(50) NOT NULL,
@@ -170,7 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_price_lists_customer_group ON price_lists(custome
 CREATE INDEX IF NOT EXISTS idx_price_lists_dates ON price_lists(start_date, end_date);
 
 CREATE TABLE IF NOT EXISTS price_list_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     price_list_id UUID NOT NULL REFERENCES price_lists(id) ON DELETE CASCADE,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     unit_id UUID NOT NULL REFERENCES product_units(id) ON DELETE RESTRICT,
@@ -185,7 +184,7 @@ CREATE TABLE IF NOT EXISTS price_list_items (
 CREATE INDEX IF NOT EXISTS idx_price_list_items_lookup ON price_list_items(price_list_id, product_id, unit_id);
 
 CREATE TABLE IF NOT EXISTS discounts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     product_id UUID REFERENCES products(id) ON DELETE CASCADE,
@@ -207,7 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_discounts_dates ON discounts(start_date, end_date
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS customers (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     tax_code VARCHAR(50),
@@ -236,7 +235,7 @@ CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status);
 CREATE INDEX IF NOT EXISTS idx_customers_debt ON customers(current_debt, credit_limit);
 
 CREATE TABLE IF NOT EXISTS customer_shipping_addresses (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
     receiver_name VARCHAR(150) NOT NULL,
     phone VARCHAR(20) NOT NULL,
@@ -257,7 +256,7 @@ CREATE INDEX IF NOT EXISTS idx_customer_shipping_customer_id ON customer_shippin
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS warehouses (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     address TEXT NOT NULL,
@@ -272,7 +271,7 @@ CREATE INDEX IF NOT EXISTS idx_warehouses_code ON warehouses(code);
 CREATE INDEX IF NOT EXISTS idx_warehouses_status ON warehouses(status);
 
 CREATE TABLE IF NOT EXISTS warehouse_locations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
     code VARCHAR(50) NOT NULL,
     zone VARCHAR(50) NOT NULL DEFAULT 'DEFAULT',
@@ -301,7 +300,7 @@ CREATE INDEX IF NOT EXISTS idx_user_warehouses_user ON user_warehouses(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_warehouses_wh ON user_warehouses(warehouse_id);
 
 CREATE TABLE IF NOT EXISTS inventories (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     on_hand NUMERIC(15, 2) NOT NULL DEFAULT 0 CHECK (on_hand >= 0),
@@ -320,7 +319,7 @@ CREATE INDEX IF NOT EXISTS idx_inventories_lookup ON inventories(warehouse_id, p
 CREATE INDEX IF NOT EXISTS idx_inventories_available ON inventories(warehouse_id, product_id, available);
 
 CREATE TABLE IF NOT EXISTS inventory_batches (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     batch_number VARCHAR(100) NOT NULL,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
@@ -360,7 +359,7 @@ CREATE INDEX IF NOT EXISTS idx_inv_trans_lookup ON inventory_transactions(wareho
 CREATE INDEX IF NOT EXISTS idx_inv_trans_ref ON inventory_transactions(reference_type, reference_id);
 
 CREATE TABLE IF NOT EXISTS goods_receipts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
     supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
@@ -381,7 +380,7 @@ CREATE INDEX IF NOT EXISTS idx_goods_receipts_code ON goods_receipts(code);
 CREATE INDEX IF NOT EXISTS idx_goods_receipts_status ON goods_receipts(status);
 
 CREATE TABLE IF NOT EXISTS goods_receipt_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     receipt_id UUID NOT NULL REFERENCES goods_receipts(id) ON DELETE CASCADE,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     unit_id UUID NOT NULL REFERENCES product_units(id) ON DELETE RESTRICT,
@@ -401,7 +400,7 @@ CREATE TABLE IF NOT EXISTS goods_receipt_items (
 CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt_id ON goods_receipt_items(receipt_id);
 
 CREATE TABLE IF NOT EXISTS goods_issues (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     order_id UUID, -- Sẽ được tham chiếu sau khi tạo orders
     warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
@@ -424,7 +423,7 @@ CREATE INDEX IF NOT EXISTS idx_goods_issues_code ON goods_issues(code);
 CREATE INDEX IF NOT EXISTS idx_goods_issues_status ON goods_issues(status);
 
 CREATE TABLE IF NOT EXISTS goods_issue_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id UUID NOT NULL REFERENCES goods_issues(id) ON DELETE CASCADE,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     batch_id UUID REFERENCES inventory_batches(id) ON DELETE RESTRICT,
@@ -446,7 +445,7 @@ CREATE INDEX IF NOT EXISTS idx_issue_items_batch_id ON goods_issue_items(batch_i
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS orders (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
     shipping_address_id UUID REFERENCES customer_shipping_addresses(id) ON DELETE RESTRICT,
@@ -488,7 +487,7 @@ ALTER TABLE goods_issues
 ADD CONSTRAINT fk_goods_issues_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS order_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     unit_id UUID NOT NULL REFERENCES product_units(id) ON DELETE RESTRICT,
@@ -508,8 +507,82 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
 
+-- Application workflow payloads keep order snapshots and nested line items
+-- durable while the legacy normalized tables retain strict UUID foreign keys.
+CREATE TABLE IF NOT EXISTS app_order_records (
+    id TEXT PRIMARY KEY,
+    order_code TEXT NOT NULL UNIQUE,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_app_order_records_created_at
+    ON app_order_records(created_at DESC);
+CREATE TABLE IF NOT EXISTS app_order_storage_state (
+    state_key TEXT PRIMARY KEY,
+    seeded BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS app_order_approval_history (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    action VARCHAR(30) NOT NULL CHECK (action IN ('APPROVE', 'REJECT', 'RETURN_FOR_UPDATE')),
+    comment TEXT,
+    approver_id TEXT NOT NULL,
+    approver_name TEXT NOT NULL,
+    approver_roles TEXT[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_app_order_approval_history_order
+    ON app_order_approval_history(order_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    order_line_id TEXT NOT NULL,
+    product_sku TEXT NOT NULL,
+    warehouse_id UUID NOT NULL DEFAULT '11111111-0000-0000-0000-000000000001',
+    base_quantity NUMERIC(15, 2) NOT NULL CHECK (base_quantity > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS app_inventory_stock_balances (
+    product_sku TEXT NOT NULL,
+    warehouse_id UUID NOT NULL DEFAULT '11111111-0000-0000-0000-000000000001',
+    physical_quantity NUMERIC(15, 2) NOT NULL CHECK (physical_quantity >= 0),
+    min_stock_level NUMERIC(15, 2) DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (product_sku, warehouse_id)
+);
+CREATE TABLE IF NOT EXISTS app_agency_default_warehouses (
+    agency_key TEXT PRIMARY KEY,
+    warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
+    assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_order_active_line_reservation
+    ON app_order_inventory_reservations(order_id, order_line_id)
+    WHERE status = 'RESERVED';
+CREATE INDEX IF NOT EXISTS idx_app_order_active_sku_reservations
+    ON app_order_inventory_reservations(product_sku)
+    WHERE status = 'RESERVED';
+
+CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Order approval history is append-only';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_app_order_approval_history_immutable
+    ON app_order_approval_history;
+CREATE TRIGGER trg_app_order_approval_history_immutable
+    BEFORE UPDATE OR DELETE ON app_order_approval_history
+    FOR EACH ROW EXECUTE FUNCTION app_reject_order_approval_history_mutation();
+
 CREATE TABLE IF NOT EXISTS order_approvals (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     approver_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     action VARCHAR(30) NOT NULL CHECK (action IN ('SUBMIT', 'APPROVE', 'REJECT', 'RETURN_FOR_UPDATE')),
@@ -524,7 +597,7 @@ CREATE INDEX IF NOT EXISTS idx_order_approvals_order_id ON order_approvals(order
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS invoices (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE RESTRICT,
     goods_issue_id UUID REFERENCES goods_issues(id) ON DELETE SET NULL,
@@ -552,7 +625,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_payment_status ON invoices(payment_statu
 CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date);
 
 CREATE TABLE IF NOT EXISTS payments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
     amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
@@ -574,7 +647,7 @@ CREATE INDEX IF NOT EXISTS idx_payments_customer_id ON payments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(payment_date);
 
 CREATE TABLE IF NOT EXISTS payment_allocations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     payment_id UUID NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
     invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
     amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
@@ -604,7 +677,7 @@ CREATE INDEX IF NOT EXISTS idx_debt_ledger_customer ON customer_debt_ledger(cust
 CREATE INDEX IF NOT EXISTS idx_debt_ledger_aging ON customer_debt_ledger(customer_id, aging_bucket);
 
 CREATE TABLE IF NOT EXISTS return_orders (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) NOT NULL UNIQUE,
     order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
     invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
@@ -625,7 +698,7 @@ CREATE INDEX IF NOT EXISTS idx_return_orders_customer ON return_orders(customer_
 CREATE INDEX IF NOT EXISTS idx_return_orders_status ON return_orders(status);
 
 CREATE TABLE IF NOT EXISTS return_order_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     return_order_id UUID NOT NULL REFERENCES return_orders(id) ON DELETE CASCADE,
     product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     unit_id UUID NOT NULL REFERENCES product_units(id) ON DELETE RESTRICT,
@@ -932,5 +1005,52 @@ BEGIN
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+-- SN-44: immutable approval history and active inventory reservations.
+CREATE TABLE IF NOT EXISTS app_order_approval_history (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    action VARCHAR(30) NOT NULL CHECK (action IN ('APPROVE', 'REJECT', 'RETURN_FOR_UPDATE')),
+    comment TEXT,
+    approver_id TEXT NOT NULL,
+    approver_name TEXT NOT NULL,
+    approver_roles TEXT[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_order_approval_history_order
+    ON app_order_approval_history(order_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_order_inventory_reservations (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES app_order_records(id) ON DELETE RESTRICT,
+    order_line_id TEXT NOT NULL,
+    product_sku TEXT NOT NULL,
+    warehouse_id UUID NOT NULL DEFAULT '11111111-0000-0000-0000-000000000001',
+    base_quantity NUMERIC(15, 2) NOT NULL CHECK (base_quantity > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_order_active_line_reservation
+    ON app_order_inventory_reservations(order_id, order_line_id)
+    WHERE status = 'RESERVED';
+CREATE INDEX IF NOT EXISTS idx_app_order_active_sku_reservations
+    ON app_order_inventory_reservations(product_sku)
+    WHERE status = 'RESERVED';
+
+CREATE OR REPLACE FUNCTION app_reject_order_approval_history_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Order approval history is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_app_order_approval_history_immutable
+    ON app_order_approval_history;
+CREATE TRIGGER trg_app_order_approval_history_immutable
+    BEFORE UPDATE OR DELETE ON app_order_approval_history
+    FOR EACH ROW EXECUTE FUNCTION app_reject_order_approval_history_mutation();
 
 COMMIT;

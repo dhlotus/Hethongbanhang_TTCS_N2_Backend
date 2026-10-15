@@ -26,6 +26,7 @@ export class OrderEntity {
   customerGroup?: string;
   salesRepId?: string;
   salesRepName?: string;
+  region?: string;
   deliveryPoint?: IOrderDeliveryPoint;
   deliveryDate?: string;
   lines: OrderLineEntity[];
@@ -36,8 +37,18 @@ export class OrderEntity {
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   priceListId?: string;
+  isCustomerLocked?: boolean;
+  warningMessage?: string;
   requiresApproval: boolean;
   approvalReasons: string[];
+  cancelReason?: string;
+  isCreditLimitExceeded?: boolean;
+  creditLimitExceededAmount?: number;
+  approvedAt?: Date;
+  approverId?: string;
+  reservedUntil?: Date;
+  isShortDelivery?: boolean; // Cờ đánh dấu giao thiếu (SN-170)
+  createdSource?: string; // Nguồn tạo đơn (SN-49)
   createdAt: Date;
   updatedAt: Date;
 
@@ -51,8 +62,13 @@ export class OrderEntity {
     this.grandTotal = partial.grandTotal ?? 0;
     this.requiresApproval = partial.requiresApproval ?? false;
     this.approvalReasons = partial.approvalReasons ?? [];
+    this.cancelReason = partial.cancelReason;
     this.status = partial.status ?? OrderStatus.DRAFT;
     this.paymentStatus = partial.paymentStatus ?? PaymentStatus.UNPAID;
+    this.isCreditLimitExceeded = partial.isCreditLimitExceeded ?? false;
+    this.creditLimitExceededAmount = partial.creditLimitExceededAmount ?? 0;
+    this.isShortDelivery = partial.isShortDelivery ?? false;
+    this.createdSource = partial.createdSource ?? 'AGENCY_PORTAL';
     this.createdAt = partial.createdAt ?? new Date();
     this.updatedAt = partial.updatedAt ?? new Date();
   }

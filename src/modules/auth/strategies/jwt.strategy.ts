@@ -1,8 +1,10 @@
 import { Inject, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { UserRole } from '../../../common/enums/user-role.enum';
 import { UserStatus } from '../../../common/enums/user-status.enum';
 import { jwtConfig } from '../../../config/jwt.config';
+import { DatabaseService } from '../../../database/database.service';
 import { UsersService } from '../../users/users.service';
 import { AUTH_CONSTANTS } from '../constants/auth.constant';
 import { ICurrentUser } from '../interfaces/current-user.interface';
@@ -14,6 +16,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     @Inject(UsersService)
     @Optional()
     private readonly usersService?: UsersService,
+    @Inject(DatabaseService)
+    @Optional()
+    private readonly dbService?: DatabaseService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -25,6 +30,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   /**
    * Xác thực và phân giải payload của Access Token
    * Kiểm tra trực tiếp trạng thái tài khoản: Nếu bị LOCKED, từ chối ngay lập tức!
+   * Đồng thời tự động trích xuất agencyId / customerId từ Token cho Đại lý B2B
    */
   async validate(payload: IJwtPayload): Promise<ICurrentUser> {
     const roles = payload.roles ?? (payload.role ? [payload.role] : []);
@@ -33,6 +39,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     let avatarUrl: string | null = null;
+    let customerId: string | null = null;
+    let customerCode: string | null = null;
+
     if (this.usersService) {
       const user = await this.usersService.findById(payload.sub);
       if (user && user.status === UserStatus.LOCKED) {
@@ -42,6 +51,52 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
       if (user) {
         avatarUrl = user.avatarUrl ?? null;
+        customerId = user.customerId ?? null;
+        customerCode = user.customerCode ?? null;
+      }
+    }
+
+    // Nếu người dùng có vai trò Đại lý (CUSTOMER) mà chưa có customerId, truy vấn DB hoặc file dữ liệu để tự động gắn
+    const isCustomerRole = roles.includes(UserRole.CUSTOMER) || (roles as string[]).includes('CUSTOMER');
+    if (isCustomerRole && !customerId) {
+      if (this.dbService?.isConnected()) {
+        try {
+          const queryRes = await this.dbService.query<{ id: string; code: string }>(
+            `SELECT id, code FROM customers WHERE user_id::text = $1 OR LOWER(email) = $2 LIMIT 1`,
+            [payload.sub, (payload.email || '').toLowerCase().trim()],
+          );
+          if (queryRes.length > 0) {
+            customerId = queryRes[0].id;
+            customerCode = queryRes[0].code;
+          }
+        } catch (err) {
+          // Fallback
+        }
+      }
+
+      // Fallback tra cứu từ nguồn dữ liệu lưu trữ khách hàng (customers.json)
+      if (!customerId) {
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          const customersPath = path.join(process.cwd(), 'uploads', 'data', 'customers.json');
+          if (fs.existsSync(customersPath)) {
+            const list = JSON.parse(fs.readFileSync(customersPath, 'utf8'));
+            const cleanEmail = (payload.email || '').toLowerCase().trim();
+            const matched = list.find(
+              (c: any) =>
+                c.userId === payload.sub ||
+                (c.email && c.email.toLowerCase().trim() === cleanEmail) ||
+                (c.code && payload.username && c.code.toLowerCase() === payload.username.toLowerCase()),
+            );
+            if (matched) {
+              customerId = matched.id;
+              customerCode = matched.code;
+            }
+          }
+        } catch {
+          // Ignore
+        }
       }
     }
 
@@ -51,6 +106,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       roles,
       username: payload.username,
       avatarUrl,
+      customerId,
+      customerCode,
+      agencyId: customerId,
     };
   }
 }

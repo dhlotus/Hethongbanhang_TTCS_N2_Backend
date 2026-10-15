@@ -102,7 +102,7 @@ describe('Order Creation & Live Calculation (SN-38 & SN-39)', () => {
   it('lưu nháp được và mở lại tiếp tục gõ (SN-39)', async () => {
     // 1. Lưu nháp
     const draftDto: CreateOrderDto = {
-      customerId: 'cust-003',
+      customerId: 'cust-001',
       lines: [
         {
           productId: 'prod-003',

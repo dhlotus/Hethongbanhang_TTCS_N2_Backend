@@ -1,9 +1,11 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
 import { PoolConfig } from 'pg';
 
 /**
  * Cấu hình kết nối Cơ sở dữ liệu PostgreSQL cho LOHA SALES
  */
-export const databaseConnectionConfig: PoolConfig = {
+export const getDatabaseConnectionConfig = (): PoolConfig => ({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432', 10),
   user: process.env.DB_USERNAME || 'postgres',
@@ -12,4 +14,7 @@ export const databaseConnectionConfig: PoolConfig = {
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
-};
+});
+
+export const databaseConnectionConfig: PoolConfig = getDatabaseConnectionConfig();
+

@@ -274,7 +274,12 @@ export class AuthService {
     this.revokeTokenRecord(rawToken);
 
     // 6. Phát hành cặp token mới
-    return this.generateTokens(userInfo);
+    const newTokens = await this.generateTokens(userInfo);
+    return {
+      ...newTokens,
+      access_token: newTokens.accessToken,
+      refresh_token: newTokens.refreshToken,
+    };
   }
 
   /**

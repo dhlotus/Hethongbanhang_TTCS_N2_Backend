@@ -276,7 +276,7 @@ export class ExcelImportService {
     }
 
     // Ghi đĩa đồng bộ 1 lần duy nhất sau khi hoàn tất toàn bộ danh sách để tối ưu hiệu năng
-    this.usersService.flushUsersToDisk();
+    await this.usersService.flushUsersToDisk();
 
     return results;
   }
@@ -461,6 +461,19 @@ export class ExcelImportService {
   ): void {
     if (!data.role) {
       errors.push(EXCEL_IMPORT_MESSAGES.ROLE_EMPTY);
+      return;
+    }
+
+    // Chặn lỗ hổng bảo mật: Tuyệt đối không cho phép tạo tài khoản Đại lý / Khách hàng (CUSTOMER / AGENCY) qua file Excel nhân sự
+    const normalizedRole = String(resolvedRole).toUpperCase();
+    if (
+      normalizedRole === UserRole.CUSTOMER ||
+      normalizedRole === 'CUSTOMER' ||
+      normalizedRole === 'AGENCY'
+    ) {
+      errors.push(
+        'Không được phép tạo tài khoản Đại lý / Khách hàng B2B qua tính năng import nhân sự. Tài khoản Đại lý chỉ được cấp tự động thông qua quy trình tạo Hồ sơ Đại lý.',
+      );
       return;
     }
 
