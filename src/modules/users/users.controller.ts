@@ -226,6 +226,20 @@ export class UsersController {
   }
 
   /**
+   * Xóa vĩnh viễn tài khoản người dùng khỏi hệ thống & cơ sở dữ liệu
+   * DELETE /api/users/:id
+   */
+  @Delete(':id')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  async deleteUser(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<{ success: boolean; message: string; deletedId: string }> {
+    return this.usersService.deleteUser(id, currentUser);
+  }
+
+  /**
    * Import người dùng hàng loạt từ file Excel (SN-147)
    * POST /api/users/import-excel
    * - Chỉ ADMIN mới có quyền thực hiện

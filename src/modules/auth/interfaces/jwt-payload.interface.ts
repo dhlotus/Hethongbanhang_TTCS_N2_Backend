@@ -6,6 +6,10 @@ export interface IJwtPayload {
   role?: UserRole;
   roles?: UserRole[];
   username?: string;
+  warehouseId?: string | null;
+  warehouseCode?: string | null;
+  warehouseName?: string | null;
+  assignedWarehouse?: string | null;
   jti?: string;
   iat?: number;
   exp?: number;

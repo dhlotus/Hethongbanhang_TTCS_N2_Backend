@@ -184,8 +184,21 @@ export class InventoryService implements OnModuleInit {
        SELECT UPPER(sku), $3::uuid, quantity
        FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
        ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => warehouseId === DEFAULT_WAREHOUSE_ID ? product.stockQuantity : 0), warehouseId],
+      [products.map((product) => product.sku), products.map((product) => product.stockQuantity || 100), warehouseId],
     );
+    try {
+      await this.databaseService.query(
+        `UPDATE app_inventory_stock_balances b
+         SET physical_quantity = i.on_hand
+         FROM inventories i
+         JOIN products p ON i.product_id = p.id
+         WHERE b.warehouse_id = i.warehouse_id
+           AND UPPER(b.product_sku) = UPPER(p.sku)
+           AND b.warehouse_id = $1::uuid
+           AND i.on_hand > 0`,
+        [warehouseId],
+      );
+    } catch {}
     const rows = await this.databaseService.query<{ product_sku: string; physical_quantity: string }>(
       `SELECT product_sku, physical_quantity::text
        FROM app_inventory_stock_balances
@@ -308,18 +321,71 @@ export class InventoryService implements OnModuleInit {
   /**
    * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
    */
-  async getStockOverview(query?: {
-    warehouse?: string;
-    warehouseId?: string;
-    category?: string;
-    status?: string;
-    search?: string;
-  } | string): Promise<StockOverviewItem[]> {
+  async getStockOverview(
+    query?: {
+      warehouse?: string;
+      warehouseId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+    } | string,
+    currentUser?: ICurrentUser,
+  ): Promise<StockOverviewItem[]> {
     const q = typeof query === 'string' ? { warehouseId: query } : query;
     const isUuid = (val?: string) =>
       Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim()));
     const rawWh = q?.warehouseId || q?.warehouse;
-    const warehouseId = isUuid(rawWh) ? rawWh!.trim() : DEFAULT_WAREHOUSE_ID;
+
+    const roles = currentUser?.roles || [];
+    const isWarehouseStaff = roles.some((r) =>
+      ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+    ) && !roles.includes(UserRole.ADMIN);
+
+    let warehouseId = DEFAULT_WAREHOUSE_ID;
+    let warehouseName = DEFAULT_WAREHOUSE_NAME;
+
+    // 1. Nếu là nhân sự kho (Quản lý kho / Thủ kho): Cưỡng chế chỉ xem kho được phân công
+    if (isWarehouseStaff) {
+      if (currentUser?.warehouseId && isUuid(currentUser.warehouseId)) {
+        warehouseId = currentUser.warehouseId.trim();
+      } else if (currentUser?.assignedWarehouse && this.databaseService?.isConnected()) {
+        try {
+          const matchWh = await this.databaseService.query<{ id: string; name: string; code: string }>(
+            `SELECT id, name, code FROM warehouses
+             WHERE id::text = $1 OR code = $1 OR name = $1
+                OR $1 ILIKE '%' || code || '%' OR $1 ILIKE '%' || name || '%'
+             LIMIT 1`,
+            [currentUser.assignedWarehouse.trim()],
+          );
+          if (matchWh[0]?.id) {
+            warehouseId = matchWh[0].id;
+            warehouseName = `${matchWh[0].name} - ${matchWh[0].code}`;
+          }
+        } catch {}
+      }
+    } else {
+      // 2. Với Quản trị viên / Kinh doanh: Hỗ trợ lọc theo bất kỳ kho nào theo UUID hoặc mã/tên kho
+      if (rawWh && rawWh !== 'ALL') {
+        if (isUuid(rawWh)) {
+          warehouseId = rawWh.trim();
+        } else if (this.databaseService?.isConnected()) {
+          try {
+            const matchWh = await this.databaseService.query<{ id: string; name: string; code: string }>(
+              `SELECT id, name, code FROM warehouses
+               WHERE id::text = $1 OR code = $1 OR name = $1
+                  OR $1 ILIKE '%' || code || '%' OR $1 ILIKE '%' || name || '%'
+               LIMIT 1`,
+              [rawWh.trim()],
+            );
+            if (matchWh[0]?.id) {
+              warehouseId = matchWh[0].id;
+              warehouseName = `${matchWh[0].name} - ${matchWh[0].code}`;
+            }
+          } catch {}
+        }
+      }
+    }
+
     const products = await this.productsService.findAll();
 
     let physicalBalances = new Map<string, number>();
@@ -338,18 +404,21 @@ export class InventoryService implements OnModuleInit {
       }>
     >();
     let minLevels = new Map<string, number>();
-    let warehouseName = DEFAULT_WAREHOUSE_NAME;
 
     if (this.databaseService?.isConnected()) {
       await this.ensureStockReservationsTable();
       physicalBalances = await this.getStockBalances(products, warehouseId);
       minLevels = await this.getMinStockLevelsFromDb(products, warehouseId);
       try {
-        const warehouseRows = await this.databaseService.query<{ name: string }>(
-          'SELECT name FROM warehouses WHERE id = $1::uuid',
+        const warehouseRows = await this.databaseService.query<{ name: string; code: string }>(
+          'SELECT name, code FROM warehouses WHERE id = $1::uuid',
           [warehouseId],
         );
-        if (warehouseRows[0]?.name) warehouseName = warehouseRows[0].name;
+        if (warehouseRows[0]?.name) {
+          warehouseName = warehouseRows[0].code
+            ? `${warehouseRows[0].name} - ${warehouseRows[0].code}`
+            : warehouseRows[0].name;
+        }
       } catch {
         // Ignore
       }
@@ -686,9 +755,18 @@ export class InventoryService implements OnModuleInit {
   /**
    * Danh sách SKU có tồn khả dụng <= tồn tối thiểu (> 0); hụt nhiều nhất lên đầu (SN-183).
    */
-  async getLowStockAlerts(warehouseId?: string): Promise<LowStockAlert[]> {
-    const balances = await this.getStockOverview();
-    const targetWarehouse = warehouseId?.trim().toUpperCase();
+  async getLowStockAlerts(warehouseId?: string, currentUser?: ICurrentUser): Promise<LowStockAlert[]> {
+    const roles = currentUser?.roles || [];
+    const isWarehouseStaff = roles.some((r) =>
+      ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+    ) && !roles.includes(UserRole.ADMIN);
+
+    const effectiveWh = isWarehouseStaff
+      ? (currentUser?.warehouseId || warehouseId)
+      : warehouseId;
+
+    const balances = await this.getStockOverview(effectiveWh, currentUser);
+    const targetWarehouse = effectiveWh?.trim().toUpperCase();
     return balances
       .filter((row) => !targetWarehouse || (row.warehouseId && row.warehouseId.toUpperCase() === targetWarehouse))
       .filter((row) => (row.minStockLevel ?? 0) > 0 && row.stockQuantity <= (row.minStockLevel ?? 0))
@@ -1216,15 +1294,39 @@ export class InventoryService implements OnModuleInit {
   /**
    * Danh sách phiếu kiểm kê có lọc theo trạng thái, kho, từ ngày, đến ngày (SN-182)
    */
-  async getAudits(query?: QueryAuditsDto): Promise<InventoryAuditEntity[]> {
+  async getAudits(query?: QueryAuditsDto, currentUser?: ICurrentUser): Promise<InventoryAuditEntity[]> {
     let list = Array.from(this.audits.values());
+
+    const roles = currentUser?.roles || [];
+    const isWarehouseStaff = roles.some((r) =>
+      ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+    ) && !roles.includes(UserRole.ADMIN);
+
+    if (isWarehouseStaff) {
+      const staffWhId = currentUser?.warehouseId;
+      const staffWhName = (currentUser?.assignedWarehouse || currentUser?.warehouseName || '').toLowerCase();
+      list = list.filter((a) => {
+        if (staffWhId && a.warehouseId && a.warehouseId.toLowerCase() === staffWhId.toLowerCase()) {
+          return true;
+        }
+        if (staffWhName) {
+          const aWhName = (a.warehouseName || '').toLowerCase();
+          return (
+            aWhName.includes(staffWhName) ||
+            staffWhName.includes(aWhName) ||
+            (a.warehouseId && staffWhName.includes(a.warehouseId.toLowerCase()))
+          );
+        }
+        return false;
+      });
+    }
 
     if (query?.status) {
       const statusUpper = query.status.trim().toUpperCase();
       list = list.filter((a) => a.status.toUpperCase() === statusUpper);
     }
 
-    if (query?.warehouseId) {
+    if (query?.warehouseId && !isWarehouseStaff) {
       const whId = query.warehouseId.trim().toUpperCase();
       list = list.filter((a) => a.warehouseId.toUpperCase() === whId);
     }
