@@ -57,6 +57,7 @@ export class CustomersService implements OnModuleInit {
     this.seedInitialCustomers();
     this.loadCustomersFromDisk();
     this.loadAssignmentHistoriesFromDisk();
+    this.normalizeSalesRepNames();
   }
 
   async onModuleInit(): Promise<void> {
@@ -65,6 +66,35 @@ export class CustomersService implements OnModuleInit {
     }
     this.loadCustomersFromDisk();
     this.loadAssignmentHistoriesFromDisk();
+    this.normalizeSalesRepNames();
+  }
+
+  /**
+   * Chuẩn hóa tên nhân viên kinh doanh tránh sai lệch dữ liệu seed cũ
+   */
+  private normalizeSalesRepNames(): void {
+    let hasChanges = false;
+    for (const c of this.customers.values()) {
+      if (c.salesRepId === 'usr-sale-02' && (c.salesRepName === 'Lê Thị Thu Thảo' || !c.salesRepName)) {
+        c.salesRepName = 'Nguyễn Thị Hằng';
+        if (c.salesRep) c.salesRep.name = 'Nguyễn Thị Hằng';
+        hasChanges = true;
+      }
+    }
+    for (const h of this.assignmentHistories) {
+      if (h.toSalesRepId === 'usr-sale-02' && h.toSalesRepName === 'Lê Thị Thu Thảo') {
+        h.toSalesRepName = 'Nguyễn Thị Hằng';
+        hasChanges = true;
+      }
+      if (h.fromSalesRepId === 'usr-sale-02' && h.fromSalesRepName === 'Lê Thị Thu Thảo') {
+        h.fromSalesRepName = 'Nguyễn Thị Hằng';
+        hasChanges = true;
+      }
+    }
+    if (hasChanges) {
+      this.saveCustomersToDisk();
+      this.saveAssignmentHistoriesToDisk();
+    }
   }
 
   private getStorageFilePath(): string {
@@ -1172,11 +1202,23 @@ export class CustomersService implements OnModuleInit {
     const fromSalesRepId = customer.salesRepId || null;
     const fromSalesRepName = customer.salesRepName || null;
 
-    let toSalesRepName = 'Trần Văn Nam';
-    if (dto.salesRepId === 'usr-salesmgr-003') toSalesRepName = 'Lê Quản Lý (Sales Manager)';
-    else if (dto.salesRepId === 'usr-sales-002') toSalesRepName = 'Trần Văn Nam';
-    else if (dto.salesRepId === 'usr-sale-01') toSalesRepName = 'Trần Văn Long';
-    else if (dto.salesRepId === 'usr-sale-02') toSalesRepName = 'Lê Thị Thu Thảo';
+    let toSalesRepName = '';
+    if (this.usersService) {
+      try {
+        const u = await this.usersService.findById(dto.salesRepId);
+        if (u?.fullName) toSalesRepName = u.fullName;
+      } catch {
+        // fallback to predefined map
+      }
+    }
+    if (!toSalesRepName) {
+      if (dto.salesRepId === 'usr-salesmgr-003') toSalesRepName = 'Lê Quản Lý';
+      else if (dto.salesRepId === 'usr-sales-002') toSalesRepName = 'Trần Văn Nam';
+      else if (dto.salesRepId === 'usr-sale-01') toSalesRepName = 'Trần Văn Long';
+      else if (dto.salesRepId === 'usr-sale-02') toSalesRepName = 'Nguyễn Thị Hằng';
+      else if (dto.salesRepId === 'usr-sale-03') toSalesRepName = 'Phạm Minh Tuấn';
+      else toSalesRepName = 'Trần Văn Nam';
+    }
 
     customer.salesRepId = dto.salesRepId;
     customer.salesRepName = toSalesRepName;
