@@ -18,6 +18,7 @@ export class OrderLineEntity {
   lineTotal: number; // Thành tiền = quantity * unitPrice
   stockAvailable?: number; // Tồn khả dụng tham khảo
   minPrice?: number; // Giá sàn theo đơn vị đặt hàng
+  dispatchedQuantity?: number; // Số lượng đã xuất kho bàn giao lên xe (SN-199)
   deliveredQuantity?: number; // Số lượng thực tế đã giao nhận (SN-170)
   deliveredBaseQuantity?: number; // Số lượng cơ sở thực tế đã giao
   isShortDelivery?: boolean; // Cờ báo dòng hàng bị giao thiếu (SN-170)
@@ -28,6 +29,7 @@ export class OrderLineEntity {
     Object.assign(this, partial);
     this.conversionRate = partial.conversionRate ?? 1;
     this.quantity = partial.quantity ?? 1;
+    this.dispatchedQuantity = partial.dispatchedQuantity;
     this.deliveredQuantity = partial.deliveredQuantity;
     this.deliveredBaseQuantity = partial.deliveredBaseQuantity;
     this.isShortDelivery = partial.isShortDelivery ?? false;

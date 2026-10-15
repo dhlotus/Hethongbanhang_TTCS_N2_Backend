@@ -10,8 +10,9 @@ export enum OrderStatus {
   REJECTED = 'REJECTED', // Bị từ chối sau khi quản lý xét duyệt
   RETURNED_FOR_UPDATE = 'RETURNED_FOR_UPDATE', // Trả lại nhân viên kinh doanh để chỉnh sửa
   PROCESSING = 'PROCESSING', // Đang soạn hàng
-  SHIPPED = 'SHIPPED', // Đã xuất kho / giao vận
-  DELIVERED = 'DELIVERED', // Giao thành công
+  DISPATCHED = 'DISPATCHED', // Đã xuất kho (SN-199)
+  SHIPPED = 'SHIPPED', // Đang giao hàng / vận chuyển
+  DELIVERED = 'DELIVERED', // Đã giao / Giao thành công
   CLOSED = 'CLOSED', // Đã đóng
   CANCELLED = 'CANCELLED', // Đã hủy
   RETURNED = 'RETURNED', // Hoàn hàng
