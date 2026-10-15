@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, Optional, Logger } from '@nestjs/common';
+import * as fs from 'fs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
 import { DatabaseService } from '../../database/database.service';
@@ -21,7 +22,7 @@ const COMPANY_INFO = {
 
 const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   [PaymentMethod.CASH]: 'Tiền mặt',
-  [PaymentMethod.BANK_TRANSFER]: 'Chuyển khoản ngân hàng',
+  [PaymentMethod.BANK_TRANSFER]: 'Chuyển khoản',
   [PaymentMethod.CREDIT_CARD]: 'Thẻ tín dụng / Ghi nợ',
   [PaymentMethod.CHECK]: 'Séc thanh toán',
 };
@@ -208,7 +209,7 @@ export class ReceiptsService {
 
   /**
    * Sinh Buffer file PDF phiếu thu chính thức (Endpoint: GET /api/receipts/:id/pdf)
-   * Sử dụng PDFKit với layout A5/A4 chuẩn kế toán
+   * Sử dụng PDFKit với font Arial Unicode tiếng Việt, khớp 100% với mẫu in giao diện
    */
   async generatePdfBuffer(idOrCode: string): Promise<{ buffer: Buffer; filename: string }> {
     const data = await this.getPrintData(idOrCode);
@@ -236,34 +237,28 @@ export class ReceiptsService {
         });
         doc.on('error', (err: unknown) => reject(err));
 
-        // 1. Header Công ty & Mẫu phiếu thu
-        doc
-          .fontSize(10)
-          .font('Helvetica-Bold')
-          .text(COMPANY_INFO.name, 40, 40, { align: 'left' });
+        // Cấu hình font Arial Unicode tiếng Việt
+        const arialPath = 'C:\\Windows\\Fonts\\arial.ttf';
+        const arialBoldPath = 'C:\\Windows\\Fonts\\arialbd.ttf';
+        const arialItalicPath = 'C:\\Windows\\Fonts\\ariali.ttf';
 
-        doc
-          .fontSize(8)
-          .font('Helvetica')
-          .text(`Dia chi: ${COMPANY_INFO.address}`, 40, 55, { align: 'left' })
-          .text(`MST: ${COMPANY_INFO.taxCode}  |  Hotline: ${COMPANY_INFO.phone}`, 40, 68, { align: 'left' });
+        const hasArial = fs.existsSync(arialPath);
+        if (hasArial) {
+          doc.registerFont('Arial', arialPath);
+          doc.registerFont('Arial-Bold', arialBoldPath);
+          doc.registerFont('Arial-Italic', arialItalicPath);
+        }
 
-        // Mẫu chứng từ bộ tài chính (Góc trên bên phải)
-        doc
-          .fontSize(8)
-          .font('Helvetica-Bold')
-          .text('Mau so: 01 - TT', 380, 40, { align: 'right' })
-          .font('Helvetica')
-          .text('(Ban hanh theo TT 200/2014/TT-BTC)', 380, 52, { align: 'right' });
+        const fontRegular = hasArial ? 'Arial' : 'Helvetica';
+        const fontBold = hasArial ? 'Arial-Bold' : 'Helvetica-Bold';
+        const fontItalic = hasArial ? 'Arial-Italic' : 'Helvetica-Oblique';
 
-        doc.moveTo(40, 85).lineTo(555, 85).strokeColor('#cbd5e1').lineWidth(1).stroke();
-
-        // 2. Tiêu đề Phiếu thu
+        // 1. Tiêu đề Phiếu thu (Bắt đầu trực tiếp từ tiêu đề, không còn header công ty và barcode)
         doc
-          .fontSize(18)
-          .font('Helvetica-Bold')
-          .fillColor('#1e1b4b')
-          .text('PHIEU THU TIEN', 40, 105, { align: 'center' });
+          .fontSize(22)
+          .font(fontBold)
+          .fillColor('#0f172a')
+          .text('PHIẾU THU TIỀN', 40, 50, { align: 'center' });
 
         const d = new Date(data.paymentDate);
         const dayStr = d.getDate().toString().padStart(2, '0');
@@ -271,140 +266,121 @@ export class ReceiptsService {
         const yearStr = d.getFullYear().toString();
 
         doc
-          .fontSize(9)
-          .font('Helvetica')
+          .fontSize(10)
+          .font(fontItalic)
           .fillColor('#64748b')
-          .text(`Ngay ${dayStr} thang ${monthStr} nam ${yearStr}`, 40, 128, { align: 'center' })
-          .font('Helvetica-Bold')
-          .fillColor('#4338ca')
-          .text(`So phieu: ${data.receiptCode}`, 40, 142, { align: 'center' });
+          .text(`Ngày ${dayStr} tháng ${monthStr} năm ${yearStr}`, 40, 80, { align: 'center' });
 
-        // 3. Khung chi tiết 5 trường thông tin bắt buộc (SN-209)
-        let y = 175;
-        const leftCol = 50;
+        // 2. Khung chi tiết các trường thông tin bắt buộc
+        const boxX = 45;
+        const boxY = 115;
+        const boxWidth = 505;
+        const leftCol = 60;
         const valCol = 190;
 
-        doc.roundedRect(40, 165, 515, 175, 8).strokeColor('#e2e8f0').lineWidth(1).stroke();
+        let y = boxY + 15;
 
-        // [Trường 1 & 2] Mã duy nhất & Thông tin Đại lý
+        // Mã phiếu thu
         doc
-          .fontSize(9)
-          .font('Helvetica-Bold')
-          .fillColor('#334155')
-          .text('Ma phieu thu:', leftCol, y)
-          .font('Helvetica-Bold')
-          .fillColor('#1e293b')
+          .fontSize(10)
+          .font(fontBold)
+          .fillColor('#475569')
+          .text('Mã phiếu thu:', leftCol, y)
+          .font(fontBold)
+          .fillColor('#4338ca')
           .text(data.receiptCode, valCol, y);
 
-        y += 20;
+        y += 24;
+        // Đại lý / Người nộp
         doc
-          .font('Helvetica-Bold')
-          .fillColor('#334155')
-          .text('Khach hang / Dai ly:', leftCol, y)
-          .font('Helvetica-Bold')
+          .font(fontBold)
+          .fillColor('#475569')
+          .text('Đại lý / Người nộp:', leftCol, y)
+          .font(fontBold)
           .fillColor('#0f172a')
           .text(`${data.customerInfo.name} (${data.customerInfo.code})`, valCol, y);
 
         y += 18;
         doc
-          .font('Helvetica')
+          .font(fontRegular)
           .fillColor('#64748b')
-          .text('Dien thoai lien he:', leftCol, y)
+          .text('Điện thoại:', leftCol, y)
+          .font(fontBold)
+          .fillColor('#1e293b')
           .text(data.customerInfo.phone || '---', valCol, y);
 
         y += 18;
         doc
-          .font('Helvetica')
+          .font(fontRegular)
           .fillColor('#64748b')
-          .text('Dia chi giao dich:', leftCol, y)
-          .text(data.customerInfo.address || '---', valCol, y, { width: 350 });
-
-        y += 24;
-        // [Trường 3] Số tiền
-        doc
-          .font('Helvetica-Bold')
+          .text('Địa chỉ:', leftCol, y)
           .fillColor('#334155')
-          .text('So tien thu (VND):', leftCol, y)
-          .font('Helvetica-Bold')
+          .text(data.customerInfo.address || '---', valCol, y, { width: 340 });
+
+        const addrHeight = doc.heightOfString(data.customerInfo.address || '---', { width: 340 });
+        y += Math.max(18, addrHeight + 8);
+
+        // Số tiền thu
+        doc
+          .font(fontBold)
+          .fillColor('#475569')
+          .text('Số tiền thu:', leftCol, y)
+          .font(fontBold)
           .fillColor('#047857')
-          .fontSize(11)
+          .fontSize(13)
           .text(data.amountFormatted, valCol, y);
 
-        y += 18;
+        y += 20;
         doc
           .fontSize(9)
-          .font('Helvetica-Oblique')
+          .font(fontItalic)
           .fillColor('#475569')
-          .text('Viet bang chu:', leftCol, y)
-          .text(data.amountInWords, valCol, y, { width: 350 });
+          .text('(Viết bằng chữ: ', valCol, y, { continued: true })
+          .font(fontBold)
+          .text(`${data.amountInWords})`);
+
+        y += 24;
+        // Hình thức thu (Không còn mã BANK_TRANSFER)
+        doc
+          .fontSize(10)
+          .font(fontBold)
+          .fillColor('#475569')
+          .text('Hình thức thu:', leftCol, y)
+          .font(fontRegular)
+          .fillColor('#0f172a')
+          .text(data.paymentMethodLabel, valCol, y);
 
         y += 22;
-        // [Trường 4] Hình thức thu
+        // Người thu tiền
         doc
-          .fontSize(9)
-          .font('Helvetica-Bold')
-          .fillColor('#334155')
-          .text('Hinh thuc thanh toan:', leftCol, y)
-          .font('Helvetica')
-          .fillColor('#1e293b')
-          .text(`${data.paymentMethodLabel} (${data.paymentMethod})`, valCol, y);
-
-        y += 18;
-        // [Trường 5] Người thu
-        doc
-          .font('Helvetica-Bold')
-          .fillColor('#334155')
-          .text('Nhan vien lap phieu (Nguoi thu):', leftCol, y)
-          .font('Helvetica-Bold')
-          .fillColor('#4338ca')
+          .font(fontBold)
+          .fillColor('#475569')
+          .text('Người thu tiền:', leftCol, y)
+          .font(fontBold)
+          .fillColor('#0f172a')
           .text(data.collectorName, valCol, y);
 
-        // 4. Lý do nộp & Chứng từ gốc
-        y = 355;
+        y += 22;
+        // Lý do thu / Đối trừ
         doc
-          .font('Helvetica')
-          .fontSize(9)
+          .font(fontBold)
           .fillColor('#475569')
-          .text(`Ly do nop: ${data.notes || 'Thanh toan cong no tien hang B2B'}`, 45, y)
-          .text(`Chung tu goc kem theo: Hoa don / Don hang ${data.referenceCode || '---'}`, 45, y + 15);
-
-        // 5. Chữ ký các bên
-        const sigY = 410;
-        doc
-          .fontSize(9)
-          .font('Helvetica-Bold')
-          .fillColor('#0f172a')
-          .text('NGUOI NOP TIEN', 50, sigY, { width: 120, align: 'center' })
-          .text('NGUOI THU TIEN', 215, sigY, { width: 120, align: 'center' })
-          .text('KE TOAN TRUONG', 380, sigY, { width: 140, align: 'center' });
-
-        doc
-          .fontSize(8)
-          .font('Helvetica-Oblique')
-          .fillColor('#94a3b8')
-          .text('(Ky, ghi ro ho ten)', 50, sigY + 14, { width: 120, align: 'center' })
-          .text('(Ky, ghi ro ho ten)', 215, sigY + 14, { width: 120, align: 'center' })
-          .text('(Ky, dong dau)', 380, sigY + 14, { width: 140, align: 'center' });
-
-        // Tên người ký bên dưới
-        doc
-          .fontSize(9)
-          .font('Helvetica-Bold')
+          .text('Lý do thu / Đối trừ:', leftCol, y)
+          .font(fontRegular)
           .fillColor('#334155')
-          .text(data.customerInfo.name, 50, sigY + 80, { width: 120, align: 'center' })
-          .text(data.collectorName, 215, sigY + 80, { width: 120, align: 'center' });
+          .text(data.notes || 'Thu tiền thanh toán đơn hàng', valCol, y, { width: 340 });
 
-        // Chân trang chứng thực
+        y += 18;
         doc
-          .fontSize(7)
-          .font('Helvetica')
-          .fillColor('#94a3b8')
-          .text(
-            `Chung tu duoc in tu He Thong Ban Hang & Kho LOHA SALES luc ${new Date().toLocaleString('vi-VN')} | Ma phieu: ${data.receiptCode}`,
-            40,
-            780,
-            { align: 'center' },
-          );
+          .font(fontRegular)
+          .fillColor('#64748b')
+          .text('Chứng từ gốc liên kết: ', valCol, y, { continued: true })
+          .font(fontBold)
+          .fillColor('#0f172a')
+          .text(data.referenceCode || '---');
+
+        const boxHeight = y + 20 - boxY;
+        doc.roundedRect(boxX, boxY, boxWidth, boxHeight, 8).strokeColor('#cbd5e1').lineWidth(1).stroke();
 
         doc.end();
       } catch (err) {
