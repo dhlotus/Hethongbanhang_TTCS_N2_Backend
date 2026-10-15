@@ -99,6 +99,12 @@ export class ProductsService implements OnModuleInit {
     const computedAvailable = Math.max(0, product.physicalStock - reserved);
     product.availableStock = computedAvailable;
     product.availableQuantity = computedAvailable;
+    if (!product.uuid && product.id) {
+      const match = product.id.match(/^prod-(\d+)$/i);
+      if (match) {
+        product.uuid = `33333333-0000-0000-0000-${String(parseInt(match[1], 10)).padStart(12, '0')}`;
+      }
+    }
     return product;
   }
 
@@ -586,7 +592,10 @@ export class ProductsService implements OnModuleInit {
       },
     ];
 
-    for (const item of initialList) {
+    for (let i = 0; i < initialList.length; i++) {
+      const item = initialList[i];
+      const uuid = `33333333-0000-0000-0000-${String(i + 1).padStart(12, '0')}`;
+      item.uuid = uuid;
       const entity = new ProductEntity(item as Partial<ProductEntity>);
       this.products.set(entity.id, entity);
     }
@@ -2053,7 +2062,9 @@ export class ProductsService implements OnModuleInit {
 
     return Array.from(this.products.values()).find(
       (p) =>
-        p.id.toLowerCase() === lowerKey || p.sku.toLowerCase() === lowerKey,
+        (p.uuid && p.uuid.toLowerCase() === lowerKey) ||
+        p.id.toLowerCase() === lowerKey ||
+        p.sku.toLowerCase() === lowerKey,
     );
   }
 }
