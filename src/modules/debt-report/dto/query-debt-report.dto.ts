@@ -1,6 +1,11 @@
 import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { AgingDebtGroup } from '../enums/aging-debt-group.enum';
+import { AgingDebtGroupEnum } from '../enums/aging-debt-group.enum';
+
+/**
+ * Re-export AgingDebtGroupEnum để tiện sử dụng
+ */
+export { AgingDebtGroupEnum };
 
 /**
  * DTO truy vấn bộ lọc Sổ công nợ và Phân tích tuổi nợ (SN-203)
@@ -20,8 +25,8 @@ export class QueryDebtReportDto {
   isOverdueOnly?: boolean;
 
   @IsOptional()
-  @IsEnum(AgingDebtGroup)
-  agingGroup?: AgingDebtGroup;
+  @IsEnum(AgingDebtGroupEnum)
+  agingGroup?: AgingDebtGroupEnum;
 
   @IsOptional()
   @IsString()

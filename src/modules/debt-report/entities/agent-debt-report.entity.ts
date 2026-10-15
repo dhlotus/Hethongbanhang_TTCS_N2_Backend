@@ -21,6 +21,7 @@ export class AgentDebtReportEntity {
   overdueAmount: number;
   isOverdue: boolean;
   oldestDebtDays: number;
+  currentFilterStatus: string;
 
   constructor(partial: Partial<AgentDebtReportEntity>) {
     this.agencyId = partial.agencyId ?? '';
@@ -42,5 +43,6 @@ export class AgentDebtReportEntity {
     this.overdueAmount = partial.overdueAmount ?? 0;
     this.isOverdue = partial.isOverdue ?? false;
     this.oldestDebtDays = partial.oldestDebtDays ?? 0;
+    this.currentFilterStatus = partial.currentFilterStatus ?? 'Trong hạn';
   }
 }

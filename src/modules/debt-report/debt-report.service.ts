@@ -8,7 +8,7 @@ import * as ExcelJS from 'exceljs';
 import { DatabaseService } from '../../database/database.service';
 import { CustomersService } from '../customers/customers.service';
 import { CustomerEntity } from '../customers/entities/customer.entity';
-import { AgingDebtGroup, AGING_DEBT_GROUP_LABELS } from './enums/aging-debt-group.enum';
+import { AgingDebtGroupEnum } from './enums/aging-debt-group.enum';
 import { AgentDebtReportEntity } from './entities/agent-debt-report.entity';
 import { QueryDebtReportDto } from './dto/query-debt-report.dto';
 import {
@@ -36,17 +36,45 @@ export class DebtReportService {
   /**
    * Phân loại nhóm tuổi nợ dựa trên số ngày phát sinh / quá hạn
    */
-  calculateAgingGroup(days: number): AgingDebtGroup {
+  calculateAgingGroup(days: number): AgingDebtGroupEnum {
     if (days <= DAYS_THRESHOLD_30) {
-      return AgingDebtGroup.AGE_0_30;
+      return AgingDebtGroupEnum.AGE_0_30;
     }
     if (days <= DAYS_THRESHOLD_60) {
-      return AgingDebtGroup.AGE_31_60;
+      return AgingDebtGroupEnum.AGE_31_60;
     }
     if (days <= DAYS_THRESHOLD_90) {
-      return AgingDebtGroup.AGE_61_90;
+      return AgingDebtGroupEnum.AGE_61_90;
     }
-    return AgingDebtGroup.AGE_OVER_90;
+    return AgingDebtGroupEnum.AGE_OVER_90;
+  }
+
+  /**
+   * Tính toán trạng thái hiển thị động theo dải tuổi nợ đang lọc (SN-203)
+   */
+  determineFilterStatus(
+    item: AgentDebtReportEntity,
+    agingGroup?: AgingDebtGroupEnum,
+  ): string {
+    if (!agingGroup || agingGroup === AgingDebtGroupEnum.ALL) {
+      if (item.isOverdue) {
+        return `Quá hạn ${item.oldestDebtDays}d`;
+      }
+      return item.remainingDebt > 0 ? 'Trong hạn' : 'Đã tất toán';
+    }
+
+    switch (agingGroup) {
+      case AgingDebtGroupEnum.AGE_0_30:
+        return 'Trong hạn';
+      case AgingDebtGroupEnum.AGE_31_60:
+        return 'Quá hạn 31-60d';
+      case AgingDebtGroupEnum.AGE_61_90:
+        return 'Quá hạn 61-90d';
+      case AgingDebtGroupEnum.AGE_OVER_90:
+        return 'Quá hạn >90d';
+      default:
+        return item.isOverdue ? `Quá hạn ${item.oldestDebtDays}d` : 'Trong hạn';
+    }
   }
 
   /**
@@ -164,6 +192,7 @@ export class DebtReportService {
       overdueAmount,
       isOverdue,
       oldestDebtDays: aging.oldestDebtDays,
+      currentFilterStatus: isOverdue ? `Quá hạn ${aging.oldestDebtDays}d` : (debt > 0 ? 'Trong hạn' : 'Đã tất toán'),
     });
   }
 
@@ -344,52 +373,60 @@ export class DebtReportService {
   }
 
   /**
-   * Lọc danh sách theo các tiêu chí tìm kiếm, quá hạn, nhóm tuổi nợ
+   * Lọc danh sách theo các tiêu chí tìm kiếm, quá hạn, nhóm tuổi nợ và cập nhật trạng thái động
    */
   private filterReportList(
     items: AgentDebtReportEntity[],
     query: QueryDebtReportDto,
   ): AgentDebtReportEntity[] {
-    return items.filter((item) => {
-      if (query.search) {
-        const s = query.search.toLowerCase().trim();
-        const matchCode = item.agencyCode.toLowerCase().includes(s);
-        const matchName = item.agencyName.toLowerCase().includes(s);
-        const matchPhone = item.phone.toLowerCase().includes(s);
-        if (!matchCode && !matchName && !matchPhone) return false;
-      }
-      if (query.isOverdueOnly && !item.isOverdue) {
-        return false;
-      }
-      if (query.agingGroup && !this.checkItemMatchesAgingGroup(item, query.agingGroup)) {
-        return false;
-      }
-      if (query.customerGroup && item.customerGroup !== query.customerGroup) {
-        return false;
-      }
-      if (query.region && item.region !== query.region) {
-        return false;
-      }
-      return true;
-    });
+    const isFilteredGroup = query.agingGroup && query.agingGroup !== AgingDebtGroupEnum.ALL;
+
+    return items
+      .filter((item) => {
+        if (query.search) {
+          const s = query.search.toLowerCase().trim();
+          const matchCode = item.agencyCode.toLowerCase().includes(s);
+          const matchName = item.agencyName.toLowerCase().includes(s);
+          const matchPhone = item.phone.toLowerCase().includes(s);
+          if (!matchCode && !matchName && !matchPhone) return false;
+        }
+        if (query.isOverdueOnly && !item.isOverdue) {
+          return false;
+        }
+        if (isFilteredGroup && !this.checkItemMatchesAgingGroup(item, query.agingGroup!)) {
+          return false;
+        }
+        if (query.customerGroup && item.customerGroup !== query.customerGroup) {
+          return false;
+        }
+        if (query.region && item.region !== query.region) {
+          return false;
+        }
+        return true;
+      })
+      .map((item) => {
+        item.currentFilterStatus = this.determineFilterStatus(item, query.agingGroup);
+        return item;
+      });
   }
 
   /**
-   * Kiểm tra một bản ghi có phát sinh nợ trong nhóm tuổi nợ chỉ định hay không
+   * Kiểm tra một bản ghi có phát sinh nợ > 0 trong nhóm tuổi nợ chỉ định hay không
    */
   private checkItemMatchesAgingGroup(
     item: AgentDebtReportEntity,
-    group: AgingDebtGroup,
+    group: AgingDebtGroupEnum,
   ): boolean {
     switch (group) {
-      case AgingDebtGroup.AGE_0_30:
+      case AgingDebtGroupEnum.AGE_0_30:
         return item.age0To30 > 0;
-      case AgingDebtGroup.AGE_31_60:
+      case AgingDebtGroupEnum.AGE_31_60:
         return item.age31To60 > 0;
-      case AgingDebtGroup.AGE_61_90:
+      case AgingDebtGroupEnum.AGE_61_90:
         return item.age61To90 > 0;
-      case AgingDebtGroup.AGE_OVER_90:
+      case AgingDebtGroupEnum.AGE_OVER_90:
         return item.ageOver90 > 0;
+      case AgingDebtGroupEnum.ALL:
       default:
         return true;
     }
@@ -473,7 +510,7 @@ export class DebtReportService {
       { key: 'age61To90', width: 16 },
       { key: 'ageOver90', width: 16 },
       { key: 'overdue', width: 18 },
-      { key: 'status', width: 16 },
+      { key: 'status', width: 18 },
     ];
 
     ws.mergeCells('A1:O1');
@@ -513,7 +550,7 @@ export class DebtReportService {
       '61–90 ngày (₫)',
       '> 90 ngày (₫)',
       'Nợ quá hạn (₫)',
-      'Tình trạng nợ',
+      'Trạng thái lọc',
     ];
 
     const headerRow = ws.addRow(headers);
@@ -543,12 +580,6 @@ export class DebtReportService {
     items: AgentDebtReportEntity[],
   ): void {
     items.forEach((item, index) => {
-      const statusText = item.isOverdue
-        ? `Quá hạn (${item.oldestDebtDays} ngày)`
-        : item.remainingDebt > 0
-        ? 'Trong hạn'
-        : 'Đã tất toán';
-
       const row = ws.addRow([
         index + 1,
         item.agencyCode,
@@ -564,7 +595,7 @@ export class DebtReportService {
         item.age61To90,
         item.ageOver90,
         item.overdueAmount,
-        statusText,
+        item.currentFilterStatus,
       ]);
 
       this.formatExcelDataRow(row, item.isOverdue);
