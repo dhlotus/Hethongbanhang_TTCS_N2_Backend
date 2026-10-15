@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -82,5 +82,11 @@ export class WarehousesController {
     @Body() body: { warehouseId: string | null },
   ): Promise<AgencyWarehouseUpdateEntity> {
     return this.warehousesService.setAgencyDefaultWarehouse(agencyId, body.warehouseId);
+  }
+
+  @Delete(':id')
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  delete(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
+    return this.warehousesService.delete(id);
   }
 }

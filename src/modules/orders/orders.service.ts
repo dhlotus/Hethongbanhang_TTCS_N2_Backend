@@ -943,9 +943,9 @@ export class OrdersService implements OnModuleInit {
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     // 1. Phân quyền theo vai trò (SN-46):
-    // Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn do mình phụ trách
-    const userRole = currentUser?.role || (currentUser?.roles && currentUser.roles[0]);
-    const isOnlySalesRep = userRole === 'SALES_REP';
+    // 1.1. Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn do mình phụ trách
+    const userRoles = (currentUser?.roles || (currentUser?.role ? [currentUser.role] : [])) as string[];
+    const isOnlySalesRep = userRoles.includes('SALES_REP') && !userRoles.includes('ADMIN') && !userRoles.includes('SALES_MANAGER');
 
     if (isOnlySalesRep && (currentUser?.id || currentUser?.username)) {
       const repId = currentUser.id;
@@ -955,6 +955,41 @@ export class OrdersService implements OnModuleInit {
         const matchName = repName && o.salesRepName?.toLowerCase().includes(repName);
         return matchId || matchName;
       });
+    }
+
+    // 1.2. Quản lý kho / Thủ kho: Chỉ thấy đơn hàng giao từ hoặc giao tới kho/địa bàn phụ trách
+    const isWarehouseStaff = userRoles.some((r) =>
+      ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+    ) && !userRoles.includes('ADMIN') && !userRoles.includes('SALES_MANAGER');
+
+    if (isWarehouseStaff) {
+      const whId = (currentUser as any)?.warehouseId;
+      const whName = (currentUser as any)?.assignedWarehouse || (currentUser as any)?.warehouseName;
+      if (whId || whName) {
+        const cleanWhName = (whName || '').toLowerCase();
+        const isMienBac = cleanWhName.includes('bắc') || cleanWhName.includes('hà nội') || cleanWhName.includes('mb');
+        const isMienNam = cleanWhName.includes('nam') || cleanWhName.includes('sóng thần') || cleanWhName.includes('mn');
+        const isMienTrung = cleanWhName.includes('trung') || cleanWhName.includes('tây nam bộ') || cleanWhName.includes('mt');
+
+        list = list.filter((o) => {
+          if (whId && (o as any).warehouseId && String((o as any).warehouseId).toLowerCase() === String(whId).toLowerCase()) {
+            return true;
+          }
+          if (whName && (o as any).warehouseName && String((o as any).warehouseName).toLowerCase().includes(cleanWhName)) {
+            return true;
+          }
+          if (isMienBac && (o.region?.toLowerCase().includes('bắc') || o.deliveryPoint?.address?.toLowerCase().includes('hà nội') || o.deliveryPoint?.address?.toLowerCase().includes('bắc'))) {
+            return true;
+          }
+          if (isMienNam && (o.region?.toLowerCase().includes('nam') || o.deliveryPoint?.address?.toLowerCase().includes('hồ chí minh') || o.deliveryPoint?.address?.toLowerCase().includes('bình dương') || o.deliveryPoint?.address?.toLowerCase().includes('sóng thần'))) {
+            return true;
+          }
+          if (isMienTrung && (o.region?.toLowerCase().includes('trung') || o.region?.toLowerCase().includes('tây nam bộ') || o.deliveryPoint?.address?.toLowerCase().includes('cần thơ'))) {
+            return true;
+          }
+          return false;
+        });
+      }
     }
 
     // 2. Lọc theo trạng thái đơn hàng
