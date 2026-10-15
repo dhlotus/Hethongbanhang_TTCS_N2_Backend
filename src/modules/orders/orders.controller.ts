@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import {
   Body,
   Controller,
@@ -153,11 +154,21 @@ export class OrdersController {
       if (!agencyId) {
         throw new ForbiddenException('Tài khoản của bạn chưa gắn với hồ sơ đại lý.');
       }
-      delete (query as any).agency_id;
-      delete (query as any).agencyId;
+      delete (query as Record<string, unknown>).agency_id;
+      delete (query as Record<string, unknown>).agencyId;
       query.customerId = agencyId;
     }
-    return this.ordersService.findAllOrders(query, currentUser as any);
+    return this.ordersService.findAllOrders(
+      query,
+      currentUser
+        ? {
+            id: currentUser.userId,
+            role: currentUser.roles?.[0],
+            username: currentUser.username,
+            roles: currentUser.roles,
+          }
+        : undefined,
+    );
   }
 
   /**
@@ -170,7 +181,7 @@ export class OrdersController {
   async cloneOrder(
     @Param('id') id: string,
     @CurrentUser() currentUser?: ICurrentUser,
-    @Req() req?: any,
+    @Req() req?: Request,
   ): Promise<OrderEntity> {
     let salesRep: { id?: string; name?: string } | undefined;
     if (currentUser) {
@@ -182,9 +193,19 @@ export class OrdersController {
           const token = authHeader.slice(7).trim();
           const parts = token.split('.');
           if (parts.length === 3) {
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString()) as Record<string, unknown>;
             if (payload && (payload.sub || payload.username)) {
-              salesRep = { id: payload.sub, name: payload.fullName || payload.username || payload.email };
+              salesRep = {
+                id: typeof payload.sub === 'string' ? payload.sub : undefined,
+                name:
+                  typeof payload.fullName === 'string'
+                    ? payload.fullName
+                    : typeof payload.username === 'string'
+                    ? payload.username
+                    : typeof payload.email === 'string'
+                    ? payload.email
+                    : undefined,
+              };
             }
           }
         }
