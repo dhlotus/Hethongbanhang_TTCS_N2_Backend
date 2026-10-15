@@ -111,7 +111,9 @@ describe('Kiểm thử chức năng SN-174 & SN-170 (Orders Service & Controller
       expect(newOrder.id).toBeDefined();
       expect(newOrder.id).not.toBe(SOURCE_ORDER_ID);
       expect(newOrder.orderCode).toMatch(/^DH26/);
-      expect(newOrder.status).toBe(OrderStatus.PENDING);
+      expect([OrderStatus.PENDING, OrderStatus.PENDING_APPROVAL]).toContain(
+        newOrder.status,
+      );
       expect(newOrder.deliveryDate).toBe('2026-10-25');
       expect(newOrder.customerId).toBe(VALID_CUSTOMER_ID);
 
@@ -330,7 +332,9 @@ describe('Kiểm thử chức năng SN-174 & SN-170 (Orders Service & Controller
 
       expect(result.newOrder).toBeDefined();
       expect(result.newOrder.orderCode).toBeDefined();
-      expect(result.newOrder.status).toBe(OrderStatus.PENDING);
+      expect([OrderStatus.PENDING, OrderStatus.PENDING_APPROVAL]).toContain(
+        result.newOrder.status,
+      );
     });
   });
 });

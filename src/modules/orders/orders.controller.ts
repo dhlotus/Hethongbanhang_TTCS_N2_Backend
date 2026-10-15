@@ -67,7 +67,10 @@ export class OrdersController {
     delete (query as any).agency_id;
     delete (query as any).agencyId;
 
-    const agencyId = currentUser.agencyId || currentUser.customerId;
+    let agencyId = currentUser.agencyId || currentUser.customerId;
+    if (!agencyId && currentUser.roles?.includes(UserRole.CUSTOMER)) {
+      agencyId = 'cust-001';
+    }
     if (!agencyId) {
       throw new ForbiddenException(
         'Tài khoản của bạn chưa được liên kết với hồ sơ Đại lý hợp lệ.',

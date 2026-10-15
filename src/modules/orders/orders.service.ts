@@ -965,8 +965,13 @@ export class OrdersService implements OnModuleInit {
 
     // 3. Lọc theo đại lý (customerId)
     if (query.customerId && query.customerId !== 'ALL') {
+      const qCust = query.customerId;
+      const qCustNorm = qCust.replace('cust-dl-', 'cust-');
       list = list.filter(
-        (o) => o.customerId === query.customerId || o.customerCode === query.customerId,
+        (o) =>
+          o.customerId === qCust ||
+          o.customerCode === qCust ||
+          (o.customerId && o.customerId.replace('cust-dl-', 'cust-') === qCustNorm),
       );
     }
 
@@ -2038,7 +2043,9 @@ async findOrdersByCustomer(
   }> {
     const order = await this.findOrderById(orderId);
 
-    if (customerId && order.customerId !== customerId) {
+    const orderCustNorm = order.customerId?.replace('cust-dl-', 'cust-');
+    const paramCustNorm = customerId?.replace('cust-dl-', 'cust-');
+    if (customerId && order.customerId !== customerId && orderCustNorm !== paramCustNorm) {
       throw new BadRequestException('Bạn không có quyền thao tác trên đơn hàng của đại lý khác');
     }
 
