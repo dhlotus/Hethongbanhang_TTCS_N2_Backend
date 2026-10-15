@@ -271,116 +271,154 @@ export class ReceiptsService {
           .fillColor('#64748b')
           .text(`Ngày ${dayStr} tháng ${monthStr} năm ${yearStr}`, 40, 80, { align: 'center' });
 
-        // 2. Khung chi tiết các trường thông tin bắt buộc
+        // 2. Khung chi tiết các trường thông tin bắt buộc với đường kẻ phân cách giữa các ô
         const boxX = 45;
         const boxY = 115;
         const boxWidth = 505;
         const leftCol = 60;
-        const valCol = 190;
+        const valCol = 180;
 
-        let y = boxY + 15;
+        let currentY = boxY;
 
-        // Mã phiếu thu
+        // --- ROW 1: Mã phiếu thu ---
+        const row1Height = 36;
         doc
           .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Mã phiếu thu:', leftCol, y)
+          .text('Mã phiếu thu:', leftCol, currentY + 11)
           .font(fontBold)
           .fillColor('#4338ca')
-          .text(data.receiptCode, valCol, y);
+          .text(data.receiptCode, valCol, currentY + 11);
 
-        y += 24;
-        // Đại lý / Người nộp
+        currentY += row1Height;
+        doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
+
+        // --- ROW 2: Đại lý / Người nộp ---
+        const row2Height = 56;
         doc
+          .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Đại lý / Người nộp:', leftCol, y)
+          .text('Đại lý / Người nộp:', leftCol, currentY + 10)
           .font(fontBold)
           .fillColor('#0f172a')
-          .text(`${data.customerInfo.name} (${data.customerInfo.code})`, valCol, y);
-
-        y += 18;
-        doc
+          .text(data.customerInfo.name, valCol, currentY + 10, { continued: true })
           .font(fontRegular)
           .fillColor('#64748b')
-          .text('Điện thoại:', leftCol, y)
+          .text(` (${data.customerInfo.code})`);
+
+        doc
+          .fontSize(9)
+          .font(fontRegular)
+          .fillColor('#64748b')
+          .text('Điện thoại: ', valCol, currentY + 28, { continued: true })
           .font(fontBold)
           .fillColor('#1e293b')
-          .text(data.customerInfo.phone || '---', valCol, y);
-
-        y += 18;
-        doc
+          .text(`${data.customerInfo.phone || '---'}   `, { continued: true })
           .font(fontRegular)
           .fillColor('#64748b')
-          .text('Địa chỉ:', leftCol, y)
+          .text('Địa chỉ: ', { continued: true })
+          .font(fontRegular)
           .fillColor('#334155')
-          .text(data.customerInfo.address || '---', valCol, y, { width: 340 });
+          .text(data.customerInfo.address || '---', { width: 340 });
 
-        const addrHeight = doc.heightOfString(data.customerInfo.address || '---', { width: 340 });
-        y += Math.max(18, addrHeight + 8);
+        currentY += row2Height;
+        doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
 
-        // Số tiền thu
+        // --- ROW 3: Số tiền thu (Nền xanh nhạt chuẩn mẫu in giao diện) ---
+        const row3Height = 52;
+        doc.rect(boxX + 0.5, currentY, boxWidth - 1, row3Height).fillColor('#ecfdf5').fill();
+
         doc
-          .font(fontBold)
-          .fillColor('#475569')
-          .text('Số tiền thu:', leftCol, y)
+          .fontSize(10)
           .font(fontBold)
           .fillColor('#047857')
-          .fontSize(13)
-          .text(data.amountFormatted, valCol, y);
+          .text('Số tiền thu:', leftCol, currentY + 10)
+          .font(fontBold)
+          .fillColor('#047857')
+          .fontSize(14)
+          .text(data.amountFormatted, valCol, currentY + 8);
 
-        y += 20;
         doc
           .fontSize(9)
           .font(fontItalic)
-          .fillColor('#475569')
-          .text('(Viết bằng chữ: ', valCol, y, { continued: true })
+          .fillColor('#065f46')
+          .text('(Viết bằng chữ: ', valCol, currentY + 28, { continued: true })
           .font(fontBold)
           .text(`${data.amountInWords})`);
 
-        y += 24;
-        // Hình thức thu (Không còn mã BANK_TRANSFER)
+        currentY += row3Height;
+        doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
+
+        // --- ROW 4: Hình thức thu (Có khung badge) ---
+        const row4Height = 40;
         doc
           .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Hình thức thu:', leftCol, y)
-          .font(fontRegular)
-          .fillColor('#0f172a')
-          .text(data.paymentMethodLabel, valCol, y);
+          .text('Hình thức thu:', leftCol, currentY + 13);
 
-        y += 22;
-        // Người thu tiền
+        // Badge viên thuốc trắng bo viền
+        doc.roundedRect(valCol, currentY + 8, 160, 24, 4).fillAndStroke('#ffffff', '#cbd5e1');
         doc
+          .fontSize(9.5)
+          .font(fontBold)
+          .fillColor('#1e293b')
+          .text(`💳  ${data.paymentMethodLabel}`, valCol + 10, currentY + 13);
+
+        currentY += row4Height;
+        doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
+
+        // --- ROW 5: Người thu tiền (Có badge Kế toán công nợ) ---
+        const row5Height = 40;
+        doc
+          .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Người thu tiền:', leftCol, y)
+          .text('Người thu tiền:', leftCol, currentY + 13)
           .font(fontBold)
           .fillColor('#0f172a')
-          .text(data.collectorName, valCol, y);
+          .text(data.collectorName, valCol, currentY + 13);
 
-        y += 22;
-        // Lý do thu / Đối trừ
+        const collectorWidth = doc.widthOfString(data.collectorName);
+        // Badge Kế toán công nợ
+        const badgeX = valCol + collectorWidth + 14;
+        doc.roundedRect(badgeX, currentY + 9, 105, 20, 10).fillAndStroke('#eef2ff', '#c7d2fe');
         doc
+          .fontSize(8.5)
+          .font(fontBold)
+          .fillColor('#4338ca')
+          .text('✓ Kế toán công nợ', badgeX + 8, currentY + 13);
+
+        currentY += row5Height;
+        doc.moveTo(boxX, currentY).lineTo(boxX + boxWidth, currentY).strokeColor('#e2e8f0').lineWidth(0.8).stroke();
+
+        // --- ROW 6: Lý do thu / Đối trừ ---
+        const row6Height = 48;
+        doc
+          .fontSize(10)
           .font(fontBold)
           .fillColor('#475569')
-          .text('Lý do thu / Đối trừ:', leftCol, y)
+          .text('Lý do thu / Đối trừ:', leftCol, currentY + 10)
           .font(fontRegular)
           .fillColor('#334155')
-          .text(data.notes || 'Thu tiền thanh toán đơn hàng', valCol, y, { width: 340 });
+          .text(data.notes || 'Thu tiền thanh toán đơn hàng', valCol, currentY + 10, { width: 340 });
 
-        y += 18;
         doc
+          .fontSize(9)
           .font(fontRegular)
           .fillColor('#64748b')
-          .text('Chứng từ gốc liên kết: ', valCol, y, { continued: true })
+          .text('Chứng từ gốc liên kết: ', valCol, currentY + 28, { continued: true })
           .font(fontBold)
           .fillColor('#0f172a')
           .text(data.referenceCode || '---');
 
-        const boxHeight = y + 20 - boxY;
-        doc.roundedRect(boxX, boxY, boxWidth, boxHeight, 8).strokeColor('#cbd5e1').lineWidth(1).stroke();
+        currentY += row6Height;
+
+        // Khung ngoài bao quanh
+        const totalHeight = currentY - boxY;
+        doc.roundedRect(boxX, boxY, boxWidth, totalHeight, 8).strokeColor('#cbd5e1').lineWidth(1).stroke();
 
         doc.end();
       } catch (err) {
