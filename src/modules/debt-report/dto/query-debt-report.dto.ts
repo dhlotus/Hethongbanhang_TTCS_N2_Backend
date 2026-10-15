@@ -47,4 +47,12 @@ export class QueryDebtReportDto {
   @IsNumber()
   @Min(1)
   limit?: number = 20;
+
+  @IsOptional()
+  @IsString()
+  sortBy?: 'oldestDebtDays' | 'remainingDebt' | 'overdueAmount' | 'agencyName' | 'code';
+
+  @IsOptional()
+  @IsString()
+  sortOrder?: 'asc' | 'desc';
 }

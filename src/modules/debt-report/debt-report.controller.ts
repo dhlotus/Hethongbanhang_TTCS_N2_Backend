@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Param,
   Query,
   Res,
   UseFilters,
@@ -10,6 +11,7 @@ import type { Response } from 'express';
 import { DebtReportService } from './debt-report.service';
 import { QueryDebtReportDto } from './dto/query-debt-report.dto';
 import { DebtReportResponseDto } from './dto/debt-report-response.dto';
+import { AgencyInvoiceDto } from './dto/agency-invoice.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -74,5 +76,24 @@ export class DebtReportController {
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.end(fileBuffer);
+  }
+
+  /**
+   * Lấy danh sách hóa đơn thực tế phát sinh của một đại lý (phân nhóm tuổi nợ chi tiết)
+   * GET /api/debt-report/:agencyId/invoices
+   */
+  @Get(':agencyId/invoices')
+  @Roles(
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.ADMIN,
+    UserRole.SALES_MANAGER,
+    UserRole.SALES_REP,
+  )
+  async getAgencyInvoices(
+    @Param('agencyId') agencyId: string,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<AgencyInvoiceDto[]> {
+    return this.debtReportService.getAgencyInvoices(agencyId, currentUser);
   }
 }

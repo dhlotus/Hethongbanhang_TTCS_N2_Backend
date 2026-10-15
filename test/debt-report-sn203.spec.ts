@@ -114,6 +114,27 @@ describe('[SN-203] DebtReportService - Sổ Công Nợ và Phân Tích Tuổi N�
       });
       expect(res.data.every((item) => item.age61To90 > 0)).toBe(true);
     });
+
+    it('ưu tiên sắp xếp đại lý có tuổi nợ lâu nhất lên đầu danh sách', async () => {
+      const res = await service.getAgentDebtReport({});
+      expect(res.data[0].agencyCode).toBe('DL-0003'); // 75 ngày
+      expect(res.data[1].agencyCode).toBe('DL-0001'); // 40 ngày
+      expect(res.data[2].agencyCode).toBe('DL-0005'); // 0 ngày
+    });
+  });
+
+  describe('getAgencyInvoices', () => {
+    it('lấy danh sách hóa đơn theo đại lý khớp với tổng dư nợ và dải tuổi nợ', async () => {
+      const invoices = await service.getAgencyInvoices('DL-0001');
+      expect(invoices).toHaveLength(2);
+      const totalRemaining = invoices.reduce((sum, inv) => sum + inv.remainingAmount, 0);
+      expect(totalRemaining).toBe(45000000);
+      expect(invoices[0].daysOld).toBeGreaterThanOrEqual(invoices[1].daysOld);
+    });
+
+    it('ném lỗi NotFoundException khi không tìm thấy đại lý', async () => {
+      await expect(service.getAgencyInvoices('DL-NON-EXISTENT')).rejects.toThrow();
+    });
   });
 
   describe('exportDebtToExcel', () => {
