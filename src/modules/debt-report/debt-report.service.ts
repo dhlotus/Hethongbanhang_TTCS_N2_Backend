@@ -569,8 +569,19 @@ export class DebtReportService {
           const matchPhone = item.phone.toLowerCase().includes(s);
           if (!matchCode && !matchName && !matchPhone) return false;
         }
-        if (query.isOverdueOnly && !item.isOverdue) {
-          return false;
+        // Lọc theo trạng thái nợ (Nợ trong hạn / Nợ quá hạn)
+        if (query.debtStatus === 'IN_TERM' || query.isOverdue === false) {
+          if (item.isOverdue || (item.overdueAmount || 0) > 0) {
+            return false;
+          }
+        } else if (
+          query.debtStatus === 'OVERDUE' ||
+          query.isOverdue === true ||
+          query.isOverdueOnly === true
+        ) {
+          if (!item.isOverdue) {
+            return false;
+          }
         }
         if (isFilteredGroup && !this.checkItemMatchesAgingGroup(item, query.agingGroup!)) {
           return false;
@@ -616,25 +627,31 @@ export class DebtReportService {
   }
 
   /**
-   * Kiểm tra một bản ghi có phát sinh nợ > 0 trong nhóm tuổi nợ chỉ định hay không
+  /**
+   * Xác định nhóm tuổi nợ phân loại chính (nhóm nợ xấu nhất/lâu nhất) của đại lý
+   */
+  getAgencyPrimaryAgingGroup(item: AgentDebtReportEntity): AgingDebtGroupEnum {
+    if (item.ageOver90 > 0 || item.oldestDebtDays > 90) {
+      return AgingDebtGroupEnum.AGE_OVER_90;
+    }
+    if (item.age61To90 > 0 || item.oldestDebtDays > 60) {
+      return AgingDebtGroupEnum.AGE_61_90;
+    }
+    if (item.age31To60 > 0 || item.oldestDebtDays > 30) {
+      return AgingDebtGroupEnum.AGE_31_60;
+    }
+    return AgingDebtGroupEnum.AGE_0_30;
+  }
+
+  /**
+   * Kiểm tra một bản ghi có thuộc nhóm tuổi nợ chỉ định hay không
    */
   private checkItemMatchesAgingGroup(
     item: AgentDebtReportEntity,
     group: AgingDebtGroupEnum,
   ): boolean {
-    switch (group) {
-      case AgingDebtGroupEnum.AGE_0_30:
-        return item.age0To30 > 0;
-      case AgingDebtGroupEnum.AGE_31_60:
-        return item.age31To60 > 0;
-      case AgingDebtGroupEnum.AGE_61_90:
-        return item.age61To90 > 0;
-      case AgingDebtGroupEnum.AGE_OVER_90:
-        return item.ageOver90 > 0;
-      case AgingDebtGroupEnum.ALL:
-      default:
-        return true;
-    }
+    if (group === AgingDebtGroupEnum.ALL) return true;
+    return this.getAgencyPrimaryAgingGroup(item) === group;
   }
 
   /**
