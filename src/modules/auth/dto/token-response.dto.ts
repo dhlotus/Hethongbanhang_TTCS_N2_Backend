@@ -7,6 +7,12 @@ export interface IAuthUserInfo {
   role?: string;
   status?: string;
   assignedWarehouse?: string;
+  warehouseId?: string | null;
+  assignedWarehouseId?: string | null;
+  warehouseCode?: string | null;
+  assignedWarehouseCode?: string | null;
+  warehouseName?: string | null;
+  warehouses?: Array<{ id: string; code: string; name: string; isPrimary?: boolean }>;
   avatarUrl?: string | null;
 }
 

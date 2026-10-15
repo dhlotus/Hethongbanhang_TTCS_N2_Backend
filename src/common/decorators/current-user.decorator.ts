@@ -9,7 +9,7 @@ export const CurrentUser = createParamDecorator(
   (
     data: keyof ICurrentUser | undefined,
     ctx: ExecutionContext,
-  ): ICurrentUser | string | string[] | null | undefined => {
+  ): any => {
 
     const request = ctx.switchToHttp().getRequest<{ user?: ICurrentUser }>();
     const user = request.user;

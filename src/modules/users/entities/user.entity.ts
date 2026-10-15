@@ -1,6 +1,13 @@
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { UserStatus } from '../../../common/enums/user-status.enum';
 
+export interface UserWarehouseItem {
+  id: string;
+  code: string;
+  name: string;
+  isPrimary?: boolean;
+}
+
 export interface SafeUser {
   id: string;
   email: string;
@@ -12,6 +19,11 @@ export interface SafeUser {
   status: UserStatus;
   avatarUrl?: string | null;
   assignedWarehouse?: string;
+  warehouseId?: string | null;
+  assignedWarehouseId?: string | null;
+  warehouseCode?: string | null;
+  assignedWarehouseCode?: string | null;
+  warehouses?: UserWarehouseItem[];
   dateOfBirth?: string | null;
   gender?: string | null;
   isIdentityLocked?: boolean;
@@ -36,6 +48,11 @@ export class UserEntity {
   status: UserStatus;
   avatarUrl: string | null;
   assignedWarehouse?: string;
+  warehouseId?: string | null;
+  assignedWarehouseId?: string | null;
+  warehouseCode?: string | null;
+  assignedWarehouseCode?: string | null;
+  warehouses?: UserWarehouseItem[];
   customerId?: string | null;
   customerCode?: string | null;
   dateOfBirth?: string | null;
@@ -74,6 +91,11 @@ export class UserEntity {
     this.status = partial.status ?? UserStatus.ACTIVE;
     this.avatarUrl = partial.avatarUrl ?? null;
     this.assignedWarehouse = partial.assignedWarehouse;
+    this.warehouseId = partial.warehouseId ?? (partial as any).assignedWarehouseId ?? null;
+    this.assignedWarehouseId = this.warehouseId;
+    this.warehouseCode = partial.warehouseCode ?? (partial as any).assignedWarehouseCode ?? null;
+    this.assignedWarehouseCode = this.warehouseCode;
+    this.warehouses = partial.warehouses ?? [];
     this.dateOfBirth = partial.dateOfBirth ?? null;
     this.gender = partial.gender ?? null;
     this.isIdentityLocked = partial.isIdentityLocked ?? false;
@@ -111,6 +133,11 @@ export class UserEntity {
       status: this.status,
       avatarUrl: this.avatarUrl ?? null,
       assignedWarehouse: this.assignedWarehouse,
+      warehouseId: this.warehouseId,
+      assignedWarehouseId: this.assignedWarehouseId,
+      warehouseCode: this.warehouseCode,
+      assignedWarehouseCode: this.assignedWarehouseCode,
+      warehouses: this.warehouses,
       customerId: this.customerId,
       customerCode: this.customerCode,
       dateOfBirth: this.dateOfBirth,
