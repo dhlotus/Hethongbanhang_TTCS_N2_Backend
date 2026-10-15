@@ -825,7 +825,7 @@ export class CustomersService implements OnModuleInit {
         await this.dbService.query(
           `UPDATE customers 
            SET status = $1, lock_reason = $2, updated_at = NOW() 
-           WHERE id = $3 OR code = $3;`,
+           WHERE id::text = $3 OR code = $3;`,
           [CustomerStatus.LOCKED, customer.lockReason, id],
         );
       } catch {
@@ -872,7 +872,7 @@ export class CustomersService implements OnModuleInit {
         await this.dbService.query(
           `UPDATE customers 
            SET credit_limit = $1, max_debt_days = $2, payment_terms = $3, updated_at = NOW() 
-           WHERE id = $4 OR code = $4;`,
+           WHERE id::text = $4 OR code = $4;`,
           [customer.creditLimit, customer.maxDebtDays, data.paymentTerms || 'NET_30', customerId],
         );
       } catch {
@@ -899,7 +899,7 @@ export class CustomersService implements OnModuleInit {
         await this.dbService.query(
           `UPDATE customers 
            SET current_debt = GREATEST(0, COALESCE(current_debt, 0) + $1), updated_at = NOW() 
-           WHERE id = $2 OR code = $2;`,
+           WHERE id::text = $2 OR code = $2;`,
           [delta, customerId],
         );
       } catch (err) {
@@ -926,7 +926,7 @@ export class CustomersService implements OnModuleInit {
         await this.dbService.query(
           `UPDATE customers 
            SET status = $1, lock_reason = NULL, updated_at = NOW() 
-           WHERE id = $2 OR code = $2;`,
+           WHERE id::text = $2 OR code = $2;`,
           [CustomerStatus.ACTIVE, id],
         );
       } catch {
@@ -962,7 +962,7 @@ export class CustomersService implements OnModuleInit {
         await this.dbService.query(
           `UPDATE customers 
            SET status = $1, lock_reason = $2, updated_at = NOW() 
-           WHERE id = $3 OR code = $3;`,
+           WHERE id::text = $3 OR code = $3;`,
           [status, lockReason || null, customerId],
         );
       } catch {
@@ -1467,7 +1467,7 @@ export class CustomersService implements OnModuleInit {
     if (this.dbService?.isConnected()) {
       try {
         await this.dbService.query(
-          `UPDATE customers SET status = $1, updated_at = NOW() WHERE id = $2 OR code = $2;`,
+          `UPDATE customers SET status = $1, updated_at = NOW() WHERE id::text = $2 OR code = $2;`,
           [CustomerStatus.INACTIVE, id],
         );
       } catch {

@@ -212,7 +212,7 @@ export class InventoryController {
     @Body() dto: AdjustStockDto,
     @CurrentUser() user: ICurrentUser,
   ): Promise<StockAdjustmentResult> {
-    return this.inventoryService.adjustStock(dto, user?.userId || 'unknown');
+    return this.inventoryService.adjustStock(dto, user);
   }
 
   /**
@@ -233,7 +233,7 @@ export class InventoryController {
     @Body() dto: AdjustStockDto,
     @CurrentUser() user: ICurrentUser,
   ): Promise<StockAdjustmentResult> {
-    return this.inventoryService.adjustStock(dto, user?.userId || 'unknown');
+    return this.inventoryService.adjustStock(dto, user);
   }
 
   // =========================================================================

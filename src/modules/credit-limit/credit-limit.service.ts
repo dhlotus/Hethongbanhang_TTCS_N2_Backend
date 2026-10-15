@@ -558,7 +558,7 @@ export class CreditLimitService implements OnModuleInit {
                max_debt_days = $2,
                payment_terms = $3,
                updated_at = NOW()
-           WHERE id = $4 OR code = $4;`,
+           WHERE id::text = $4 OR code = $4;`,
           [
             newCreditLimit,
             newMaxDebtDays,

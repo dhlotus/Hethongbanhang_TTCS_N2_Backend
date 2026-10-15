@@ -596,6 +596,9 @@ export class ProductsService implements OnModuleInit {
    * Lấy danh sách sản phẩm dạng mảng phẳng (Tương thích nội bộ và unit test)
    */
   async findAll(filterDto?: GetProductsFilterDto): Promise<ProductEntity[]> {
+    if (this.dbService?.isConnected()) {
+      await this.loadProductsFromDatabase();
+    }
     if (!filterDto || Object.keys(filterDto).length === 0) {
       const reservedMap = this.ordersService?.getReservedStockMap();
       return Array.from(this.products.values()).map((p) =>
@@ -1049,7 +1052,7 @@ export class ProductsService implements OnModuleInit {
           }
         }
 
-        await this.dbService.query(
+        const prodRows = await this.dbService.query<{ id: string }>(
           `INSERT INTO products (sku, name, category_id, base_unit, cost_price, status, image_url)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (sku) DO UPDATE SET
@@ -1058,7 +1061,8 @@ export class ProductsService implements OnModuleInit {
              category_id = EXCLUDED.category_id,
              status = EXCLUDED.status,
              image_url = EXCLUDED.image_url,
-             updated_at = CURRENT_TIMESTAMP;`,
+             updated_at = CURRENT_TIMESTAMP
+           RETURNING id;`,
           [
             newProduct.sku,
             newProduct.name,
@@ -1069,6 +1073,37 @@ export class ProductsService implements OnModuleInit {
             newProduct.imageUrl || null,
           ],
         );
+
+        const dbProductId = prodRows[0]?.id;
+        if (dbProductId) {
+          // Tự động phân bổ tồn kho xuống đủ cả 4 kho chuẩn hệ thống (Step 1.2)
+          const totalStock = dto.stockQuantity && dto.stockQuantity > 0 ? Number(dto.stockQuantity) : 4000;
+          const baseQty = Math.floor(totalStock / 4);
+          const rem = totalStock - baseQty * 4;
+          const distList = [
+            { id: '11111111-0000-0000-0000-000000000002', qty: baseQty }, // Miền Bắc
+            { id: '11111111-0000-0000-0000-000000000004', qty: baseQty }, // Miền Trung
+            { id: '11111111-0000-0000-0000-000000000001', qty: baseQty + rem }, // Miền Nam
+            { id: '11111111-0000-0000-0000-000000000003', qty: baseQty }, // Miền Tây
+          ];
+
+          for (const item of distList) {
+            await this.dbService.query(
+              `INSERT INTO inventories (product_id, warehouse_id, on_hand, allocated)
+               VALUES ($1, $2::uuid, $3, 0)
+               ON CONFLICT (warehouse_id, product_id)
+               DO UPDATE SET on_hand = EXCLUDED.on_hand, updated_at = CURRENT_TIMESTAMP;`,
+              [dbProductId, item.id, item.qty],
+            );
+            await this.dbService.query(
+              `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+               VALUES ($1, $2::uuid, $3)
+               ON CONFLICT (product_sku, warehouse_id)
+               DO UPDATE SET physical_quantity = EXCLUDED.physical_quantity, updated_at = CURRENT_TIMESTAMP;`,
+              [newProduct.sku.toUpperCase(), item.id, item.qty],
+            );
+          }
+        }
       } catch {
         // Fallback
       }

@@ -186,6 +186,7 @@ export class AuthService {
     const warehouseCode = user.warehouseCode || (user as any).assignedWarehouseCode || null;
     const warehouseName = user.assignedWarehouse || null;
     const warehouses = (user as any).warehouses || (warehouseId ? [{ id: warehouseId, code: warehouseCode || '', name: warehouseName || '', isPrimary: true }] : []);
+    const warehouseIds = (user as any).warehouseIds || warehouses.map((w: any) => w.id);
 
     const userInfo: IAuthUserInfo = {
       id: user.id,
@@ -201,6 +202,7 @@ export class AuthService {
       warehouseCode,
       assignedWarehouseCode: warehouseCode,
       warehouseName,
+      warehouseIds,
       warehouses,
       avatarUrl: user.avatarUrl ?? null,
     };
@@ -349,6 +351,8 @@ export class AuthService {
       warehouseCode: user.warehouseCode ?? undefined,
       warehouseName: user.warehouseName ?? undefined,
       assignedWarehouse: user.assignedWarehouse ?? undefined,
+      warehouseIds: user.warehouseIds ?? undefined,
+      warehouses: user.warehouses ?? undefined,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
