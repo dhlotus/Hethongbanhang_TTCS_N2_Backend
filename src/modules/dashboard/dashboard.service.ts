@@ -6,6 +6,7 @@ import { DashboardOverviewResponseDto } from './dto/dashboard-overview.dto';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole, Role } from '../../common/enums/user-role.enum';
 import { OrderStatus } from '../orders/entities/order-status.enum';
+import { InventoryService } from '../inventory/inventory.service';
 
 @Injectable()
 export class DashboardService {
@@ -16,6 +17,8 @@ export class DashboardService {
     private readonly customersService: CustomersService,
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
+    @Inject(forwardRef(() => InventoryService))
+    private readonly inventoryService: InventoryService,
   ) {}
 
   async getOverview(
@@ -153,10 +156,26 @@ export class DashboardService {
     highRiskAgencies.sort((a, b) => b.overdueAmount - a.overdueAmount);
     const topHighRisk = highRiskAgencies.slice(0, 10);
 
-    // Calculate Low Stock (Chỉ đếm sản phẩm SẮP ĐỨT: còn tồn khả dụng > 0 và <= 10)
-    for (const product of allProducts) {
-      if (product.availableStock !== undefined && product.availableStock > 0 && product.availableStock <= 10) {
-        lowStockAlertCount++;
+    // Calculate Low Stock cảnh báo đứt hàng cộng dồn từ tất cả các kho
+    if (this.inventoryService) {
+      try {
+        const alerts = await this.inventoryService.getLowStockAlerts(
+          isWarehouse && currentUser.warehouseId ? currentUser.warehouseId : 'ALL',
+          currentUser,
+        );
+        lowStockAlertCount = alerts.length;
+      } catch {
+        for (const product of allProducts) {
+          if (product.availableStock !== undefined && product.availableStock > 0 && product.availableStock <= 10) {
+            lowStockAlertCount++;
+          }
+        }
+      }
+    } else {
+      for (const product of allProducts) {
+        if (product.availableStock !== undefined && product.availableStock > 0 && product.availableStock <= 10) {
+          lowStockAlertCount++;
+        }
       }
     }
 

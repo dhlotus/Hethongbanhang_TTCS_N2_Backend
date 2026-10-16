@@ -190,6 +190,40 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   createdSource?: string;
+
+  @IsOptional()
+  @IsString()
+  warehouseId?: string;
+
+  @IsOptional()
+  @IsString()
+  warehouseName?: string;
+}
+
+/**
+ * DTO chi tiết dòng hàng khi cập nhật giao nhận
+ */
+export class UpdateOrderLineDeliveryDto {
+  @IsOptional()
+  @IsString()
+  lineId?: string;
+
+  @IsOptional()
+  @IsString()
+  productId?: string;
+
+  @IsOptional()
+  dispatchedQuantity?: number;
+
+  @IsOptional()
+  deliveredQuantity?: number;
+
+  @IsOptional()
+  isShortDelivery?: boolean;
+
+  @IsOptional()
+  @IsString()
+  shortDeliveryReason?: string;
 }
 
 /**
@@ -203,6 +237,29 @@ export class UpdateOrderStatusDto {
   @IsOptional()
   @IsString()
   reason?: string;
+
+  @IsOptional()
+  lines?: UpdateOrderLineDeliveryDto[];
+
+  @IsOptional()
+  @IsString()
+  driverName?: string;
+
+  @IsOptional()
+  @IsString()
+  driverPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  licensePlate?: string;
+
+  @IsOptional()
+  @IsString()
+  carrierName?: string;
+
+  @IsOptional()
+  @IsString()
+  estimatedDeliveryWindow?: string;
 }
 
 /**

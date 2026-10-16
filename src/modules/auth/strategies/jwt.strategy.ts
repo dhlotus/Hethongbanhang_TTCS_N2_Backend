@@ -41,6 +41,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     let avatarUrl: string | null = null;
     let customerId: string | null = null;
     let customerCode: string | null = null;
+    let warehouseId: string | null = payload.warehouseId ?? null;
+    let warehouseCode: string | null = payload.warehouseCode ?? null;
+    let warehouseName: string | null = payload.warehouseName ?? payload.assignedWarehouse ?? null;
+    let assignedWarehouse: string | null = payload.assignedWarehouse ?? null;
+    let warehouses: Array<{ id: string; code: string; name: string; isPrimary?: boolean }> = [];
 
     if (this.usersService) {
       const user = await this.usersService.findById(payload.sub);
@@ -53,7 +58,32 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         avatarUrl = user.avatarUrl ?? null;
         customerId = user.customerId ?? null;
         customerCode = user.customerCode ?? null;
+        warehouseId = warehouseId || user.warehouseId || (user as any).assignedWarehouseId || null;
+        warehouseCode = warehouseCode || user.warehouseCode || (user as any).assignedWarehouseCode || null;
+        assignedWarehouse = assignedWarehouse || user.assignedWarehouse || null;
+        warehouseName = warehouseName || assignedWarehouse;
+        warehouses = (user as any).warehouses || [];
       }
+    }
+
+    if (!warehouseId && this.dbService?.isConnected()) {
+      try {
+        const whRes = await this.dbService.query<{ warehouse_id: string; code: string; name: string }>(
+          `SELECT COALESCE(w.id, wm.id) as warehouse_id, COALESCE(w.code, wm.code) as code, COALESCE(w.name, wm.name) as name
+           FROM user_warehouses uw
+           JOIN warehouses w ON uw.warehouse_id = w.id
+           FULL OUTER JOIN warehouses wm ON wm.manager_id = $1::uuid
+           WHERE uw.user_id = $1::uuid OR uw.user_id::text = $1 OR wm.manager_id = $1::uuid OR wm.manager_id::text = $1
+           LIMIT 1`,
+          [payload.sub],
+        );
+        if (whRes[0]?.warehouse_id) {
+          warehouseId = whRes[0].warehouse_id;
+          warehouseCode = whRes[0].code;
+          warehouseName = whRes[0].name;
+          warehouses = [{ id: warehouseId, code: warehouseCode || '', name: warehouseName || '', isPrimary: true }];
+        }
+      } catch {}
     }
 
     // Nếu người dùng có vai trò Đại lý (CUSTOMER) mà chưa có customerId, truy vấn DB hoặc file dữ liệu để tự động gắn
@@ -100,6 +130,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
+    let warehouseIds: string[] =
+      payload.warehouseIds ?? (warehouses.length > 0 ? warehouses.map((w) => w.id) : (warehouseId ? [warehouseId] : []));
+
     return {
       userId: payload.sub,
       email: payload.email,
@@ -109,6 +142,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       customerId,
       customerCode,
       agencyId: customerId,
+      warehouseId,
+      warehouseCode,
+      warehouseName,
+      assignedWarehouse,
+      warehouseIds,
+      warehouses,
     };
   }
 }

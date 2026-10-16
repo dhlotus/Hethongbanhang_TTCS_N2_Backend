@@ -182,6 +182,12 @@ export class AuthService {
     // Bước 4: Xử lý khi đăng nhập thành công
     await this.usersService.resetFailedAttempts(user.id);
 
+    const warehouseId = user.warehouseId || (user as any).assignedWarehouseId || null;
+    const warehouseCode = user.warehouseCode || (user as any).assignedWarehouseCode || null;
+    const warehouseName = user.assignedWarehouse || null;
+    const warehouses = (user as any).warehouses || (warehouseId ? [{ id: warehouseId, code: warehouseCode || '', name: warehouseName || '', isPrimary: true }] : []);
+    const warehouseIds = (user as any).warehouseIds || warehouses.map((w: any) => w.id);
+
     const userInfo: IAuthUserInfo = {
       id: user.id,
       username: user.username,
@@ -191,6 +197,13 @@ export class AuthService {
       role: user.role,
       status: user.status,
       assignedWarehouse: user.assignedWarehouse,
+      warehouseId,
+      assignedWarehouseId: warehouseId,
+      warehouseCode,
+      assignedWarehouseCode: warehouseCode,
+      warehouseName,
+      warehouseIds,
+      warehouses,
       avatarUrl: user.avatarUrl ?? null,
     };
 
@@ -249,6 +262,11 @@ export class AuthService {
 
     // 4. Tìm kiếm thông tin người dùng từ UsersService
     const userAccount = await this.usersService.findById(payload.sub);
+    const whId = userAccount?.warehouseId || (userAccount as any)?.assignedWarehouseId || payload.warehouseId || null;
+    const whCode = userAccount?.warehouseCode || (userAccount as any)?.assignedWarehouseCode || payload.warehouseCode || null;
+    const whName = userAccount?.assignedWarehouse || payload.warehouseName || payload.assignedWarehouse || null;
+    const whs = (userAccount as any)?.warehouses || (whId ? [{ id: whId, code: whCode || '', name: whName || '', isPrimary: true }] : []);
+
     const userInfo: IAuthUserInfo = userAccount
       ? {
           id: userAccount.id,
@@ -259,6 +277,12 @@ export class AuthService {
           role: userAccount.role,
           status: userAccount.status,
           assignedWarehouse: userAccount.assignedWarehouse,
+          warehouseId: whId,
+          assignedWarehouseId: whId,
+          warehouseCode: whCode,
+          assignedWarehouseCode: whCode,
+          warehouseName: whName,
+          warehouses: whs,
           avatarUrl: userAccount.avatarUrl ?? null,
         }
       : {
@@ -267,6 +291,12 @@ export class AuthService {
           fullName: payload.username ?? '',
           email: payload.email,
           roles: payload.roles ?? (payload.role ? [payload.role] : []),
+          warehouseId: whId,
+          assignedWarehouseId: whId,
+          warehouseCode: whCode,
+          assignedWarehouseCode: whCode,
+          warehouseName: whName,
+          warehouses: whs,
           avatarUrl: null,
         };
 
@@ -317,6 +347,12 @@ export class AuthService {
       roles: userRoles,
       role: userRoles[0],
       username: user.username,
+      warehouseId: user.warehouseId ?? undefined,
+      warehouseCode: user.warehouseCode ?? undefined,
+      warehouseName: user.warehouseName ?? undefined,
+      assignedWarehouse: user.assignedWarehouse ?? undefined,
+      warehouseIds: user.warehouseIds ?? undefined,
+      warehouses: user.warehouses ?? undefined,
     };
 
     const [accessToken, refreshToken] = await Promise.all([

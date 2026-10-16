@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import {
   Body,
   Controller,
@@ -153,11 +154,21 @@ export class OrdersController {
       if (!agencyId) {
         throw new ForbiddenException('Tài khoản của bạn chưa gắn với hồ sơ đại lý.');
       }
-      delete (query as any).agency_id;
-      delete (query as any).agencyId;
+      delete (query as Record<string, unknown>).agency_id;
+      delete (query as Record<string, unknown>).agencyId;
       query.customerId = agencyId;
     }
-    return this.ordersService.findAllOrders(query, currentUser as any);
+    return this.ordersService.findAllOrders(
+      query,
+      currentUser
+        ? {
+            id: currentUser.userId,
+            role: currentUser.roles?.[0],
+            username: currentUser.username,
+            roles: currentUser.roles,
+          }
+        : undefined,
+    );
   }
 
   /**
@@ -170,7 +181,7 @@ export class OrdersController {
   async cloneOrder(
     @Param('id') id: string,
     @CurrentUser() currentUser?: ICurrentUser,
-    @Req() req?: any,
+    @Req() req?: Request,
   ): Promise<OrderEntity> {
     let salesRep: { id?: string; name?: string } | undefined;
     if (currentUser) {
@@ -182,9 +193,19 @@ export class OrdersController {
           const token = authHeader.slice(7).trim();
           const parts = token.split('.');
           if (parts.length === 3) {
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString()) as Record<string, unknown>;
             if (payload && (payload.sub || payload.username)) {
-              salesRep = { id: payload.sub, name: payload.fullName || payload.username || payload.email };
+              salesRep = {
+                id: typeof payload.sub === 'string' ? payload.sub : undefined,
+                name:
+                  typeof payload.fullName === 'string'
+                    ? payload.fullName
+                    : typeof payload.username === 'string'
+                    ? payload.username
+                    : typeof payload.email === 'string'
+                    ? payload.email
+                    : undefined,
+              };
             }
           }
         }
@@ -197,13 +218,70 @@ export class OrdersController {
 
 
   /**
+   * Xem chi tiết một đơn hàng của riêng Đại lý (SN-199: Cách ly dữ liệu Cổng B2B)
+   * GET /api/orders/portal/my-orders/:id
+   * - Bắt buộc xác thực JWT Token
+   * - Đại lý chỉ xem được đơn của mình, cố tình xem đơn của đại lý khác sẽ văng 403 Forbidden
+   */
+  @Get('portal/my-orders/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CUSTOMER, UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  async getMyOrderById(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<OrderEntity> {
+    const order = await this.ordersService.findOrderById(id);
+    if (currentUser?.roles?.includes(UserRole.CUSTOMER)) {
+      const agencyId = currentUser.agencyId || currentUser.customerId || 'cust-001';
+      if (order.customerId !== agencyId && order.customerCode !== agencyId) {
+        throw new ForbiddenException('Bạn không có quyền truy cập đơn hàng của đại lý khác.');
+      }
+    }
+    return order;
+  }
+
+  /**
    * Lấy chi tiết một đơn hàng theo ID
    * GET /api/orders/:id
    */
   @Get(':id')
   @Public()
-  async getOrderById(@Param('id') id: string): Promise<OrderEntity> {
-    return this.ordersService.findOrderById(id);
+  async getOrderById(
+    @Param('id') id: string,
+    @Req() req?: any,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<OrderEntity> {
+    const order = await this.ordersService.findOrderById(id);
+    let user = currentUser;
+    if (!user && req?.headers?.authorization) {
+      try {
+        const authHeader = req.headers.authorization;
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7).trim();
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+            user = {
+              userId: payload.sub,
+              username: payload.username,
+              roles: payload.roles,
+              agencyId: payload.agencyId || payload.customerId,
+              customerId: payload.customerId || payload.agencyId,
+            } as any;
+          }
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
+    if (user?.roles?.includes(UserRole.CUSTOMER)) {
+      const agencyId = user.agencyId || user.customerId || 'cust-001';
+      if (order.customerId !== agencyId && order.customerCode !== agencyId) {
+        throw new ForbiddenException('Bạn không có quyền truy cập đơn hàng của đại lý khác.');
+      }
+    }
+    return order;
   }
 
   /**
@@ -281,7 +359,7 @@ export class OrdersController {
    */
   @Patch(':id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP, UserRole.WAREHOUSE_MANAGER)
   async updateOrderStatus(
     @Param('id') id: string,
     @Body() dto: UpdateOrderStatusDto,
