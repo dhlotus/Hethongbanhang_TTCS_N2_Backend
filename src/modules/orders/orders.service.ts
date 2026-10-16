@@ -38,6 +38,7 @@ import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { InventoryService } from '../inventory/inventory.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   StockReservationEntity,
   StockReservationStatus,
@@ -115,6 +116,8 @@ export class OrdersService implements OnModuleInit {
     private readonly inventoryService?: InventoryService,
     @Optional()
     private readonly databaseService?: DatabaseService,
+    @Optional()
+    private readonly notificationsService?: NotificationsService,
   ) {
     if (!this.databaseService || !this.databaseService.isConnected()) {
       for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
@@ -961,6 +964,26 @@ export class OrdersService implements OnModuleInit {
             this.productsService.populateProductStock(product);
           }
         }
+      }
+    }
+
+    // Phát thông báo tới 5 nhóm đối tượng người dùng & chính Đại lý B2B đặt đơn
+    if (this.notificationsService) {
+      try {
+        await this.notificationsService.notifyOrderCreated({
+          id: newOrder.id,
+          orderCode: newOrder.orderCode,
+          customerId: newOrder.customerId,
+          customerName: newOrder.customerName,
+          grandTotal: newOrder.grandTotal,
+          lines: newOrder.lines,
+          warehouseId: newOrder.warehouseId,
+          salesRepId: newOrder.salesRepId,
+          isCreditLimitExceeded: newOrder.isCreditLimitExceeded,
+          status: newOrder.status,
+        });
+      } catch (notifErr) {
+        this.logger.warn(`Không thể phát thông báo đơn hàng [${newOrder.orderCode}]: ${notifErr}`);
       }
     }
 
