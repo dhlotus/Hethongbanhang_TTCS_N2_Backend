@@ -1032,7 +1032,7 @@ export class ProductsService implements OnModuleInit {
       price: Number(dto.price),
       costPrice,
       margin,
-      stockQuantity: dto.stockQuantity ?? 0,
+      stockQuantity: 0, // Sản phẩm mới tạo chỉ là mẫu mã, tồn kho mặc định luôn bằng 0
       status: dto.status ?? ProductStatus.ACTIVE,
       imageUrl: dto.imageUrl?.trim(),
       description: dto.description?.trim(),
@@ -1084,33 +1084,39 @@ export class ProductsService implements OnModuleInit {
         );
 
         const dbProductId = prodRows[0]?.id;
-        if (dbProductId) {
-          // Tự động phân bổ tồn kho xuống đủ cả 4 kho chuẩn hệ thống (Step 1.2)
-          const totalStock = dto.stockQuantity && dto.stockQuantity > 0 ? Number(dto.stockQuantity) : 4000;
-          const baseQty = Math.floor(totalStock / 4);
-          const rem = totalStock - baseQty * 4;
-          const distList = [
-            { id: '11111111-0000-0000-0000-000000000002', qty: baseQty }, // Miền Bắc
-            { id: '11111111-0000-0000-0000-000000000004', qty: baseQty }, // Miền Trung
-            { id: '11111111-0000-0000-0000-000000000001', qty: baseQty + rem }, // Miền Nam
-            { id: '11111111-0000-0000-0000-000000000003', qty: baseQty }, // Miền Tây
-          ];
+        // Đảm bảo đơn vị cơ sở được ghi nhận trong product_units
+        if (dbProductId && newProduct.baseUnit) {
+          try {
+            await this.dbService.query(
+              `INSERT INTO product_units (product_id, unit_name, conversion_factor, is_base_unit)
+               VALUES ($1, $2, 1, true)
+               ON CONFLICT (product_id, unit_name) DO NOTHING;`,
+              [dbProductId, newProduct.baseUnit],
+            );
+          } catch {}
+        }
 
-          for (const item of distList) {
+        // Tự động đưa sản phẩm mới vào tất cả các kho đang hoạt động với số lượng tồn = 0
+        if (dbProductId) {
+          try {
             await this.dbService.query(
-              `INSERT INTO inventories (product_id, warehouse_id, on_hand, allocated)
-               VALUES ($1, $2::uuid, $3, 0)
-               ON CONFLICT (warehouse_id, product_id)
-               DO UPDATE SET on_hand = EXCLUDED.on_hand, updated_at = CURRENT_TIMESTAMP;`,
-              [dbProductId, item.id, item.qty],
+              `INSERT INTO inventories (warehouse_id, product_id, on_hand, allocated, updated_at)
+               SELECT w.id, $1::uuid, 0, 0, CURRENT_TIMESTAMP
+               FROM warehouses w
+               WHERE (w.status IS NULL OR w.status = 'ACTIVE')
+               ON CONFLICT (warehouse_id, product_id) DO NOTHING;`,
+              [dbProductId],
             );
             await this.dbService.query(
-              `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-               VALUES ($1, $2::uuid, $3)
-               ON CONFLICT (product_sku, warehouse_id)
-               DO UPDATE SET physical_quantity = EXCLUDED.physical_quantity, updated_at = CURRENT_TIMESTAMP;`,
-              [newProduct.sku.toUpperCase(), item.id, item.qty],
+              `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity, updated_at)
+               SELECT UPPER(TRIM($1)), w.id, 0, CURRENT_TIMESTAMP
+               FROM warehouses w
+               WHERE (w.status IS NULL OR w.status = 'ACTIVE')
+               ON CONFLICT (product_sku, warehouse_id) DO NOTHING;`,
+              [newProduct.sku],
             );
+          } catch (invErr) {
+            console.warn('[ProductsService] Khởi tạo tồn kho = 0 cho SP mới thất bại:', invErr);
           }
         }
       } catch {
@@ -1391,30 +1397,254 @@ export class ProductsService implements OnModuleInit {
 
   /**
    * Xóa sản phẩm khỏi danh mục (Ràng buộc toàn vẹn dữ liệu)
+   * Kiểm tra điều kiện ràng buộc xóa sản phẩm:
+   * 1. Hết hàng: Tổng tồn kho (on_hand) = 0 và không có lượng giữ chỗ (allocated) = 0.
+   * 2. Không còn giao dịch nào của sản phẩm đó đang ở các trạng thái chờ, đang vận chuyển:
+   *    - Đơn hàng (orders): không ở trạng thái DRAFT, PENDING, PENDING_APPROVAL, PENDING_INVENTORY_APPROVAL, APPROVED, PROCESSING, RETURNED_FOR_UPDATE, ALLOCATED, DISPATCHED, SHIPPED, DELIVERING, IN_TRANSIT
+   *    - Chuyển kho nội bộ (internal_transfers): không ở trạng thái DRAFT, IN_TRANSIT
+   *    - Nhập kho (goods_receipts): không ở trạng thái DRAFT, PENDING, IN_TRANSIT
+   *    - Xuất kho (goods_issues): không ở trạng thái DRAFT, PENDING, SHIPPING, DISPATCHED
+   *    - Trả hàng (return_orders): không ở trạng thái PENDING, RECEIVING, PROCESSING
+   */
+  async checkCanDeleteProduct(
+    idOrSku: string,
+  ): Promise<{ canDelete: boolean; reason?: string }> {
+    const product = await this.findById(idOrSku);
+    if (!product) {
+      throw new NotFoundException(`Không tìm thấy sản phẩm: ${idOrSku}`);
+    }
+
+    // --- 1. KIỂM TRA TỒN KHO ("nếu hết hàng") ---
+    const inMemStock = product.stockQuantity ?? 0;
+    const inMemReserved = product.reservedStock ?? 0;
+
+    if (this.dbService?.isConnected()) {
+      // A. Kiểm tra tổng tồn kho và lượng giữ chỗ trong bảng inventories
+      const invCheck = await this.dbService.query<{
+        total_on_hand: string;
+        total_allocated: string;
+      }>(
+        `SELECT COALESCE(SUM(on_hand), 0)::text AS total_on_hand,
+                COALESCE(SUM(allocated), 0)::text AS total_allocated
+         FROM inventories
+         WHERE product_id = $1::uuid OR product_id::text = $2`,
+        [product.id, product.sku],
+      );
+
+      const totalOnHand = Number(invCheck[0]?.total_on_hand ?? inMemStock);
+      const totalAllocated = Number(invCheck[0]?.total_allocated ?? inMemReserved);
+
+      if (totalOnHand > 0) {
+        return {
+          canDelete: false,
+          reason: `Không thể xóa sản phẩm "${product.name}" (${product.sku}) vì trong kho vẫn còn hàng tồn (${totalOnHand} ${product.baseUnit}). Vui lòng xuất hết tồn kho hoặc điều chỉnh về 0 trước khi xóa.`,
+        };
+      }
+
+      if (totalAllocated > 0) {
+        return {
+          canDelete: false,
+          reason: `Không thể xóa sản phẩm "${product.name}" (${product.sku}) vì đang có ${totalAllocated} ${product.baseUnit} được giữ chỗ cho các đơn hàng chưa hoàn tất.`,
+        };
+      }
+
+      // B. Kiểm tra tồn lô hàng (inventory_batches)
+      try {
+        const batchCheck = await this.dbService.query<{ total_batch: string; total_allocated: string }>(
+          `SELECT COALESCE(SUM(quantity), 0)::text AS total_batch,
+                  COALESCE(SUM(allocated_quantity), 0)::text AS total_allocated
+           FROM inventory_batches
+           WHERE product_id = $1::uuid`,
+          [product.id],
+        );
+        const batchQty = Number(batchCheck[0]?.total_batch ?? 0);
+        const batchAlloc = Number(batchCheck[0]?.total_allocated ?? 0);
+        if (batchQty > 0 || batchAlloc > 0) {
+          return {
+            canDelete: false,
+            reason: `Không thể xóa sản phẩm "${product.name}" (${product.sku}) vì vẫn còn ${batchQty} ${product.baseUnit} trong các lô hàng.`,
+          };
+        }
+      } catch {}
+
+      // --- 2. KIỂM TRA CÁC GIAO DỊCH ĐANG Ở TRẠNG THÁI CHỜ, ĐANG VẬN CHUYỂN ---
+      // A. Đơn hàng (orders & order_items)
+      try {
+        const pendingOrders = await this.dbService.query<{ code: string; status: string }>(
+          `SELECT o.code, o.status
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE oi.product_id = $1::uuid
+             AND o.status IN (
+               'DRAFT', 'PENDING', 'PENDING_APPROVAL', 'PENDING_INVENTORY_APPROVAL',
+               'APPROVED', 'PROCESSING', 'RETURNED_FOR_UPDATE', 'ALLOCATED',
+               'DISPATCHED', 'SHIPPED', 'DELIVERING', 'IN_TRANSIT'
+             )
+           LIMIT 5`,
+          [product.id],
+        );
+        if (pendingOrders.length > 0) {
+          const list = pendingOrders.map((o) => `${o.code} (${o.status})`).join(', ');
+          return {
+            canDelete: false,
+            reason: `Không thể xóa sản phẩm vì đang có đơn hàng chưa hoàn tất [${list}].`,
+          };
+        }
+      } catch {}
+
+      // B. Chuyển kho nội bộ (internal_transfers & internal_transfer_items)
+      try {
+        const pendingTransfers = await this.dbService.query<{ code: string; status: string }>(
+          `SELECT t.code, t.status
+           FROM internal_transfer_items ti
+           JOIN internal_transfers t ON t.id = ti.transfer_id
+           WHERE (ti.product_id = $1::text OR ti.sku = $2)
+             AND t.status IN ('DRAFT', 'IN_TRANSIT')
+           LIMIT 5`,
+          [product.id, product.sku],
+        );
+        if (pendingTransfers.length > 0) {
+          const list = pendingTransfers.map((t) => `${t.code} (${t.status})`).join(', ');
+          return {
+            canDelete: false,
+            reason: `Không thể xóa sản phẩm vì đang có phiếu chuyển kho nội bộ đang chờ hoặc đang vận chuyển [${list}].`,
+          };
+        }
+      } catch {}
+
+      // C. Nhập kho (goods_receipts & goods_receipt_items)
+      try {
+        const pendingReceipts = await this.dbService.query<{ code: string; status: string }>(
+          `SELECT gr.code, gr.status
+           FROM goods_receipt_items gri
+           JOIN goods_receipts gr ON gr.id = gri.receipt_id
+           WHERE gri.product_id = $1::uuid
+             AND gr.status IN ('DRAFT', 'PENDING', 'IN_TRANSIT')
+           LIMIT 5`,
+          [product.id],
+        );
+        if (pendingReceipts.length > 0) {
+          const list = pendingReceipts.map((r) => `${r.code} (${r.status})`).join(', ');
+          return {
+            canDelete: false,
+            reason: `Không thể xóa sản phẩm vì đang có phiếu nhập kho chưa hoàn tất [${list}].`,
+          };
+        }
+      } catch {}
+
+      // D. Xuất kho (goods_issues & goods_issue_items)
+      try {
+        const pendingIssues = await this.dbService.query<{ code: string; status: string }>(
+          `SELECT gi.code, gi.status
+           FROM goods_issue_items gii
+           JOIN goods_issues gi ON gi.id = gii.issue_id
+           WHERE gii.product_id = $1::uuid
+             AND gi.status IN ('DRAFT', 'PENDING', 'SHIPPING', 'DISPATCHED')
+           LIMIT 5`,
+          [product.id],
+        );
+        if (pendingIssues.length > 0) {
+          const list = pendingIssues.map((i) => `${i.code} (${i.status})`).join(', ');
+          return {
+            canDelete: false,
+            reason: `Không thể xóa sản phẩm vì đang có phiếu xuất kho chưa hoàn tất [${list}].`,
+          };
+        }
+      } catch {}
+
+      // E. Trả hàng (return_orders & return_order_items)
+      try {
+        const pendingReturns = await this.dbService.query<{ code: string; status: string }>(
+          `SELECT ro.code, ro.status
+           FROM return_order_items roi
+           JOIN return_orders ro ON ro.id = roi.return_order_id
+           WHERE roi.product_id = $1::uuid
+             AND ro.status IN ('PENDING', 'RECEIVING', 'PROCESSING')
+           LIMIT 5`,
+          [product.id],
+        );
+        if (pendingReturns.length > 0) {
+          const list = pendingReturns.map((r) => `${r.code} (${r.status})`).join(', ');
+          return {
+            canDelete: false,
+            reason: `Không thể xóa sản phẩm vì đang có đơn trả hàng chưa hoàn tất [${list}].`,
+          };
+        }
+      } catch {}
+    } else {
+      // Khi CSDL chưa kết nối (In-memory fallback):
+      if (inMemStock > 0) {
+        return {
+          canDelete: false,
+          reason: `Không thể xóa sản phẩm "${product.name}" (${product.sku}) vì trong kho vẫn còn hàng tồn (${inMemStock} ${product.baseUnit}).`,
+        };
+      }
+      if (inMemReserved > 0) {
+        return {
+          canDelete: false,
+          reason: `Không thể xóa sản phẩm "${product.name}" (${product.sku}) vì đang giữ chỗ (${inMemReserved} ${product.baseUnit}) cho đơn hàng.`,
+        };
+      }
+    }
+
+    return { canDelete: true };
+  }
+
+  /**
+   * Xóa sản phẩm khỏi danh mục
    * DELETE /api/products/:id
-   * Quyền: ADMIN, SALES_MANAGER
+   * Quyền: ADMIN, SALES_MANAGER, BUSINESS_MANAGER
+   * Ràng buộc: Hết hàng và không còn giao dịch chờ/đang vận chuyển
    */
   async delete(
     idOrSku: string,
   ): Promise<{ success: boolean; message: string }> {
     const product = await this.findById(idOrSku);
 
-    // Kiểm tra ràng buộc giao dịch đơn hàng và kho
-    if (this.hasTransactions(product.id) || product.hasTransactions) {
-      throw new BadRequestException(
-        'Sản phẩm đã phát sinh giao dịch kho hoặc đơn hàng. Không thể xóa, chỉ được phép chuyển trạng thái sang Ngừng kinh doanh',
-      );
+    // Kiểm tra ràng buộc điều kiện được xóa sản phẩm
+    const check = await this.checkCanDeleteProduct(product.id);
+    if (!check.canDelete) {
+      throw new BadRequestException(check.reason);
     }
 
     this.products.delete(product.id);
+    this.transactionProductIds.delete(product.id);
+    this.transactionProductIds.delete(product.sku);
 
     if (this.dbService?.isConnected()) {
       try {
         await this.dbService.query(
-          `DELETE FROM products WHERE sku = $1;`,
+          `DELETE FROM app_inventory_stock_balances WHERE product_sku = $1;`,
           [product.sku],
         );
-      } catch {}
+        await this.dbService.query(
+          `DELETE FROM inventories WHERE product_id = $1::uuid;`,
+          [product.id],
+        );
+        await this.dbService.query(
+          `DELETE FROM inventory_batches WHERE product_id = $1::uuid;`,
+          [product.id],
+        );
+        await this.dbService.query(
+          `DELETE FROM product_price_histories WHERE product_id = $1 OR product_id = $2;`,
+          [product.id, product.sku],
+        );
+        await this.dbService.query(
+          `DELETE FROM price_list_items WHERE product_id = $1::uuid;`,
+          [product.id],
+        );
+        await this.dbService.query(
+          `DELETE FROM product_units WHERE product_id = $1::uuid;`,
+          [product.id],
+        );
+        await this.dbService.query(
+          `DELETE FROM products WHERE id = $1::uuid OR sku = $2;`,
+          [product.id, product.sku],
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[ProductsService] Cảnh báo khi xóa sản phẩm ${product.sku} khỏi PostgreSQL: ${msg}`);
+      }
     }
 
     return {
@@ -1598,6 +1828,7 @@ export class ProductsService implements OnModuleInit {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Danh mục sản phẩm');
 
+    // Mẫu nhập danh mục sản phẩm chuẩn: Bỏ trường Tồn kho (Tồn kho luôn mặc định bằng 0, chỉ nhập khi tác nghiệp kho)
     sheet.columns = [
       { header: 'Mã SKU (*)', key: 'sku', width: 20, style: { alignment: { horizontal: 'center' } } },
       { header: 'Tên sản phẩm (*)', key: 'name', width: 30, style: { alignment: { horizontal: 'left' } } },
@@ -1605,7 +1836,6 @@ export class ProductsService implements OnModuleInit {
       { header: 'Đơn vị tính (*)', key: 'baseUnit', width: 15, style: { alignment: { horizontal: 'center' } } },
       { header: 'Quy cách', key: 'packagingSpec', width: 20, style: { alignment: { horizontal: 'center' } } },
       { header: 'Giá niêm yết (*)', key: 'price', width: 15, style: { alignment: { horizontal: 'right' } } },
-      { header: 'Tồn kho', key: 'stockQuantity', width: 15, style: { alignment: { horizontal: 'right' } } },
       { header: 'Giá vốn (*)', key: 'costPrice', width: 15, style: { alignment: { horizontal: 'right' } } },
       { header: 'Mô tả', key: 'description', width: 30, style: { alignment: { horizontal: 'left' } } },
     ];
@@ -1617,7 +1847,6 @@ export class ProductsService implements OnModuleInit {
       baseUnit: 'Cái',
       packagingSpec: '24 lon/thùng',
       price: 100000,
-      stockQuantity: 10,
       costPrice: 80000,
       description: 'Đây là dòng dữ liệu mẫu, hãy xóa dòng này trước khi nhập',
     });
@@ -1629,7 +1858,7 @@ export class ProductsService implements OnModuleInit {
 
     const sampleRow = sheet.getRow(2);
     sampleRow.alignment = { vertical: 'middle', horizontal: 'center' };
-    const descCell = sampleRow.getCell(9);
+    const descCell = sampleRow.getCell(8);
     descCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
     res.setHeader(
@@ -1674,6 +1903,11 @@ export class ProductsService implements OnModuleInit {
     let validCount = 0;
     let invalidCount = 0;
 
+    // Kiểm tra tiêu đề để tương thích cả tệp mẫu mới (8 cột, không có Tồn kho) lẫn tệp cũ (9 cột, có Tồn kho)
+    const headerRow = sheet.getRow(1);
+    const col7Header = String(headerRow.getCell(7).value || '').toLowerCase().trim();
+    const hasLegacyStockColumn = col7Header.includes('tồn') || col7Header.includes('stock');
+
     sheet.eachRow((row: ExcelJS.Row, rowNumber: number) => {
       if (rowNumber === 1) return;
 
@@ -1683,9 +1917,16 @@ export class ProductsService implements OnModuleInit {
       const baseUnit = row.getCell(4).text?.trim();
       const packagingSpec = row.getCell(5).text?.trim();
       const price = Number(row.getCell(6).value) || 0;
-      const stockQuantity = Number(row.getCell(7).value) || 0;
-      const costPrice = Number(row.getCell(8).value) || 0;
-      const description = row.getCell(9).text?.trim();
+
+      let costPrice = 0;
+      let description = '';
+      if (hasLegacyStockColumn) {
+        costPrice = Number(row.getCell(8).value) || 0;
+        description = row.getCell(9).text?.trim();
+      } else {
+        costPrice = Number(row.getCell(7).value) || 0;
+        description = row.getCell(8).text?.trim();
+      }
 
       if (!sku && !name && !category && !baseUnit && price === 0 && costPrice === 0) return;
 
@@ -1726,7 +1967,7 @@ export class ProductsService implements OnModuleInit {
         packagingSpec,
         price,
         costPrice,
-        stockQuantity,
+        stockQuantity: 0, // Mặc định tồn kho luôn bằng 0 khi thêm mới mẫu mã sản phẩm
         description,
         status,
         errors,
@@ -1779,7 +2020,7 @@ export class ProductsService implements OnModuleInit {
             packagingSpec: item.packagingSpec,
             price: item.price,
             costPrice: item.costPrice,
-            stockQuantity: item.stockQuantity,
+            stockQuantity: 0, // Tồn kho mặc định bằng 0
             description: item.description,
           });
         }

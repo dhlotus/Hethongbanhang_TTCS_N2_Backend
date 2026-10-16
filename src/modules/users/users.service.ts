@@ -248,6 +248,16 @@ export class UsersService implements OnModuleInit {
       };
     }
 
+    if (
+      /^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(raw)
+    ) {
+      return {
+        warehouseId: raw,
+        warehouseCode: raw,
+        warehouseName: raw,
+      };
+    }
+
     return {};
   }
 
@@ -604,7 +614,7 @@ export class UsersService implements OnModuleInit {
     }
   }
 
-  private async loadUsersFromDatabase(): Promise<void> {
+  public async loadUsersFromDatabase(): Promise<void> {
     if (!this.dbService?.isConnected()) return;
     try {
       // 1. Nạp danh sách quan hệ phân quyền kho từ user_warehouses kèm thông tin kho
