@@ -374,10 +374,17 @@ export class InventoryService implements OnModuleInit {
   /**
    * Helper: ghi một giao dịch vào sổ ledger (theo productId bucket)
    */
-  private writeLedger(tx: InventoryTransactionEntity): void {
+  public writeLedger(tx: InventoryTransactionEntity): void {
     const bucket = this.ledger.get(tx.productId) ?? [];
     bucket.unshift(tx); // mới nhất lên đầu
     this.ledger.set(tx.productId, bucket);
+  }
+
+  /**
+   * Thêm giao dịch sổ kho từ các module khác (SN-195)
+   */
+  public addTransaction(tx: InventoryTransactionEntity): void {
+    this.writeLedger(tx);
   }
 
   /**

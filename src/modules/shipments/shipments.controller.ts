@@ -9,7 +9,11 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ShipmentsService, ShipmentItem } from './shipments.service';
+import { ShipmentsService } from './shipments.service';
+import { ShipmentEntity } from './entities/shipment.entity';
+import { ConfirmShipmentDto } from './dto/confirm-shipment.dto';
+import { CreateShipmentDto } from './dto/create-shipment.dto';
+import { QueryShipmentsDto } from './dto/query-shipments.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -18,8 +22,11 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 
 /**
- * Controller Phiếu xuất & Giao hàng (Module 6)
- * Matrix: Customer R*, Sales Rep R*, Warehouse W, WH Manager F, Accountant R, Sales Manager R, Admin F
+ * Controller Phiếu xuất kho & Giao hàng (Module 6 & SN-195)
+ * Quyền:
+ * - Nhân viên kho (WAREHOUSE_KEEPER, WAREHOUSE), Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER), Admin: Quản lý & Xác nhận xuất kho
+ * - Kinh doanh (SALES_REP, SALES_MANAGER): Xem theo tuyến phụ trách
+ * - Khách hàng (CUSTOMER): Xem phiếu xuất của chính mình
  */
 @Controller('shipments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -29,7 +36,6 @@ export class ShipmentsController {
   /**
    * Danh sách phiếu xuất kho / giao hàng
    * GET /api/shipments
-   * Matrix: Customer R*, Sales Rep R*, Warehouse W, WH Manager F, Accountant R, Sales Manager R, Admin F
    */
   @Get()
   @Roles(
@@ -45,16 +51,34 @@ export class ShipmentsController {
     UserRole.ADMIN,
   )
   async findAll(
-    @Query() query: Record<string, string>,
+    @Query() query: QueryShipmentsDto,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ShipmentItem[]> {
-    return this.shipmentsService.findAll(query, currentUser);
+  ): Promise<ShipmentEntity[]> {
+    return this.shipmentsService.findAll(query as any, currentUser);
+  }
+
+  /**
+   * Danh sách các đơn / phiếu xuất còn nợ hàng (Backorders) - SN-195
+   * GET /api/shipments/backorders
+   */
+  @Get('backorders')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.WAREHOUSE,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async getBackorders(@CurrentUser() currentUser: ICurrentUser): Promise<ShipmentEntity[]> {
+    return this.shipmentsService.getBackorders(currentUser);
   }
 
   /**
    * Chi tiết phiếu xuất kho
    * GET /api/shipments/:id
-   * Matrix: Customer R*, Sales Rep R*, Warehouse W, WH Manager F, Accountant R, Sales Manager R, Admin F
    */
   @Get(':id')
   @Roles(
@@ -72,14 +96,13 @@ export class ShipmentsController {
   async findById(
     @Param('id') id: string,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ShipmentItem> {
+  ): Promise<ShipmentEntity> {
     return this.shipmentsService.findById(id, currentUser);
   }
 
   /**
    * Tạo phiếu xuất kho & giao hàng
    * POST /api/shipments
-   * Matrix: Warehouse W, WH Manager F, Admin F
    */
   @Post()
   @Roles(
@@ -90,16 +113,15 @@ export class ShipmentsController {
     UserRole.WAREHOUSE,
   )
   async create(
-    @Body() dto: Partial<ShipmentItem>,
+    @Body() dto: CreateShipmentDto,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ShipmentItem> {
+  ): Promise<ShipmentEntity> {
     return this.shipmentsService.create(dto, currentUser);
   }
 
   /**
    * Cập nhật trạng thái giao hàng / mã vận đơn / POD
    * PATCH /api/shipments/:id/status
-   * Matrix: Warehouse W, WH Manager F, Admin F
    */
   @Patch(':id/status')
   @Roles(
@@ -111,30 +133,84 @@ export class ShipmentsController {
   )
   async updateStatus(
     @Param('id') id: string,
-    @Body('status') status: ShipmentItem['status'],
-    @Body() dto: Partial<ShipmentItem>,
-  ): Promise<ShipmentItem> {
+    @Body('status') status: ShipmentEntity['status'],
+    @Body() dto: Partial<ShipmentEntity>,
+  ): Promise<ShipmentEntity> {
     return this.shipmentsService.updateStatus(id, status, dto);
   }
 
   /**
-   * Xác nhận hoàn tất xuất kho / giao hàng
-   * POST /api/shipments/:id/confirm
-   * Matrix: WH Manager F, Admin F
+   * XÁC NHẬN XUẤT KHO VÀ XỬ LÝ GIAO THIẾU (SN-195)
+   * POST /api/shipments/:id/confirm-export
+   * Quyền: Nhân viên kho, Quản lý kho, Quản trị viên
    */
-  @Post(':id/confirm')
-  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
-  async confirm(@Param('id') id: string): Promise<ShipmentItem> {
-    return this.shipmentsService.confirm(id);
+  @Post(':id/confirm-export')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  async confirmExport(
+    @Param('id') id: string,
+    @Body() dto: ConfirmShipmentDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<ShipmentEntity> {
+    return this.shipmentsService.confirmExport(id, dto, currentUser);
   }
 
   /**
-   * Hủy / xóa phiếu xuất kho
+   * Xác nhận hoàn tất xuất kho (tương thích endpoint cũ)
+   * POST /api/shipments/:id/confirm
+   */
+  @Post(':id/confirm')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  async confirm(
+    @Param('id') id: string,
+    @Body() dto: ConfirmShipmentDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<ShipmentEntity> {
+    return this.shipmentsService.confirmExport(id, dto || {}, currentUser);
+  }
+
+  /**
+   * Tạo phiếu xuất đợt sau (Backorder Shipment) cho phần hàng còn nợ (SN-195)
+   * POST /api/shipments/create-backorder/:orderId
+   */
+  @Post('create-backorder/:orderId')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  async createBackorder(
+    @Param('orderId') orderId: string,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<ShipmentEntity> {
+    return this.shipmentsService.createBackorderShipment(orderId, currentUser);
+  }
+
+  /**
+   * Hủy / xóa phiếu xuất kho (Chặn nếu đã xác nhận xuất kho)
    * DELETE /api/shipments/:id
-   * Matrix: WH Manager F, Admin F
    */
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
   async remove(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
     return this.shipmentsService.remove(id);
   }
