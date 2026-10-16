@@ -71,6 +71,23 @@ export class InventoryController {
   }
 
   /**
+   * Xóa sản phẩm khỏi kho (SN-23 & Yêu cầu mới):
+   * - Chỉ Quản trị viên (ADMIN) và Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER)
+   * - Ràng buộc: Tất cả các loại tồn (thực tế, tạm giữ, khả dụng) phải bằng 0
+   */
+  @Delete('stock')
+  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
+  async removeProductFromWarehouse(
+    @Query('warehouseId') warehouseId: string,
+    @Query('sku') sku?: string,
+    @Query('productSku') productSku?: string,
+    @Query('productId') productId?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const finalSku = (sku || productSku || '').trim();
+    return this.inventoryService.removeProductFromWarehouse(warehouseId, finalSku, productId);
+  }
+
+  /**
    * Khai báo tồn tối thiểu theo SKU tại kho (SN-183)
    * PATCH /inventory/stock-balances/warehouses/:warehouseId/sku/:sku/min-stock
    */
@@ -346,9 +363,7 @@ export class InventoryController {
   @Post('audits/:id/cancel')
   @Roles(
     UserRole.ADMIN,
-    UserRole.WAREHOUSE_KEEPER,
     UserRole.WAREHOUSE_MANAGER,
-    UserRole.WAREHOUSE,
     UserRole.WH_MANAGER,
   )
   async cancelAuditPost(
@@ -366,9 +381,7 @@ export class InventoryController {
   @Delete('audits/:id')
   @Roles(
     UserRole.ADMIN,
-    UserRole.WAREHOUSE_KEEPER,
     UserRole.WAREHOUSE_MANAGER,
-    UserRole.WAREHOUSE,
     UserRole.WH_MANAGER,
   )
   async cancelAuditDelete(

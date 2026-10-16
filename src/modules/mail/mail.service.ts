@@ -50,6 +50,9 @@ export class MailService {
             user: smtpUser,
             pass: cleanPass,
           },
+          connectionTimeout: 7000,
+          greetingTimeout: 7000,
+          socketTimeout: 8000,
         });
       } else {
         this.logger.log(`[SMTP CONFIG] Khởi tạo SMTP Transporter cho tài khoản: ${smtpUser} (Host: ${smtpHost}:${smtpPort})`);

@@ -201,15 +201,17 @@ export class InventoryService implements OnModuleInit {
   }
 
   private async seedStockBalances(): Promise<void> {
-    const products = await this.productsService.findAll();
-    if (products.length === 0) return;
-    await this.databaseService.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-       SELECT UPPER(sku), $3::uuid, quantity
-       FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
-       ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => product.stockQuantity), DEFAULT_WAREHOUSE_ID],
-    );
+    try {
+      // Đồng bộ app_inventory_stock_balances từ bảng chuẩn inventories (chỉ cho các kho thực tế có tồn)
+      await this.databaseService.query(`
+        INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+        SELECT UPPER(p.sku), i.warehouse_id, i.on_hand
+        FROM inventories i
+        JOIN products p ON p.id = i.product_id
+        ON CONFLICT (product_sku, warehouse_id) DO UPDATE
+        SET physical_quantity = EXCLUDED.physical_quantity;
+      `);
+    } catch {}
   }
 
   async ensureAllWarehousesInventory(): Promise<void> {
@@ -219,65 +221,27 @@ export class InventoryService implements OnModuleInit {
     if (!this.databaseService?.isConnected()) return;
 
     try {
-      const mb = '11111111-0000-0000-0000-000000000002';
-      const mt = '11111111-0000-0000-0000-000000000004';
-      const mn = '11111111-0000-0000-0000-000000000001';
-      const west = '11111111-0000-0000-0000-000000000003';
-      const allFour = [mb, mt, mn, west];
+      // Đảm bảo mọi sản phẩm đều có bản ghi cơ sở dữ liệu tồn kho riêng ở TẤT CẢ các kho đang hoạt động
+      // Kho mới tạo hoặc sản phẩm mới tạo sẽ có on_hand = 0, allocated = 0, physical_quantity = 0
+      await this.databaseService.query(`
+        INSERT INTO inventories (warehouse_id, product_id, on_hand, allocated)
+        SELECT w.id, p.id, 0, 0
+        FROM warehouses w
+        CROSS JOIN products p
+        WHERE (w.status IS NULL OR w.status = 'ACTIVE')
+        ON CONFLICT (warehouse_id, product_id) DO NOTHING;
+      `);
 
-      const products = await this.databaseService.query<{
-        id: string;
-        sku: string;
-        status: string;
-      }>(`SELECT id, sku, status FROM products ORDER BY sku;`);
-
-      for (const prod of products) {
-        const invRows = await this.databaseService.query<{
-          warehouse_id: string;
-          on_hand: string;
-        }>(`SELECT warehouse_id, on_hand::text FROM inventories WHERE product_id = $1`, [prod.id]);
-
-        const existingWhs = new Set(invRows.map((r) => r.warehouse_id));
-        const missing = allFour.filter((w) => !existingWhs.has(w));
-
-        if (missing.length > 0) {
-          const totalStock = invRows.reduce((sum, r) => sum + (Number(r.on_hand) || 0), 0);
-          let distTotal = totalStock;
-          if (distTotal <= 0 && prod.status === 'ACTIVE') {
-            distTotal = 4000;
-          }
-
-          const baseStock = Math.floor(distTotal / 4);
-          const remainder = distTotal - baseStock * 4;
-
-          const distMap: Record<string, number> = {
-            [mb]: baseStock,
-            [mt]: baseStock,
-            [mn]: baseStock + remainder,
-            [west]: baseStock,
-          };
-
-          for (const whId of allFour) {
-            const qty = distMap[whId] ?? baseStock;
-            await this.databaseService.query(
-              `INSERT INTO inventories (product_id, warehouse_id, on_hand, allocated)
-               VALUES ($1, $2::uuid, $3, 0)
-               ON CONFLICT (warehouse_id, product_id)
-               DO UPDATE SET on_hand = EXCLUDED.on_hand, updated_at = CURRENT_TIMESTAMP`,
-              [prod.id, whId, qty],
-            );
-            await this.databaseService.query(
-              `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-               VALUES ($1, $2::uuid, $3)
-               ON CONFLICT (product_sku, warehouse_id)
-               DO UPDATE SET physical_quantity = EXCLUDED.physical_quantity, updated_at = CURRENT_TIMESTAMP`,
-              [prod.sku.toUpperCase(), whId, qty],
-            );
-          }
-        }
-      }
+      await this.databaseService.query(`
+        INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+        SELECT UPPER(p.sku), w.id, 0
+        FROM warehouses w
+        CROSS JOIN products p
+        WHERE (w.status IS NULL OR w.status = 'ACTIVE')
+        ON CONFLICT (product_sku, warehouse_id) DO NOTHING;
+      `);
     } catch (err) {
-      console.warn('[INVENTORY_SERVICE] Lỗi đảm bảo tồn 4 kho:', err);
+      console.warn('[INVENTORY_SERVICE] Lỗi đồng bộ cơ sở dữ liệu tồn kho các kho:', err);
     }
   }
 
@@ -327,9 +291,10 @@ export class InventoryService implements OnModuleInit {
     if (warehouseId === 'ALL') {
       try {
         const rows = await this.databaseService.query<{ product_sku: string; total_quantity: string }>(
-          `SELECT UPPER(p.sku) as product_sku, COALESCE(SUM(i.on_hand), 0)::text as total_quantity
+          `SELECT UPPER(p.sku) as product_sku, COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN i.on_hand ELSE 0 END), 0)::text as total_quantity
            FROM products p
            LEFT JOIN inventories i ON i.product_id = p.id
+           LEFT JOIN warehouses w ON w.id = i.warehouse_id AND (w.status IS NULL OR w.status = 'ACTIVE')
            WHERE UPPER(p.sku) = ANY($1::text[])
            GROUP BY p.sku;`,
           [products.map((p) => p.sku.toUpperCase())],
@@ -340,33 +305,19 @@ export class InventoryService implements OnModuleInit {
       }
     }
 
-    await this.databaseService.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-       SELECT UPPER(sku), $3::uuid, quantity
-       FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
-       ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => product.stockQuantity || 100), warehouseId],
-    );
     try {
-      await this.databaseService.query(
-        `UPDATE app_inventory_stock_balances b
-         SET physical_quantity = i.on_hand
+      const rows = await this.databaseService.query<{ product_sku: string; physical_quantity: string }>(
+        `SELECT UPPER(p.sku) as product_sku, COALESCE(i.on_hand, 0)::text as physical_quantity
          FROM inventories i
          JOIN products p ON i.product_id = p.id
-         WHERE b.warehouse_id = i.warehouse_id
-           AND UPPER(b.product_sku) = UPPER(p.sku)
-           AND b.warehouse_id = $1::uuid
-           AND i.on_hand >= 0`,
-        [warehouseId],
+         WHERE i.warehouse_id = $1::uuid
+           AND UPPER(p.sku) = ANY($2::text[])`,
+        [warehouseId, products.map((p) => p.sku.toUpperCase())],
       );
-    } catch {}
-    const rows = await this.databaseService.query<{ product_sku: string; physical_quantity: string }>(
-      `SELECT product_sku, physical_quantity::text
-       FROM app_inventory_stock_balances
-       WHERE product_sku = ANY($1::text[]) AND warehouse_id = $2::uuid`,
-      [products.map((product) => product.sku.toUpperCase()), warehouseId],
-    );
-    return new Map(rows.map((row) => [row.product_sku, Number(row.physical_quantity)]));
+      return new Map(rows.map((row) => [row.product_sku, Number(row.physical_quantity)]));
+    } catch {
+      return new Map();
+    }
   }
 
   async getStockBalanceForUpdate(
@@ -499,15 +450,27 @@ export class InventoryService implements OnModuleInit {
 
     const roles = currentUser?.roles || [];
     const isAdmin = roles.includes(UserRole.ADMIN);
-    const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isAdmin;
-    const isManager = (roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any)) && !isAdmin;
+    const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+    const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
 
     let warehouseId = 'ALL';
     let warehouseName = 'Tất cả kho hàng';
 
     if (isKeeper) {
-      // 1. THỦ KHO (1 - 1): Chỉ được xem DUY NHẤT kho mình được phân công tác nghiệp
-      const myWhId = currentUser?.warehouseId || currentUser?.warehouseCode || currentUser?.assignedWarehouse;
+      // 1. THỦ KHO / NHÂN VIÊN KHO (1 - 1): Chỉ được xem DUY NHẤT kho mình được phân công tác nghiệp
+      let myWhId = currentUser?.warehouseId || currentUser?.warehouseCode || currentUser?.assignedWarehouse;
+      if (!myWhId && currentUser?.userId && this.databaseService?.isConnected()) {
+        try {
+          const userWhRow = await this.databaseService.query<{ id: string }>(
+            `SELECT id FROM warehouses WHERE manager_id = $1::uuid
+             UNION
+             SELECT warehouse_id FROM user_warehouses WHERE user_id = $1::uuid LIMIT 1`,
+            [currentUser.userId],
+          );
+          if (userWhRow[0]?.id) myWhId = userWhRow[0].id;
+        } catch {}
+      }
+
       const resolved = myWhId ? await this.resolveWarehouseId(myWhId) : null;
       if (resolved) {
         warehouseId = resolved.id;
@@ -516,28 +479,8 @@ export class InventoryService implements OnModuleInit {
         warehouseId = DEFAULT_WAREHOUSE_ID;
         warehouseName = DEFAULT_WAREHOUSE_NAME;
       }
-    } else if (isManager) {
-      // 2. QUẢN LÝ KHO (N - N): Có thể lọc xem từng kho trong danh sách phụ trách, hoặc xem 'ALL'
-      const managerWhIds =
-        currentUser?.warehouseIds ||
-        (currentUser?.warehouses && currentUser.warehouses.map((w) => w.id)) ||
-        (currentUser?.warehouseId ? [currentUser.warehouseId] : []);
-
-      if (rawWh && rawWh !== 'ALL') {
-        const resolved = await this.resolveWarehouseId(rawWh);
-        if (resolved && (managerWhIds.length === 0 || managerWhIds.includes(resolved.id))) {
-          warehouseId = resolved.id;
-          warehouseName = `${resolved.name} - ${resolved.code}`;
-        } else if (resolved) {
-          warehouseId = resolved.id;
-          warehouseName = `${resolved.name} - ${resolved.code}`;
-        }
-      } else {
-        warehouseId = 'ALL';
-        warehouseName = 'Tất cả kho quản lý';
-      }
     } else {
-      // 3. ADMIN / KINH DOANH: Hỗ trợ 'ALL' hoặc bất kỳ kho nào trong 4 kho
+      // 2. QUẢN LÝ KHO VÀ ADMIN: TOÀN QUYỀN XEM TẤT CẢ CÁC BỘ LỌC KHO HÀNG ('ALL' hoặc bất kỳ kho nào)
       if (rawWh && rawWh !== 'ALL') {
         const resolved = await this.resolveWarehouseId(rawWh);
         if (resolved) {
@@ -583,6 +526,8 @@ export class InventoryService implements OnModuleInit {
           : `SELECT UPPER(p.sku) as sku, COALESCE(SUM(i.allocated), 0)::text as allocated
              FROM inventories i
              JOIN products p ON i.product_id = p.id
+             JOIN warehouses w ON w.id = i.warehouse_id
+             WHERE (w.status IS NULL OR w.status = 'ACTIVE')
              GROUP BY p.sku`;
         const invAllocRows = await this.databaseService.query<{ sku: string; allocated: string }>(
           invAllocQuery,
@@ -814,10 +759,15 @@ export class InventoryService implements OnModuleInit {
       }
     }
 
-    let items: StockOverviewItem[] = products.map((p) => {
+    // Toàn bộ sản phẩm trong danh mục luôn hiển thị cho kho được chọn (kho mới tạo hiển thị tồn = 0)
+    const targetProducts = products;
+
+    let items: StockOverviewItem[] = targetProducts.map((p) => {
       const pSkuUpper = p.sku.toUpperCase();
       const aliasSku = pSkuUpper === 'LH-MILK-POWDER-900G' ? 'LH-MILK-900G' : pSkuUpper === 'LH-MILK-900G' ? 'LH-MILK-POWDER-900G' : '';
-      const physicalStockQuantity = physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0;
+      const physicalStockQuantity = warehouseId === 'ALL'
+        ? (physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0)
+        : (physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? 0);
       const dbReserved = reservations.get(pSkuUpper) ?? (aliasSku ? reservations.get(aliasSku) : undefined) ?? 0;
       const invAllocated = invAllocatedBySku.get(pSkuUpper) ?? (aliasSku ? invAllocatedBySku.get(aliasSku) : undefined) ?? 0;
 
@@ -1256,29 +1206,27 @@ export class InventoryService implements OnModuleInit {
       const roles = user.roles || [];
       const isAdmin = roles.includes(UserRole.ADMIN);
 
-      if (!isAdmin) {
-        const isKeeper = roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any);
-        const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any);
+      const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+      const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
 
-        if (isKeeper) {
-          // QUAN HỆ 1 - 1: Thủ kho chỉ được tác nghiệp điều chỉnh tồn kho đúng kho của mình
-          const userWhId = user.warehouseId || user.warehouseCode;
-          if (userWhId && warehouseId !== userWhId && warehouseCode !== userWhId) {
-            throw new ForbiddenException(
-              `Thủ kho chỉ có quyền tác nghiệp điều chỉnh tồn kho tại kho được phân công trực tiếp (${user.warehouseCode || user.warehouseId}).`,
+      if (isKeeper) {
+        // QUAN HỆ 1 - 1: Thủ kho chỉ được tác nghiệp điều chỉnh tồn kho đúng kho của mình
+        let userWhId = user.warehouseId || user.warehouseCode;
+        if (!userWhId && user.userId && this.databaseService?.isConnected()) {
+          try {
+            const row = await this.databaseService.query<{ id: string }>(
+              `SELECT id FROM warehouses WHERE manager_id = $1::uuid
+               UNION
+               SELECT warehouse_id FROM user_warehouses WHERE user_id = $1::uuid LIMIT 1`,
+              [user.userId],
             );
-          }
-        } else if (isManager) {
-          // QUAN HỆ N - N: Quản lý kho được tác nghiệp điều chỉnh tồn kho tại các kho được phân công quản lý
-          const managerWhIds =
-            user.warehouseIds ||
-            (user.warehouses && user.warehouses.map((w) => w.id)) ||
-            (user.warehouseId ? [user.warehouseId] : []);
-          if (managerWhIds.length > 0 && !managerWhIds.includes(warehouseId)) {
-            throw new ForbiddenException(
-              'Quản lý kho chỉ có quyền tác nghiệp điều chỉnh tồn kho tại các kho được phân công giám sát.',
-            );
-          }
+            if (row[0]?.id) userWhId = row[0].id;
+          } catch {}
+        }
+        if (userWhId && warehouseId !== userWhId && warehouseCode !== userWhId) {
+          throw new ForbiddenException(
+            `Thủ kho chỉ có quyền tác nghiệp điều chỉnh tồn kho tại kho được phân công trực tiếp (${user.warehouseCode || user.warehouseId}).`,
+          );
         }
       }
     }
@@ -1362,9 +1310,12 @@ export class InventoryService implements OnModuleInit {
         );
       }
 
-      // 5. Cập nhật lại tổng tồn chung của sản phẩm trên toàn bộ các kho
+      // 5. Cập nhật lại tổng tồn chung của sản phẩm trên toàn bộ các kho đang hoạt động
       const totalRes = await client.query<{ total: string }>(
-        `SELECT COALESCE(SUM(on_hand), 0)::text as total FROM inventories WHERE product_id = $1`,
+        `SELECT COALESCE(SUM(i.on_hand), 0)::text as total
+         FROM inventories i
+         JOIN warehouses w ON w.id = i.warehouse_id
+         WHERE i.product_id = $1 AND (w.status IS NULL OR w.status = 'ACTIVE')`,
         [product.id],
       );
       const totalOverallStock = Number(totalRes.rows[0]?.total ?? newQuantity);
@@ -2431,6 +2382,108 @@ export class InventoryService implements OnModuleInit {
       isOverridden: false,
       batch: batch.toJSON(),
       status: batch.status,
+    };
+  }
+
+  /**
+   * Xóa sản phẩm khỏi kho hàng:
+   * - Chỉ xóa được khi tất cả các loại tồn (thực tế, tạm giữ, khả dụng) đều bằng 0
+   * - Xóa bản ghi trong inventories và app_inventory_stock_balances của kho đó
+   */
+  async removeProductFromWarehouse(
+    warehouseId: string,
+    sku: string,
+    productId?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    if (!this.databaseService?.isConnected()) {
+      await this.databaseService?.ensureConnection?.();
+    }
+
+    if (!warehouseId) {
+      throw new BadRequestException('Vui lòng cung cấp mã ID kho hàng cần xóa sản phẩm');
+    }
+
+    // 1. Tìm thông tin sản phẩm
+    let prod: { id: string; sku: string; name: string } | null = null;
+    if (productId) {
+      const rows = await this.databaseService.query<{ id: string; sku: string; name: string }>(
+        `SELECT id, sku, name FROM products WHERE id = $1::uuid`,
+        [productId],
+      );
+      prod = rows[0] || null;
+    }
+    if (!prod && sku) {
+      const rows = await this.databaseService.query<{ id: string; sku: string; name: string }>(
+        `SELECT id, sku, name FROM products WHERE UPPER(TRIM(sku)) = UPPER(TRIM($1))`,
+        [sku],
+      );
+      prod = rows[0] || null;
+    }
+
+    const resolvedSku = prod?.sku || sku;
+    const resolvedProdId = prod?.id || productId;
+
+    // 2. Kiểm tra các loại tồn kho của sản phẩm tại kho này
+    let onHand = 0;
+    let allocated = 0;
+    if (resolvedProdId) {
+      const invRows = await this.databaseService.query<{ on_hand: number; allocated: number }>(
+        `SELECT on_hand, allocated FROM inventories WHERE warehouse_id = $1::uuid AND product_id = $2::uuid`,
+        [warehouseId, resolvedProdId],
+      );
+      if (invRows[0]) {
+        onHand = Number(invRows[0].on_hand || 0);
+        allocated = Number(invRows[0].allocated || 0);
+      }
+    }
+
+    let physicalQuantity = 0;
+    if (resolvedSku) {
+      const balRows = await this.databaseService.query<{ physical_quantity: number }>(
+        `SELECT physical_quantity FROM app_inventory_stock_balances WHERE warehouse_id = $1::uuid AND UPPER(TRIM(product_sku)) = UPPER(TRIM($2))`,
+        [warehouseId, resolvedSku],
+      );
+      if (balRows[0]) {
+        physicalQuantity = Number(balRows[0].physical_quantity || 0);
+      }
+    }
+
+    let reservedQuantity = 0;
+    if (resolvedSku) {
+      const resRows = await this.databaseService.query<{ total_res: string }>(
+        `SELECT COALESCE(SUM(base_quantity), 0)::text as total_res FROM app_order_inventory_reservations WHERE warehouse_id = $1::uuid AND UPPER(TRIM(product_sku)) = UPPER(TRIM($2)) AND status = 'RESERVED' AND base_quantity > 0`,
+        [warehouseId, resolvedSku],
+      );
+      reservedQuantity = Number(resRows[0]?.total_res || 0);
+    }
+
+    const totalActual = Math.max(onHand, physicalQuantity);
+    const totalHolding = Math.max(allocated, reservedQuantity);
+
+    // Ràng buộc nghiêm ngặt: Phải hết mọi loại tồn, không giữ tồn khách
+    if (totalActual > 0 || totalHolding > 0) {
+      throw new BadRequestException(
+        `Sản phẩm "${prod?.name || resolvedSku}" vẫn còn số lượng trong kho (Tồn thực tế: ${totalActual}, Đang giữ cho khách: ${totalHolding}). Không thể xóa sản phẩm khỏi kho! Bạn cần xuất kho hoặc điều chỉnh hết tồn về 0 trước khi xóa.`,
+      );
+    }
+
+    // 3. Tiến hành xóa sản phẩm khỏi kho trong database
+    if (resolvedProdId) {
+      await this.databaseService.query(
+        `DELETE FROM inventories WHERE warehouse_id = $1::uuid AND product_id = $2::uuid`,
+        [warehouseId, resolvedProdId],
+      );
+    }
+    if (resolvedSku) {
+      await this.databaseService.query(
+        `DELETE FROM app_inventory_stock_balances WHERE warehouse_id = $1::uuid AND UPPER(TRIM(product_sku)) = UPPER(TRIM($2))`,
+        [warehouseId, resolvedSku],
+      );
+    }
+
+    return {
+      success: true,
+      message: `Đã xóa sản phẩm "${prod?.name || resolvedSku}" khỏi kho thành công!`,
     };
   }
 }

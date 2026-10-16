@@ -24,7 +24,9 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { GoodsReceiptsModule } from './modules/inventory-receipts/goods-receipts.module';
 import { WarehousesModule } from './modules/warehouses/warehouses.module';
 import { InternalTransfersModule } from './modules/inventory-transfers/internal-transfers.module';
+import { DebtReportModule } from './modules/debt-report/debt-report.module';
 import { ReceiptsModule } from './modules/receipts/receipts.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -53,7 +55,9 @@ import { ReceiptsModule } from './modules/receipts/receipts.module';
     AgencyModule,
     DashboardModule,
     WarehousesModule,
+    DebtReportModule,
     ReceiptsModule,
+    NotificationsModule,
   ],
 })
 export class AppModule { }

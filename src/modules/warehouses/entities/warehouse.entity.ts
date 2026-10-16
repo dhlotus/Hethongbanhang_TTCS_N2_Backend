@@ -29,6 +29,12 @@ export interface WarehouseLocationEntity {
 export interface WarehouseManagerEntity {
   id: string;
   name: string;
+  roleName?: string;
+  roleCode?: string;
+  phone?: string | null;
+  assignedWarehouseId?: string | null;
+  assignedWarehouseCode?: string | null;
+  assignedWarehouseName?: string | null;
 }
 
 export interface AgencyWarehouseAssignmentEntity {

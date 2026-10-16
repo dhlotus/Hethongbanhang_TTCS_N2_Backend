@@ -34,6 +34,11 @@ import { AssignSalesRepDto } from './dto/assign-sales-rep.dto';
 import { BulkTransferTerritoryDto } from './dto/bulk-transfer-territory.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryAssignmentHistoryDto } from './dto/query-assignment-history.dto';
+import {
+  BulkTransferTerritoryResult,
+  PaginatedAssignmentHistoryResult,
+  SalesRepOption,
+} from './interfaces/customer-assignment.interface';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role, UserRole } from '../../common/enums/user-role.enum';
@@ -72,12 +77,24 @@ export class CustomersController {
   }
 
   /**
+   * Lấy danh sách nhân viên kinh doanh khả dụng để phân công & chuyển giao (SN-35)
+   * GET /api/customers/sales-reps
+   */
+  @Get('sales-reps')
+  @Public()
+  async getAvailableSalesReps(): Promise<SalesRepOption[]> {
+    return this.customersService.getAvailableSalesReps();
+  }
+
+  /**
    * Lấy lịch sử chuyển giao & phân công địa bàn (SN-35)
    * GET /api/customers/assignment-history
    */
   @Get('assignment-history')
   @Public()
-  async getAssignmentHistory(@Query() query: QueryAssignmentHistoryDto): Promise<any> {
+  async getAssignmentHistory(
+    @Query() query: QueryAssignmentHistoryDto,
+  ): Promise<PaginatedAssignmentHistoryResult> {
     return this.customersService.getAssignmentHistory(query);
   }
 
@@ -91,7 +108,7 @@ export class CustomersController {
   async bulkTransferTerritory(
     @Body() dto: BulkTransferTerritoryDto,
     @CurrentUser() currentUser?: ICurrentUser,
-  ): Promise<any> {
+  ): Promise<BulkTransferTerritoryResult> {
     return this.customersService.bulkTransferTerritory(dto, currentUser);
   }
 
