@@ -22,6 +22,14 @@ import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
 import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
 import { InventoryService, StockAdjustmentResult, StockOverviewItem } from './inventory.service';
+import { InventoryFefoService } from './inventory-fefo.service';
+import {
+  ConfirmFefoDispatchDto,
+  FefoBatchDetail,
+  FefoRecommendationResult,
+  QueryFefoRecommendationDto,
+} from './dto/fefo-recommendation.dto';
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 import { InventoryAuditEntity } from './entities/inventory-audit.entity';
 import {
   CreateInventoryAuditDto,
@@ -31,16 +39,20 @@ import {
 } from './dto';
 
 /**
- * Controller Quản lý Tồn kho & Sổ kho (SN-10, EP-04 & SN-23):
+ * Controller Quản lý Tồn kho & Sổ kho (SN-10, EP-04, SN-23 & SN-187 FEFO):
  * - Áp dụng JwtAuthGuard & RolesGuard để kiểm soát quyền
  * - Đảm bảo Nhân viên kinh doanh (SALES_REP) và Khách hàng (CUSTOMER) KHÔNG THỂ sửa/điều chỉnh tồn kho
  * - Chỉ Quản trị viên (ADMIN) và Thủ kho / Quản lý kho (WAREHOUSE_KEEPER, WAREHOUSE_MANAGER) mới có quyền điều chỉnh tồn kho
  * - Cung cấp sổ kho bất biến lưu vết các giao dịch quy đổi (SN-23)
+ * - Cung cấp thuật toán gợi ý xuất Lô hạn dùng gần nhất FEFO (SN-187)
  */
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
+  constructor(
+    private readonly inventoryService: InventoryService,
+    private readonly fefoService: InventoryFefoService,
+  ) {}
 
   /**
    * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
@@ -387,6 +399,66 @@ export class InventoryController {
     @CurrentUser() user?: ICurrentUser,
   ): Promise<InventoryAuditEntity> {
     return this.inventoryService.cancelAudit(id, undefined, user);
+  }
+
+  /**
+   * Lấy danh sách gợi ý Lô xuất theo nguyên tắc hạn dùng gần nhất FEFO (SN-187)
+   * GET /api/inventory/batches/fefo-recommendations?warehouseId=...&productId=...&requiredQuantity=...
+   */
+  @Get('batches/fefo-recommendations')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+  )
+  async getFefoRecommendations(
+    @Query() query: QueryFefoRecommendationDto,
+  ): Promise<FefoRecommendationResult> {
+    return this.fefoService.getFefoRecommendation(query);
+  }
+
+  /**
+   * Lấy danh sách toàn bộ Lô hàng của sản phẩm tại kho để thủ kho tra cứu (SN-187)
+   * GET /api/inventory/batches?warehouseId=...&productId=...
+   */
+  @Get('batches')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+  )
+  async getBatches(
+    @Query('warehouseId') warehouseId?: string,
+    @Query('productId') productId?: string,
+  ): Promise<FefoBatchDetail[]> {
+    return this.fefoService.getBatchesByProduct(
+      warehouseId || DEFAULT_WAREHOUSE_ID,
+      productId || '',
+    );
+  }
+
+  /**
+   * Xác nhận xuất kho theo Lô đã chọn (SN-187)
+   * POST /api/inventory/batches/dispatch
+   * - Bắt buộc nhập lý do nếu chọn lô khác với đề xuất FEFO
+   * - Tự động trừ tồn kho của các lô đã chọn
+   */
+  @Post('batches/dispatch')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WH_MANAGER,
+  )
+  async confirmFefoDispatch(
+    @Body() dto: ConfirmFefoDispatchDto,
+    @CurrentUser() user?: ICurrentUser,
+  ) {
+    return this.fefoService.confirmFefoDispatch(dto, user);
   }
 }
 
