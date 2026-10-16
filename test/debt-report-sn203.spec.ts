@@ -102,6 +102,13 @@ describe('[SN-203] DebtReportService - Sổ Công Nợ và Phân Tích Tuổi N�
       expect(res.summary.overdueAgenciesCount).toBe(res.data.length);
     });
 
+    it('lọc chính xác đại lý nợ trong hạn (debtStatus: IN_TERM)', async () => {
+      const res = await service.getAgentDebtReport({ debtStatus: 'IN_TERM' });
+      expect(res.data.every((item) => !item.isOverdue && item.overdueAmount === 0)).toBe(true);
+      expect(res.data.some((item) => item.agencyCode === 'DL-0001')).toBe(false);
+      expect(res.data.some((item) => item.agencyCode === 'DL-0005')).toBe(true);
+    });
+
     it('lọc theo từ khóa tìm kiếm (search)', async () => {
       const res = await service.getAgentDebtReport({ search: 'Tân Phú' });
       expect(res.data).toHaveLength(1);
@@ -142,6 +149,28 @@ describe('[SN-203] DebtReportService - Sổ Công Nợ và Phân Tích Tuổi N�
       const buffer = await service.exportDebtToExcel({});
       expect(buffer).toBeInstanceOf(Buffer);
       expect(buffer.length).toBeGreaterThan(1000);
+    });
+
+    it('hiển thị chính xác nhóm tuổi nợ kèm số ngày nợ thực tế', () => {
+      const agencyOverdue = {
+        remainingDebt: 22000000,
+        ageOver90: 8000000,
+        oldestDebtDays: 110,
+      } as any;
+      expect(service.getAgingGroupForAgency(agencyOverdue)).toBe('> 90 ngày (110 ngày)');
+
+      const agencyPaid = {
+        remainingDebt: 0,
+        oldestDebtDays: 0,
+      } as any;
+      expect(service.getAgingGroupForAgency(agencyPaid)).toBe('Đã tất toán');
+
+      const agency61To90 = {
+        remainingDebt: 65000000,
+        age61To90: 25000000,
+        oldestDebtDays: 75,
+      } as any;
+      expect(service.getAgingGroupForAgency(agency61To90)).toBe('61–90 ngày (75 ngày)');
     });
   });
 });

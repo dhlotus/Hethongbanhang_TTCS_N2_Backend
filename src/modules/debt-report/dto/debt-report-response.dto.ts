@@ -14,6 +14,7 @@ export class DebtReportSummaryDto {
   totalAgeOver90: number;
   totalOverdueAmount: number;
   overdueAgenciesCount: number;
+  inTermAgenciesCount: number;
 }
 
 /**
