@@ -1,5 +1,5 @@
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { CustomerStatus } from '../entities/customer.entity';
 
 /**
@@ -34,6 +34,14 @@ export class FilterCustomersDto {
   @IsOptional()
   @IsString({ message: 'ID nhân viên kinh doanh phải là chuỗi' })
   salesRepId?: string;
+
+  /**
+   * Chỉ lấy các đại lý chưa được phân công nhân sự phụ trách (SN-35)
+   */
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true || value === '1' || value === 1)
+  @IsBoolean({ message: 'unassignedOnly phải là kiểu boolean' })
+  unassignedOnly?: boolean;
 
   /**
    * Trạng thái hoạt động của đại lý (ACTIVE, LOCKED, INACTIVE hoặc ALL)

@@ -55,7 +55,16 @@ BEGIN
     INSERT INTO users (id, username, email, password_hash, full_name, phone, role_id, status)
     VALUES 
         ('00000000-0000-0000-0000-000000000003', 'sales', 'sales@loha.vn', v_password_hash, 'Trần Văn Nam', '0903000003', 3, 'ACTIVE'),
-        ('00000000-0000-0000-0000-000000000013', 'nhanvienkinhdoanh', 'nhanvienkinhdoanh@loha.vn', v_password_hash, 'Nguyễn Thị Bích Sales', '0903000013', 3, 'ACTIVE')
+        ('00000000-0000-0000-0000-000000000013', 'nhanvienkinhdoanh', 'nhanvienkinhdoanh@loha.vn', v_password_hash, 'Nguyễn Thị Bích Sales', '0903000013', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000021', 'sales_huongle', 'huong.le@loha.vn', v_password_hash, 'Lê Thị Mai Hương', '0912345601', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000022', 'sales_longnguyen', 'long.nguyen@loha.vn', v_password_hash, 'Nguyễn Hoàng Long', '0912345602', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000023', 'sales_anhpham', 'anh.pham@loha.vn', v_password_hash, 'Phạm Quốc Anh', '0912345603', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000024', 'sales_thaovu', 'thao.vu@loha.vn', v_password_hash, 'Vũ Thị Thanh Thảo', '0912345604', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000025', 'sales_tuandang', 'tuan.dang@loha.vn', v_password_hash, 'Đặng Minh Tuấn', '0912345605', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000026', 'sales_habui', 'ha.bui@loha.vn', v_password_hash, 'Bùi Thị Thu Hà', '0912345606', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000027', 'sales_hungdo', 'hung.do@loha.vn', v_password_hash, 'Đỗ Văn Hùng', '0912345607', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000028', 'sales_nhihoang', 'nhi.hoang@loha.vn', v_password_hash, 'Hoàng Yến Nhi', '0912345608', 3, 'ACTIVE'),
+        ('00000000-0000-0000-0000-000000000029', 'sales_phucngo', 'phuc.ngo@loha.vn', v_password_hash, 'Ngô Trọng Phúc', '0912345609', 3, 'ACTIVE')
     ON CONFLICT (username) DO UPDATE SET 
         password_hash = EXCLUDED.password_hash, full_name = EXCLUDED.full_name;
 
