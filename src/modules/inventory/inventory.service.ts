@@ -9,7 +9,16 @@ import type { ProductEntity } from '../products/entities/product.entity';
 import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
 import { InventoryAuditEntity, InventoryAuditItemEntity } from './entities/inventory-audit.entity';
 import { InventoryAuditStatus } from './entities/inventory-audit-status.enum';
-import { CreateInventoryAuditDto, UpdateAuditItemsDto, CompleteAuditDto, QueryAuditsDto } from './dto';
+import { InventoryBatchEntity } from './entities/inventory-batch.entity';
+import {
+  CreateInventoryAuditDto,
+  UpdateAuditItemsDto,
+  CompleteAuditDto,
+  QueryAuditsDto,
+  QueryBatchesDto,
+  CheckBatchDispatchDto,
+  BatchStatusFilter,
+} from './dto';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import {
@@ -18,6 +27,24 @@ import {
 } from '../warehouses/warehouse.constants';
 
 const DEFAULT_WAREHOUSE_NAME = 'Kho Tổng Miền Nam';
+
+export interface PaginatedBatchesResponse {
+  data: InventoryBatchEntity[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  thresholdDays: number;
+}
+
+export interface BatchStatsResponse {
+  totalBatches: number;
+  validCount: number;
+  expiringSoonCount: number;
+  expiredCount: number;
+  totalQuantity: number;
+  thresholdDays: number;
+}
 
 export interface StockAdjustmentResult {
   success: boolean;
@@ -62,6 +89,7 @@ export class InventoryService implements OnModuleInit {
    */
   private ledger = new Map<string, InventoryTransactionEntity[]>();
   private audits = new Map<string, InventoryAuditEntity>();
+  private batches = new Map<string, InventoryBatchEntity>();
 
   /**
    * Fix #2: Per-product Promise mutex lock.
@@ -95,11 +123,15 @@ export class InventoryService implements OnModuleInit {
     if (this.audits.size === 0) {
       this.seedInitialAudits();
     }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
     if (this.databaseService?.isConnected()) {
       await this.ensureStockBalanceTable();
       await this.ensureStockReservationsTable();
       await this.seedStockBalances();
       await this.ensureAllWarehousesInventory();
+      await this.syncBatchesFromDatabase();
     }
   }
 
@@ -1916,6 +1948,441 @@ export class InventoryService implements OnModuleInit {
     audit.updatedAt = new Date();
 
     return audit;
+  }
+
+  // =========================================================================
+  // QUẢN LÝ LÔ HÀNG & HẠN SỬ DỤNG THEO CHUẨN FEFO (SN-184 / EP-SN-229)
+  // =========================================================================
+
+  /**
+   * Khởi tạo dữ liệu mẫu các lô hàng với nhiều trạng thái:
+   * Hợp lệ, Sắp hết hạn (cận hạn), Đã quá hạn để phục vụ kiểm thử và offline fallback
+   */
+  private seedInitialBatches(): void {
+    const addDays = (days: number): string => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return d.toISOString().split('T')[0];
+    };
+
+    const initialBatches: Array<Partial<InventoryBatchEntity> & Record<string, unknown>> = [
+      {
+        id: '66666666-0000-0000-0000-000000000001',
+        batchNumber: 'LOT-COLA-2026A',
+        productId: '33333333-0000-0000-0000-000000000001',
+        productSku: 'LH-COLA-CAN-330ML',
+        productName: 'Nước Ngọt Có Ga Loha Cola Lon 330ml',
+        categoryName: 'Nước giải khát & Nước ngọt',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Lon',
+        mfgDate: addDays(-180),
+        expiryDate: addDays(45), // Cận hạn nếu threshold >= 45
+        quantity: 9600,
+        allocatedQuantity: 2400,
+        costPrice: 6500,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000002',
+        batchNumber: 'LOT-COLA-2026B',
+        productId: '33333333-0000-0000-0000-000000000001',
+        productSku: 'LH-COLA-CAN-330ML',
+        productName: 'Nước Ngọt Có Ga Loha Cola Lon 330ml',
+        categoryName: 'Nước giải khát & Nước ngọt',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Lon',
+        mfgDate: addDays(-30),
+        expiryDate: addDays(210), // Hợp lệ / an toàn
+        quantity: 14400,
+        allocatedQuantity: 0,
+        costPrice: 6500,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000003',
+        batchNumber: 'LOT-MILK-2026-NEAR',
+        productId: '33333333-0000-0000-0000-000000000008',
+        productSku: 'LH-FRESH-MILK-1L',
+        productName: 'Sữa Tươi Thanh Trùng Nguyên Chất Loha Farm 1L',
+        categoryName: 'Sữa tươi & Tiệt trùng',
+        warehouseId: '11111111-0000-0000-0000-000000000002',
+        warehouseName: 'Kho Miền Bắc (Hà Nội)',
+        baseUnit: 'Chai',
+        mfgDate: addDays(-75),
+        expiryDate: addDays(15), // Cận hạn < 30 ngày (EXPIRING_SOON)
+        quantity: 520,
+        allocatedQuantity: 50,
+        costPrice: 26000,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000004',
+        batchNumber: 'LOT-MILK-2026-SAFE',
+        productId: '33333333-0000-0000-0000-000000000008',
+        productSku: 'LH-FRESH-MILK-1L',
+        productName: 'Sữa Tươi Thanh Trùng Nguyên Chất Loha Farm 1L',
+        categoryName: 'Sữa tươi & Tiệt trùng',
+        warehouseId: '11111111-0000-0000-0000-000000000002',
+        warehouseName: 'Kho Miền Bắc (Hà Nội)',
+        baseUnit: 'Chai',
+        mfgDate: addDays(-10),
+        expiryDate: addDays(180), // Hợp lệ (VALID)
+        quantity: 1200,
+        allocatedQuantity: 0,
+        costPrice: 26000,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000005',
+        batchNumber: 'LOT-TEA-2026-EXP',
+        productId: '33333333-0000-0000-0000-000000000004',
+        productSku: 'LH-TEA-PEACH-450',
+        productName: 'Trà Đào Hạt Chia Loha Tea Chai 450ml',
+        categoryName: 'Nước giải khát & Trà',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Chai',
+        mfgDate: addDays(-190),
+        expiryDate: addDays(-6), // Đã hết hạn (EXPIRED)
+        quantity: 350,
+        allocatedQuantity: 0,
+        costPrice: 8500,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000006',
+        batchNumber: 'LOT-NRG-2026-NEAR',
+        productId: '33333333-0000-0000-0000-000000000003',
+        productSku: 'LH-ENERGY-BULL-250',
+        productName: 'Nước Tăng Lực Loha Red Bull Lon 250ml',
+        categoryName: 'Nước tăng lực & Thể thao',
+        warehouseId: '11111111-0000-0000-0000-000000000004',
+        warehouseName: 'Kho Miền Trung (Đà Nẵng)',
+        baseUnit: 'Lon',
+        mfgDate: addDays(-160),
+        expiryDate: addDays(20), // Cận hạn < 30 ngày (EXPIRING_SOON)
+        quantity: 800,
+        allocatedQuantity: 100,
+        costPrice: 7800,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000007',
+        batchNumber: 'LOT-NEST-2026-SAFE',
+        productId: '33333333-0000-0000-0000-000000000009',
+        productSku: 'LH-NEST-PREM-100G',
+        productName: 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g',
+        categoryName: 'Nước yến & Bổ dưỡng',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Hộp',
+        mfgDate: addDays(-40),
+        expiryDate: addDays(320), // Hợp lệ (VALID)
+        quantity: 45,
+        allocatedQuantity: 5,
+        costPrice: 3100000,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000008',
+        batchNumber: 'LOT-NUTS-2026-EXP',
+        productId: '33333333-0000-0000-0000-000000000010',
+        productSku: 'LH-NUTS-MIX-250G',
+        productName: 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g',
+        categoryName: 'Ngũ cốc & Hạt dinh dưỡng',
+        warehouseId: '11111111-0000-0000-0000-000000000003',
+        warehouseName: 'Kho Miền Tây (Cần Thơ)',
+        baseUnit: 'Hũ',
+        mfgDate: addDays(-200),
+        expiryDate: addDays(-14), // Đã hết hạn (EXPIRED)
+        quantity: 120,
+        allocatedQuantity: 0,
+        costPrice: 88000,
+      },
+    ];
+
+    for (const b of initialBatches) {
+      const entity = new InventoryBatchEntity(b);
+      this.batches.set(entity.id, entity);
+    }
+  }
+
+  /**
+   * Đồng bộ lô hàng từ cơ sở dữ liệu PostgreSQL
+   */
+  private async syncBatchesFromDatabase(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      const rows = await this.databaseService.query<{
+        id: string;
+        batch_number: string;
+        product_id: string;
+        warehouse_id: string;
+        location_id?: string;
+        mfg_date?: string;
+        expiry_date: string;
+        quantity: string | number;
+        allocated_quantity: string | number;
+        cost_price: string | number;
+        product_sku?: string;
+        product_name?: string;
+        category_name?: string;
+        base_unit?: string;
+        warehouse_name?: string;
+      }>(
+        `SELECT b.id, b.batch_number, b.product_id, b.warehouse_id, b.location_id,
+                b.mfg_date, b.expiry_date, b.quantity, b.allocated_quantity, b.cost_price,
+                p.sku as product_sku, p.name as product_name, p.base_unit,
+                c.name as category_name,
+                w.name as warehouse_name
+         FROM inventory_batches b
+         LEFT JOIN products p ON b.product_id = p.id
+         LEFT JOIN categories c ON p.category_id = c.id
+         LEFT JOIN warehouses w ON b.warehouse_id = w.id
+         WHERE b.quantity > 0 OR b.status = 'ACTIVE';`
+      );
+
+      if (rows && rows.length > 0) {
+        for (const r of rows) {
+          const entity = new InventoryBatchEntity({
+            id: r.id,
+            batchNumber: r.batch_number,
+            productId: r.product_id,
+            warehouseId: r.warehouse_id,
+            locationId: r.location_id,
+            mfgDate: r.mfg_date,
+            expiryDate: r.expiry_date,
+            quantity: Number(r.quantity) || 0,
+            allocatedQuantity: Number(r.allocated_quantity) || 0,
+            costPrice: Number(r.cost_price) || 0,
+            productSku: r.product_sku || '',
+            productName: r.product_name || '',
+            categoryName: r.category_name,
+            baseUnit: r.base_unit || 'Đơn vị',
+            warehouseName: r.warehouse_name || DEFAULT_WAREHOUSE_NAME,
+          });
+          this.batches.set(entity.id, entity);
+        }
+      }
+    } catch {
+      // Fallback êm ái
+    }
+  }
+
+  /**
+   * Truy vấn danh sách lô hàng kèm tính toán trạng thái theo ngưỡng cảnh báo cận hạn (SN-184 AC-2 & AC-3)
+   */
+  async getBatches(
+    query: QueryBatchesDto = {},
+    user?: ICurrentUser,
+  ): Promise<PaginatedBatchesResponse> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+
+    const threshold = query.expiryThresholdDays && query.expiryThresholdDays > 0 ? query.expiryThresholdDays : 30;
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 20;
+
+    let items = Array.from(this.batches.values()).map(
+      (b) => new InventoryBatchEntity(b, threshold),
+    );
+
+    // 1. Phân quyền Data Scope: Thủ kho chỉ thấy lô hàng của kho mình quản lý (nếu có assignedWarehouse)
+    const userWhId = (user as any)?.assignedWarehouseId || (user as any)?.warehouseId;
+    if (userWhId && user?.roles && !user.roles.includes(UserRole.ADMIN) && !user.roles.includes(UserRole.SALES_MANAGER)) {
+      items = items.filter((b) => b.warehouseId === userWhId);
+    }
+
+    // 2. Lọc theo kho (warehouseId)
+    if (query.warehouseId && query.warehouseId !== 'ALL') {
+      const targetWh = query.warehouseId.toLowerCase().trim();
+      items = items.filter(
+        (b) =>
+          b.warehouseId.toLowerCase() === targetWh ||
+          b.warehouseName.toLowerCase().includes(targetWh),
+      );
+    }
+
+    // 3. Lọc theo sản phẩm (productId hoặc sku)
+    if (query.productId && query.productId !== 'ALL') {
+      const pid = query.productId.toLowerCase().trim();
+      items = items.filter((b) => b.productId.toLowerCase() === pid);
+    }
+    if (query.sku && query.sku !== 'ALL') {
+      const skuLower = query.sku.toLowerCase().trim();
+      items = items.filter((b) => b.productSku.toLowerCase() === skuLower);
+    }
+
+    // 4. Tìm kiếm từ khóa (Số lô, SKU, Tên sản phẩm, Tên kho)
+    if (query.search && query.search.trim()) {
+      const q = query.search.toLowerCase().trim();
+      items = items.filter(
+        (b) =>
+          b.batchNumber.toLowerCase().includes(q) ||
+          b.productSku.toLowerCase().includes(q) ||
+          b.productName.toLowerCase().includes(q) ||
+          b.warehouseName.toLowerCase().includes(q),
+      );
+    }
+
+    // 5. Lọc theo trạng thái lô (VALID, EXPIRING_SOON, EXPIRED)
+    if (query.status && query.status !== BatchStatusFilter.ALL) {
+      items = items.filter((b) => b.status === query.status);
+    }
+
+    // 6. Sắp xếp theo chuẩn FEFO (First Expired, First Out)
+    items.sort((a, b) => {
+      const tA = new Date(a.expiryDate).getTime();
+      const tB = new Date(b.expiryDate).getTime();
+      return tA - tB;
+    });
+
+    const total = items.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const startIndex = (page - 1) * limit;
+    const paginated = items.slice(startIndex, startIndex + limit);
+
+    return {
+      data: paginated,
+      total,
+      page,
+      limit,
+      totalPages,
+      thresholdDays: threshold,
+    };
+  }
+
+  /**
+   * Thống kê tổng số lượng lô, số lô hợp lệ, sắp hết hạn và đã hết hạn (SN-184 AC-3)
+   */
+  async getBatchStats(
+    warehouseId?: string,
+    thresholdDays = 30,
+    user?: ICurrentUser,
+  ): Promise<BatchStatsResponse> {
+    const listRes = await this.getBatches(
+      {
+        warehouseId,
+        expiryThresholdDays: thresholdDays,
+        limit: 10000,
+        page: 1,
+      },
+      user,
+    );
+
+    const all = listRes.data;
+    const validCount = all.filter((b) => b.status === 'VALID').length;
+    const expiringSoonCount = all.filter((b) => b.status === 'EXPIRING_SOON').length;
+    const expiredCount = all.filter((b) => b.status === 'EXPIRED').length;
+    const totalQuantity = all.reduce((sum, b) => sum + b.quantity, 0);
+
+    return {
+      totalBatches: all.length,
+      validCount,
+      expiringSoonCount,
+      expiredCount,
+      totalQuantity,
+      thresholdDays,
+    };
+  }
+
+  /**
+   * Kiểm tra điều kiện xuất kho của lô hàng và cơ chế Ghi Đè Quản Lý Kho (SN-184 AC-4)
+   * Không cho xuất lô đã quá hạn, trừ khi Quản lý kho xác nhận ghi đè kèm lý do
+   */
+  async checkBatchDispatch(
+    dto: CheckBatchDispatchDto,
+    user?: ICurrentUser,
+  ): Promise<{
+    allowed: boolean;
+    isOverridden: boolean;
+    warning?: string;
+    batch: Record<string, unknown>;
+    overrideReason?: string;
+    overriddenBy?: string;
+    overriddenAt?: Date;
+    status?: string;
+  }> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+
+    let batch: InventoryBatchEntity | undefined;
+    if (dto.batchId) {
+      batch = this.batches.get(dto.batchId);
+    }
+    if (!batch && dto.batchNumber) {
+      const bNum = dto.batchNumber.toLowerCase().trim();
+      batch = Array.from(this.batches.values()).find(
+        (b) =>
+          b.batchNumber.toLowerCase() === bNum &&
+          (!dto.warehouseId || b.warehouseId === dto.warehouseId),
+      );
+    }
+
+    if (!batch) {
+      throw new NotFoundException(
+        `Không tìm thấy lô hàng với mã/số lô: ${dto.batchId || dto.batchNumber || 'chưa xác định'}`,
+      );
+    }
+
+    // Kiểm tra số lượng tồn khả dụng
+    if (batch.availableQuantity < dto.quantity) {
+      throw new BadRequestException(
+        `Số lượng xuất (${dto.quantity} ${batch.baseUnit}) vượt quá tồn khả dụng của lô ${batch.batchNumber} (còn ${batch.availableQuantity} ${batch.baseUnit}).`,
+      );
+    }
+
+    // Tiêu chí 4: Kiểm tra hạn sử dụng của lô
+    const isExpired = batch.daysRemaining < 0;
+    if (isExpired) {
+      // Nếu không có lý do ghi đè -> Chặn ngay lập tức
+      if (!dto.managerOverrideReason || !dto.managerOverrideReason.trim()) {
+        throw new BadRequestException(
+          `Lô hàng "${batch.batchNumber}" đã QUÁ HẠN SỬ DỤNG từ ngày ${batch.expiryDate} (quá hạn ${Math.abs(batch.daysRemaining)} ngày). ` +
+          `Quy chuẩn quản lý kho chặn xuất lô đã quá hạn cho đại lý. ` +
+          `Chỉ Quản lý kho mới có thẩm quyền xác nhận ghi đè kèm lý do cụ thể để xuất lô này.`,
+        );
+      }
+
+      // Có lý do ghi đè -> Kiểm tra quyền của người dùng (Warehouse Manager hoặc Admin)
+      const roles = (user?.roles || []).map((r) => String(r));
+      const isManagerOrAdmin =
+        roles.includes(UserRole.ADMIN) ||
+        roles.includes(UserRole.WAREHOUSE_MANAGER) ||
+        roles.includes(UserRole.WH_MANAGER);
+
+      if (!isManagerOrAdmin) {
+        throw new ForbiddenException(
+          `Bạn không có quyền xác nhận ghi đè xuất lô quá hạn. Chỉ Quản lý kho (Warehouse Manager) hoặc Quản trị viên (Admin) mới có thẩm quyền này.`,
+        );
+      }
+
+      const overrideReason = dto.managerOverrideReason.trim();
+      if (overrideReason.length < 5) {
+        throw new BadRequestException('Lý do ghi đè của Quản lý kho phải có tối thiểu 5 ký tự.');
+      }
+
+      return {
+        allowed: true,
+        isOverridden: true,
+        warning: `Lô hàng quá hạn đã được Quản lý kho xác nhận ghi đè thành công.`,
+        batch: batch.toJSON(),
+        overrideReason,
+        overriddenBy: (user as any)?.fullName || user?.username || 'Quản lý kho',
+        overriddenAt: new Date(),
+        status: 'EXPIRED',
+      };
+    }
+
+    return {
+      allowed: true,
+      isOverridden: false,
+      batch: batch.toJSON(),
+      status: batch.status,
+    };
   }
 
   /**

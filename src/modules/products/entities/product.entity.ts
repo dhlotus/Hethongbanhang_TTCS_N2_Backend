@@ -30,11 +30,20 @@ export class ProductEntity {
   description?: string;
   hasTransactions: boolean;
   units: ProductUnitEntity[];
+  isBatchManaged: boolean;
   createdAt: Date;
   updatedAt: Date;
 
   constructor(partial: Partial<ProductEntity> & Record<string, unknown>) {
     Object.assign(this, partial);
+
+    // Cờ quản lý theo Lô & Hạn sử dụng (SN-184) - Mặc định bật cho hàng FMCG
+    this.isBatchManaged =
+      partial.isBatchManaged !== undefined
+        ? Boolean(partial.isBatchManaged)
+        : partial.is_batch_managed !== undefined
+          ? Boolean(partial.is_batch_managed)
+          : true;
 
     // Chuẩn hóa parentCategory và subCategory từ category hoặc các trường alias
     const parent =
@@ -160,6 +169,10 @@ export class ProductEntity {
     return this.units;
   }
 
+  get is_batch_managed(): boolean {
+    return this.isBatchManaged;
+  }
+
   get created_at(): Date {
     return this.createdAt;
   }
@@ -187,6 +200,8 @@ export class ProductEntity {
       base_unit: this.baseUnit,
       packagingSpec: this.packagingSpec,
       packaging_spec: this.packagingSpec,
+      isBatchManaged: this.isBatchManaged,
+      is_batch_managed: this.isBatchManaged,
       price: this.price,
       costPrice: this.costPrice,
       cost_price: this.costPrice,
