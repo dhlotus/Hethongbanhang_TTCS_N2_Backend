@@ -348,14 +348,24 @@ export class GoodsReceiptsService implements OnModuleInit {
         productCode = 'LH-OLD-COFFEE-CAN';
       }
 
+      let resolvedUnit = (i as any).unitName || i.unitId;
+      if (!resolvedUnit || resolvedUnit.startsWith('unit-') || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedUnit)) {
+        const factor = Number(i.conversionFactor) || 1;
+        if (factor >= 20 || factor === 24) resolvedUnit = 'Thùng';
+        else if (factor === 12) resolvedUnit = 'Thùng';
+        else if (factor === 6) resolvedUnit = 'Lốc';
+        else if (factor === 1) resolvedUnit = 'Lon';
+        else resolvedUnit = 'Đơn vị';
+      }
+
       return {
         id: randomUUID(),
         receiptId,
         productId: i.productId,
         productName,
         productCode,
-        unitId: i.unitId,
-        unitName: i.unitId,
+        unitId: resolvedUnit,
+        unitName: resolvedUnit,
         packageQuantity: Number(i.packageQuantity),
         conversionFactor: Number(i.conversionFactor),
         baseQuantity: baseQty,
