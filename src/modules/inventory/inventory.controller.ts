@@ -28,6 +28,8 @@ import {
   UpdateAuditItemsDto,
   CompleteAuditDto,
   QueryAuditsDto,
+  QueryBatchesDto,
+  CheckBatchDispatchDto,
 } from './dto';
 
 /**
@@ -374,6 +376,79 @@ export class InventoryController {
     @CurrentUser() user?: ICurrentUser,
   ): Promise<InventoryAuditEntity> {
     return this.inventoryService.cancelAudit(id, undefined, user);
+  }
+
+  // =========================================================================
+  // THEO DÕI LÔ HÀNG & HẠN SỬ DỤNG (SN-184 / EP-SN-229)
+  // =========================================================================
+
+  /**
+   * Truy vấn danh sách lô hàng kèm cảnh báo cận hạn (SN-184 AC-2 & AC-3)
+   * GET /inventory/batches?warehouseId=...&status=...&expiryThresholdDays=30
+   * Quyền: WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN, SALES_MANAGER, ACCOUNTANT
+   */
+  @Get('batches')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getBatches(
+    @Query() query: QueryBatchesDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.getBatches(query, currentUser);
+  }
+
+  /**
+   * Thống kê tổng quan lô hàng và cảnh báo cận hạn / quá hạn (SN-184 AC-3)
+   * GET /inventory/batches/stats?warehouseId=...&expiryThresholdDays=30
+   */
+  @Get('batches/stats')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getBatchStats(
+    @Query('warehouseId') warehouseId?: string,
+    @Query('expiryThresholdDays') thresholdDays?: number,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.getBatchStats(
+      warehouseId,
+      thresholdDays ? Number(thresholdDays) : 30,
+      currentUser,
+    );
+  }
+
+  /**
+   * Kiểm tra điều kiện xuất kho của lô hàng và ghi đè của Quản lý kho (SN-184 AC-4)
+   * POST /inventory/batches/check-dispatch
+   * Chặn xuất lô đã quá hạn trừ khi Quản lý kho xác nhận ghi đè kèm lý do
+   */
+  @Post('batches/check-dispatch')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  @HttpCode(HttpStatus.OK)
+  async checkBatchDispatch(
+    @Body() dto: CheckBatchDispatchDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.checkBatchDispatch(dto, currentUser);
   }
 }
 
