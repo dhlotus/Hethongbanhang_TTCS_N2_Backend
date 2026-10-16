@@ -265,13 +265,26 @@ export class ProductsController {
   }
 
   /**
+   * Kiểm tra điều kiện xóa sản phẩm khỏi danh mục
+   * GET /api/products/:id/delete-check
+   * Quyền: ADMIN, SALES_MANAGER, BUSINESS_MANAGER
+   */
+  @Get(':id/delete-check')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.BUSINESS_MANAGER)
+  async checkCanDelete(
+    @Param('id') id: string,
+  ): Promise<{ canDelete: boolean; reason?: string }> {
+    return this.productsService.checkCanDeleteProduct(id);
+  }
+
+  /**
    * Xóa sản phẩm khỏi danh mục
    * DELETE /api/products/:id
-   * Quyền: Chỉ ADMIN và SALES_MANAGER
-   * Ràng buộc: Chặn xóa nếu sản phẩm đã phát sinh giao dịch đơn hàng hoặc kho
+   * Quyền: Chỉ ADMIN, SALES_MANAGER, BUSINESS_MANAGER (Quản lý kinh doanh)
+   * Ràng buộc: Hết hàng và không còn giao dịch chờ/đang vận chuyển
    */
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.BUSINESS_MANAGER)
   @HttpCode(HttpStatus.OK)
   async delete(
     @Param('id') id: string,

@@ -66,11 +66,9 @@ async function run() {
     `, [wh.id, wh.code, wh.name, wh.address, wh.phone]);
   }
 
-  // 4. Xóa các kho dư thừa khác (nếu có)
-  const validIds = standardWarehouses.map(w => w.id);
-  await client.query(`
-    DELETE FROM warehouses WHERE id NOT IN ($1, $2, $3, $4)
-  `, validIds);
+  // 4. Không xóa các kho mới do người dùng tạo (giữ nguyên kho mở rộng)
+  // const validIds = standardWarehouses.map(w => w.id);
+  // await client.query(`DELETE FROM warehouses WHERE id NOT IN ($1, $2, $3, $4)`, validIds);
 
   const finalWhs = await client.query(`SELECT id, code, name, address FROM warehouses ORDER BY code`);
   console.log('✅ Đã chuẩn hóa 4 kho chính thành công trong DB:');
