@@ -2138,6 +2138,7 @@ async findOrdersByCustomer(
 
     for (const line of order.lines) {
       let isInactive = false;
+      let inactiveReason = 'Mặt hàng đã ngừng kinh doanh và được loại khỏi đơn mới';
 
       // 1. Kiểm tra trạng thái sản phẩm qua ProductsService
       if (this.productsService) {
@@ -2145,9 +2146,13 @@ async findOrdersByCustomer(
           const product = await this.productsService.findById(line.productSku || line.productId);
           if (product && product.status === ProductStatus.INACTIVE) {
             isInactive = true;
+            inactiveReason = 'Mặt hàng đã chuyển trạng thái ngừng kinh doanh';
           }
-        } catch {
-          // Bỏ qua lỗi tìm kiếm nếu không có
+        } catch (err) {
+          if (err instanceof NotFoundException) {
+            isInactive = true;
+            inactiveReason = 'Sản phẩm đã ngừng kinh doanh hoặc không còn tồn tại trong hệ thống';
+          }
         }
       }
 
@@ -2156,7 +2161,7 @@ async findOrdersByCustomer(
           lineId: line.id,
           productSku: line.productSku,
           productName: line.productName,
-          reason: 'Mặt hàng đã ngừng kinh doanh và được loại khỏi đơn mới',
+          reason: inactiveReason,
         });
         continue;
       }

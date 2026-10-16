@@ -334,5 +334,293 @@ export class MailService {
       return { success: true };
     }
   }
+
+  /**
+   * Gửi email nhắc hạn thanh toán trước 3 ngày (SN-208 A)
+   */
+  async sendDebtReminderEmail(
+    params: {
+      to: string;
+      customerName: string;
+      invoiceCode: string;
+      orderCode: string;
+      remainingAmount: number;
+      dueDate: Date | string;
+      viewUrl?: string;
+    },
+  ): Promise<{ success: boolean; previewUrl?: string }> {
+    const { to, customerName, invoiceCode, orderCode, remainingAmount, dueDate, viewUrl } = params;
+    const finalUrl = viewUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoiceCode}`;
+    const formattedAmount = new Intl.NumberFormat('vi-VN').format(remainingAmount) + ' đ';
+    const formattedDueDate = new Date(dueDate).toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+
+    const smtpUser = process.env.SMTP_USER?.trim() || '';
+    const fromAddress =
+      smtpUser && smtpUser.includes('@gmail.com')
+        ? `"LOHA SALES Tài Chính" <${smtpUser}>`
+        : process.env.MAIL_FROM || `"LOHA SALES Tài Chính" <${smtpUser || 'no-reply@loha.vn'}>`;
+
+    const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+      <meta charset="UTF-8">
+      <title>Nhắc hạn thanh toán hóa đơn — LOHA SALES</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 24px; }
+        .card { max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 36px 32px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+        .logo-box { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; background: #eff6ff; border-radius: 12px; margin-bottom: 20px; border: 1px solid #dbeafe; }
+        .logo-text { font-size: 20px; font-weight: 800; color: #2563eb; }
+        h1 { font-size: 20px; font-weight: 700; color: #0f172a; margin: 0 0 12px 0; }
+        p { font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 16px 0; }
+        .alert-box { background: #fffbeb; border: 1px solid #fef3c7; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 14px 16px; margin: 18px 0; font-size: 13px; color: #92400e; }
+        .info-table { width: 100%; border-collapse: separate; border-spacing: 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 20px 0; overflow: hidden; }
+        .info-table td { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
+        .info-table tr:last-child td { border-bottom: none; }
+        .info-table .label { color: #64748b; font-weight: 500; width: 42%; }
+        .info-table .value { color: #0f172a; font-weight: 600; }
+        .btn-box { text-align: center; margin: 26px 0; }
+        .btn { display: inline-block; background-color: #4f46e5; color: #ffffff !important; font-size: 14px; font-weight: 600; text-decoration: none; padding: 12px 26px; border-radius: 10px; }
+        .btn:hover { background-color: #4338ca; }
+        .footer { text-align: center; margin-top: 24px; font-size: 12px; color: #94a3b8; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="logo-box">
+          <span class="logo-text">LS</span>
+        </div>
+        <h1>Thông báo nhắc hạn thanh toán hóa đơn</h1>
+        <p>Kính gửi Quý đại lý <strong>${customerName}</strong>,</p>
+        <p>Bộ phận Tài chính - Kế toán LOHA SALES xin trân trọng thông báo: Hóa đơn mua buôn dưới đây của Quý đại lý sẽ đến hạn thanh toán trong <strong>3 ngày tới</strong>.</p>
+        
+        <div class="alert-box">
+          ⏰ <strong>Hạn thanh toán: ${formattedDueDate}</strong>. Quý đại lý vui lòng thu xếp thanh toán đúng hạn để bảo toàn hạn mức tín dụng và không gián đoạn việc đặt hàng.
+        </div>
+
+        <table class="info-table">
+          <tr>
+            <td class="label">Mã hóa đơn:</td>
+            <td class="value" style="color: #4f46e5; font-family: monospace;">${invoiceCode}</td>
+          </tr>
+          <tr>
+            <td class="label">Đơn hàng gốc:</td>
+            <td class="value" style="font-family: monospace;">${orderCode}</td>
+          </tr>
+          <tr>
+            <td class="label">Số tiền còn nợ:</td>
+            <td class="value" style="color: #ea580c; font-size: 15px;">${formattedAmount}</td>
+          </tr>
+          <tr>
+            <td class="label">Ngày đến hạn:</td>
+            <td class="value">${formattedDueDate}</td>
+          </tr>
+        </table>
+
+        <div class="btn-box">
+          <a href="${finalUrl}" class="btn" target="_blank">Xem hóa đơn & Đối soát công nợ</a>
+        </div>
+
+        <p style="font-size: 12px; color: #64748b; margin-top: 20px;">
+          Nếu Quý khách đã thực hiện chuyển khoản trong vòng 24h qua, xin vui lòng bỏ qua thông báo này.
+        </p>
+      </div>
+      <div class="footer">
+        © 2026 LOHA SALES — Ban Tài Chính & Quản Trị Công Nợ Doanh Nghiệp
+      </div>
+    </body>
+    </html>
+    `;
+
+    const subject = `⏰ [LOHA SALES] Nhắc hạn thanh toán HĐ ${invoiceCode} — Còn 3 ngày đến hạn (${formattedDueDate})`;
+    const text = `Kính gửi ${customerName},\n\nHóa đơn ${invoiceCode} (Đơn hàng: ${orderCode}) còn dư nợ ${formattedAmount} sẽ đến hạn thanh toán vào ngày ${formattedDueDate} (còn 3 ngày).\n\nVui lòng xem chi tiết và đối soát tại: ${finalUrl}`;
+
+    if (this.transporter) {
+      try {
+        const info = await this.transporter.sendMail({
+          from: fromAddress,
+          to,
+          subject,
+          text,
+          html: htmlContent,
+        });
+        this.logger.log(`✅ [DEBT REMINDER EMAIL SENT] Đã gửi tới: ${to} (HĐ: ${invoiceCode}, MsgId: ${info.messageId})`);
+        return { success: true };
+      } catch (err) {
+        this.logger.error(`❌ [DEBT REMINDER EMAIL FAILED] Lỗi SMTP: ${err}`);
+      }
+    }
+
+    try {
+      const ethereal = await this.getEtherealTransporter();
+      const info = await ethereal.sendMail({
+        from: '"LOHA SALES Tài Chính" <finance@loha.vn>',
+        to,
+        subject,
+        text,
+        html: htmlContent,
+      });
+      const previewUrl = nodemailer.getTestMessageUrl(info) || undefined;
+      this.logger.log(`✉️ [DEBT REMINDER EMAIL SENT] Đã gửi tới: ${to} (HĐ: ${invoiceCode})`);
+      if (previewUrl) {
+        this.logger.log(`🌐 [XEM HÒM THƯ ETHEREAL]: ${previewUrl}`);
+      }
+      return { success: true, previewUrl };
+    } catch (err) {
+      this.logger.warn(`⚠️ [DEBT REMINDER EMAIL LOGGED]: ${to} | HĐ: ${invoiceCode} | Nợ: ${formattedAmount}`);
+      return { success: true };
+    }
+  }
+
+  /**
+   * Gửi email cảnh báo hóa đơn quá hạn (SN-208 B)
+   */
+  async sendDebtOverdueEmail(
+    params: {
+      to: string;
+      customerName: string;
+      invoiceCode: string;
+      orderCode: string;
+      remainingAmount: number;
+      overdueDays: number;
+      dueDate: Date | string;
+      viewUrl?: string;
+    },
+  ): Promise<{ success: boolean; previewUrl?: string }> {
+    const { to, customerName, invoiceCode, orderCode, remainingAmount, overdueDays, dueDate, viewUrl } = params;
+    const finalUrl = viewUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoiceCode}`;
+    const formattedAmount = new Intl.NumberFormat('vi-VN').format(remainingAmount) + ' đ';
+    const formattedDueDate = new Date(dueDate).toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+
+    const smtpUser = process.env.SMTP_USER?.trim() || '';
+    const fromAddress =
+      smtpUser && smtpUser.includes('@gmail.com')
+        ? `"LOHA SALES Tài Chính" <${smtpUser}>`
+        : process.env.MAIL_FROM || `"LOHA SALES Tài Chính" <${smtpUser || 'no-reply@loha.vn'}>`;
+
+    const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+      <meta charset="UTF-8">
+      <title>Cảnh báo hóa đơn quá hạn thanh toán — LOHA SALES</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 24px; }
+        .card { max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #fee2e2; padding: 36px 32px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+        .logo-box { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; background: #fef2f2; border-radius: 12px; margin-bottom: 20px; border: 1px solid #fecaca; }
+        .logo-text { font-size: 20px; font-weight: 800; color: #dc2626; }
+        h1 { font-size: 20px; font-weight: 700; color: #991b1b; margin: 0 0 12px 0; }
+        p { font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 16px 0; }
+        .alert-box { background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444; border-radius: 8px; padding: 14px 16px; margin: 18px 0; font-size: 13px; color: #991b1b; }
+        .info-table { width: 100%; border-collapse: separate; border-spacing: 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 20px 0; overflow: hidden; }
+        .info-table td { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
+        .info-table tr:last-child td { border-bottom: none; }
+        .info-table .label { color: #64748b; font-weight: 500; width: 42%; }
+        .info-table .value { color: #0f172a; font-weight: 600; }
+        .btn-box { text-align: center; margin: 26px 0; }
+        .btn { display: inline-block; background-color: #dc2626; color: #ffffff !important; font-size: 14px; font-weight: 600; text-decoration: none; padding: 12px 26px; border-radius: 10px; }
+        .btn:hover { background-color: #b91c1c; }
+        .footer { text-align: center; margin-top: 24px; font-size: 12px; color: #94a3b8; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="logo-box">
+          <span class="logo-text">LS</span>
+        </div>
+        <h1>Cảnh báo: Hóa đơn đã quá hạn thanh toán</h1>
+        <p>Kính gửi Quý đại lý <strong>${customerName}</strong>,</p>
+        <p>Hệ thống ghi nhận hóa đơn bán hàng dưới đây của Quý đại lý đã quá hạn thanh toán <strong>${overdueDays} ngày</strong> (hạn quy định: ${formattedDueDate}).</p>
+        
+        <div class="alert-box">
+          ⚠️ <strong>Hóa đơn quá hạn ${overdueDays} ngày — Số tiền còn nợ: ${formattedAmount}</strong>.<br/>
+          Để tránh việc hệ thống tạm dừng nhận đơn hàng mới theo chính sách kiểm soát hạn mức tín dụng, Quý đại lý vui lòng tất toán số tiền này sớm nhất có thể.
+        </div>
+
+        <table class="info-table">
+          <tr>
+            <td class="label">Mã hóa đơn:</td>
+            <td class="value" style="color: #dc2626; font-family: monospace;">${invoiceCode}</td>
+          </tr>
+          <tr>
+            <td class="label">Đơn hàng gốc:</td>
+            <td class="value" style="font-family: monospace;">${orderCode}</td>
+          </tr>
+          <tr>
+            <td class="label">Hạn thanh toán:</td>
+            <td class="value">${formattedDueDate}</td>
+          </tr>
+          <tr>
+            <td class="label">Số ngày quá hạn:</td>
+            <td class="value" style="color: #dc2626; font-weight: 700;">${overdueDays} ngày</td>
+          </tr>
+          <tr>
+            <td class="label">Số tiền còn nợ:</td>
+            <td class="value" style="color: #dc2626; font-size: 16px;">${formattedAmount}</td>
+          </tr>
+        </table>
+
+        <div class="btn-box">
+          <a href="${finalUrl}" class="btn" target="_blank">Xem chi tiết hóa đơn & Tất toán</a>
+        </div>
+
+        <p style="font-size: 12px; color: #64748b; margin-top: 20px;">
+          Nếu Quý khách đã thực hiện chuyển khoản gần đây, xin vui lòng liên hệ nhân viên quản lý tài khoản để được gạch nợ tự động.
+        </p>
+      </div>
+      <div class="footer">
+        © 2026 LOHA SALES — Ban Tài Chính & Quản Trị Công Nợ Doanh Nghiệp
+      </div>
+    </body>
+    </html>
+    `;
+
+    const subject = `🚨 [LOHA SALES] Cảnh báo HĐ ${invoiceCode} quá hạn ${overdueDays} ngày — Số tiền còn nợ ${formattedAmount}`;
+    const text = `Kính gửi ${customerName},\n\nHóa đơn ${invoiceCode} (Đơn hàng: ${orderCode}) đã quá hạn ${overdueDays} ngày kể từ ${formattedDueDate}.\nSố tiền còn nợ: ${formattedAmount}.\n\nVui lòng xem chi tiết và tất toán tại: ${finalUrl}`;
+
+    if (this.transporter) {
+      try {
+        const info = await this.transporter.sendMail({
+          from: fromAddress,
+          to,
+          subject,
+          text,
+          html: htmlContent,
+        });
+        this.logger.log(`✅ [DEBT OVERDUE EMAIL SENT] Đã gửi tới: ${to} (HĐ: ${invoiceCode}, MsgId: ${info.messageId})`);
+        return { success: true };
+      } catch (err) {
+        this.logger.error(`❌ [DEBT OVERDUE EMAIL FAILED] Lỗi SMTP: ${err}`);
+      }
+    }
+
+    try {
+      const ethereal = await this.getEtherealTransporter();
+      const info = await ethereal.sendMail({
+        from: '"LOHA SALES Tài Chính" <finance@loha.vn>',
+        to,
+        subject,
+        text,
+        html: htmlContent,
+      });
+      const previewUrl = nodemailer.getTestMessageUrl(info) || undefined;
+      this.logger.log(`✉️ [DEBT OVERDUE EMAIL SENT] Đã gửi tới: ${to} (HĐ: ${invoiceCode})`);
+      if (previewUrl) {
+        this.logger.log(`🌐 [XEM HÒM THƯ ETHEREAL]: ${previewUrl}`);
+      }
+      return { success: true, previewUrl };
+    } catch (err) {
+      this.logger.warn(`⚠️ [DEBT OVERDUE EMAIL LOGGED]: ${to} | HĐ: ${invoiceCode} | Quá hạn ${overdueDays} ngày | Nợ: ${formattedAmount}`);
+      return { success: true };
+    }
+  }
 }
 
