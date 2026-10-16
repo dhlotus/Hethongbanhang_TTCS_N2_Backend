@@ -66,6 +66,9 @@ export class ProductsService implements OnModuleInit {
     'LH-OLD-COFFEE-CAN',
   ]);
 
+  private lastDbLoadTimestamp = 0;
+  private readonly DB_CACHE_TTL_MS = 15000;
+
   constructor(
     @Optional() private readonly dbService?: DatabaseService,
     @Optional()
@@ -193,7 +196,12 @@ export class ProductsService implements OnModuleInit {
   /**
    * Tải danh mục sản phẩm từ cơ sở dữ liệu PostgreSQL (nếu đã kết nối)
    */
-  private async loadProductsFromDatabase(): Promise<void> {
+  private async loadProductsFromDatabase(force: boolean = false): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    if (!force && this.products.size > 0 && Date.now() - this.lastDbLoadTimestamp < this.DB_CACHE_TTL_MS) {
+      return;
+    }
+    this.lastDbLoadTimestamp = Date.now();
     try {
       const rows = await this.dbService!.query<{
         id: string;
@@ -310,6 +318,13 @@ export class ProductsService implements OnModuleInit {
     } catch {
       // Fallback êm ái nếu có lỗi truy vấn
     }
+  }
+
+  /**
+   * Hủy cache dữ liệu sản phẩm trong bộ nhớ để làm mới từ Database khi có thay đổi
+   */
+  public invalidateProductCache(): void {
+    this.lastDbLoadTimestamp = 0;
   }
 
   /**
