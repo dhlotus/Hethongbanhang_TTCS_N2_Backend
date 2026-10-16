@@ -44,6 +44,10 @@ export class CreateGoodsReceiptItemDto {
   @IsNotEmpty({ message: 'unitId không được để trống' })
   unitId: string;
 
+  @IsString()
+  @IsOptional()
+  unitName?: string;
+
   @IsNumber()
   @Min(0.01)
   packageQuantity: number;

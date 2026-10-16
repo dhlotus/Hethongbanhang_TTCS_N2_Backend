@@ -934,3 +934,34 @@ est build -> 0 lỗi.
 - **Trạng thái kiểm thử & Build:**
   - Backend Build: `nest build` -> 0 lỗi, compile thành công 100%.
   - Frontend Build: `tsc -b && vite build` -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 7] - [SN-209]: In & Tải PDF Phiếu Thu Cho Khoản Đã Ghi Nhận (Kế Toán Công Nợ)
+- **Thời gian hoàn thành:** 2026-10-15
+- **Mã Jira / Task:** SN-209 (Parent Story: SN-201 / S7-09 - Sprint 7)
+- **Tiêu đề:** "Là Kế toán công nợ, tôi muốn in phiếu thu cho mỗi khoản đã ghi nhận, để đại lý có chứng từ ngay tại chỗ khi đưa tiền."
+- **Ràng buộc:** Hoàn thành đúng và đủ 2 yêu cầu trong Description (không tự ý thêm luồng tạo/phê duyệt).
+  1. Hiển thị đủ 5 trường thông tin: Mã duy nhất, thông tin đại lý, số tiền, hình thức, người thu.
+  2. Cung cấp khả năng In (Print trực tiếp) hoặc Tải PDF (Download PDF).
+- **Danh sách file tạo mới / thay đổi (Backend):**
+  - `src/modules/receipts/entities/receipt.entity.ts` (Tạo mới: Entity Receipt và Enums PaymentMethod, ReceiptStatus)
+  - `src/modules/receipts/dto/receipt-print.dto.ts` (Tạo mới: DTO dữ liệu in ấn chuẩn hóa chứa đầy đủ 5 trường bắt buộc)
+  - `src/modules/receipts/receipts.service.ts` (Tạo mới: Service quản lý phiếu thu, định dạng tiền chữ tiếng Việt và tạo Buffer PDF qua PDFKit)
+  - `src/modules/receipts/receipts.controller.ts` (Tạo mới: Endpoints `GET /api/receipts`, `GET /api/receipts/:id`, `GET /api/receipts/:id/print`, `GET /api/receipts/:id/pdf` có JwtAuthGuard và RolesGuard)
+  - `src/modules/receipts/receipts.module.ts` (Tạo mới: ReceiptsModule đăng ký DatabaseModule)
+  - `src/common/utils/number-to-vietnamese-words.util.ts` (Tạo mới: Tiện ích chuyển đổi tiền số sang chữ Tiếng Việt chuẩn kế toán)
+  - `src/app.module.ts` (Cập nhật: Đăng ký ReceiptsModule)
+  - `test/receipts-sn209.spec.ts` (Tạo mới: 4 unit test cases kiểm thử tự động API print dữ liệu và sinh file PDF buffer)
+- **Chi tiết kỹ thuật:**
+  - **5 trường thông tin cốt lõi:**
+    1. Mã duy nhất: `code` / `receiptCode` (ví dụ `PT2610-0001`).
+    2. Thông tin đại lý: `customerInfo` (`name`, `code`, `phone`, `address`).
+    3. Số tiền: `amount`, `amountFormatted` (VND), `amountInWords` (bằng chữ tiếng Việt).
+    4. Hình thức thu: `paymentMethod` (CASH, BANK_TRANSFER, CREDIT_CARD, CHECK) kèm nhãn tiếng Việt.
+    5. Người thu: `collectorName`, `collectorInfo` (Họ tên nhân viên kế toán công nợ).
+  - **Tạo file PDF chuẩn hóa:** Sử dụng thư viện `pdfkit` xuất buffer trực tiếp định dạng A4/A5 với tiêu đề công ty, quốc hiệu, barcode, thông tin thanh toán và khung 3 chữ ký (Người nộp, Người thu, Kế toán trưởng).
+  - **Bảo mật & Phân quyền:** Phân quyền nghiêm ngặt qua `@Roles(UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT, UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.BUSINESS_MANAGER)`.
+- **Trạng thái kiểm thử:**
+  - Unit Test: `npx jest test/receipts-sn209.spec.ts` -> 4/4 test cases PASSED (100%).
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
