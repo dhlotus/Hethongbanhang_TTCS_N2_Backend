@@ -361,9 +361,7 @@ export class InventoryController {
   @Post('audits/:id/cancel')
   @Roles(
     UserRole.ADMIN,
-    UserRole.WAREHOUSE_KEEPER,
     UserRole.WAREHOUSE_MANAGER,
-    UserRole.WAREHOUSE,
     UserRole.WH_MANAGER,
   )
   async cancelAuditPost(
@@ -381,9 +379,7 @@ export class InventoryController {
   @Delete('audits/:id')
   @Roles(
     UserRole.ADMIN,
-    UserRole.WAREHOUSE_KEEPER,
     UserRole.WAREHOUSE_MANAGER,
-    UserRole.WAREHOUSE,
     UserRole.WH_MANAGER,
   )
   async cancelAuditDelete(
