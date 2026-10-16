@@ -1052,8 +1052,13 @@ export class OrdersService implements OnModuleInit {
 
     // 3. Lọc theo đại lý (customerId)
     if (query.customerId && query.customerId !== 'ALL') {
+      const qCust = query.customerId;
+      const qCustNorm = qCust.replace('cust-dl-', 'cust-');
       list = list.filter(
-        (o) => o.customerId === query.customerId || o.customerCode === query.customerId,
+        (o) =>
+          o.customerId === qCust ||
+          o.customerCode === qCust ||
+          (o.customerId && o.customerId.replace('cust-dl-', 'cust-') === qCustNorm),
       );
     }
 
@@ -1682,6 +1687,9 @@ export class OrdersService implements OnModuleInit {
       [OrderApprovalAction.RETURN_FOR_UPDATE]: OrderStatus.RETURNED_FOR_UPDATE,
     };
     order.status = statusByAction[action];
+    if (action === OrderApprovalAction.APPROVE && !order.approvedAt) {
+      order.approvedAt = new Date();
+    }
     order.updatedAt = new Date();
   }
 
@@ -1992,6 +2000,7 @@ export class OrdersService implements OnModuleInit {
       }
 
       const uncancelableStatuses = [
+        OrderStatus.DISPATCHED,
         OrderStatus.SHIPPED,
         OrderStatus.DELIVERED,
         OrderStatus.CLOSED,
@@ -2016,7 +2025,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Đơn chờ duyệt chỉ được xử lý qua chức năng xét duyệt.');
     }
-    if (this.databaseService?.isConnected() && dto.status === OrderStatus.SHIPPED) {
+    if (this.databaseService?.isConnected() && (dto.status === OrderStatus.DISPATCHED || dto.status === OrderStatus.SHIPPED)) {
       const reservations = await this.databaseService.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM app_order_inventory_reservations
          WHERE order_id = $1 AND status = 'RESERVED'`,
@@ -2031,6 +2040,66 @@ export class OrdersService implements OnModuleInit {
     const previousStatus = order.status;
     order.status = dto.status;
     order.updatedAt = new Date();
+
+    // Cập nhật các mốc thời gian thực tế theo quy trình SN-199
+    if (dto.status === OrderStatus.PROCESSING) {
+      if (!order.processingAt) order.processingAt = new Date();
+    } else if (dto.status === OrderStatus.DISPATCHED) {
+      if (!order.processingAt) order.processingAt = order.processingAt || new Date();
+      if (!order.dispatchedAt) order.dispatchedAt = new Date();
+      for (const line of order.lines) {
+        if (line.dispatchedQuantity === undefined) {
+          line.dispatchedQuantity = line.quantity;
+        }
+      }
+    } else if (dto.status === OrderStatus.SHIPPED) {
+      if (!order.processingAt) order.processingAt = order.processingAt || new Date();
+      if (!order.dispatchedAt) order.dispatchedAt = order.dispatchedAt || new Date();
+      if (!order.shippedAt) order.shippedAt = new Date();
+      for (const line of order.lines) {
+        if (line.dispatchedQuantity === undefined) {
+          line.dispatchedQuantity = line.quantity;
+        }
+      }
+    } else if (dto.status === OrderStatus.DELIVERED) {
+      if (!order.processingAt) order.processingAt = order.processingAt || new Date();
+      if (!order.dispatchedAt) order.dispatchedAt = order.dispatchedAt || new Date();
+      if (!order.shippedAt) order.shippedAt = order.shippedAt || new Date();
+      if (!order.deliveredAt) order.deliveredAt = new Date();
+    }
+
+    // Cập nhật thông tin giao vận & tài xế nếu có
+    if (dto.carrierName) order.carrierName = dto.carrierName;
+    if (dto.driverName) order.driverName = dto.driverName;
+    if (dto.driverPhone) order.driverPhone = dto.driverPhone;
+    if (dto.licensePlate) order.licensePlate = dto.licensePlate;
+    if (dto.estimatedDeliveryWindow) order.estimatedDeliveryWindow = dto.estimatedDeliveryWindow;
+
+    // Cập nhật số lượng thực tế giao nhận trên từng dòng nếu có dữ liệu xác nhận
+    if (dto.lines && dto.lines.length > 0) {
+      let hasShort = false;
+      for (const lineDto of dto.lines) {
+        const line = order.lines.find(
+          (l) => (lineDto.lineId && l.id === lineDto.lineId) || (lineDto.productId && l.productId === lineDto.productId),
+        );
+        if (line) {
+          if (lineDto.dispatchedQuantity !== undefined) {
+            line.dispatchedQuantity = lineDto.dispatchedQuantity;
+          }
+          if (lineDto.deliveredQuantity !== undefined) {
+            line.deliveredQuantity = lineDto.deliveredQuantity;
+            line.isShortDelivery = lineDto.deliveredQuantity < line.quantity;
+            if (line.isShortDelivery) {
+              hasShort = true;
+              line.shortDeliveryReason = lineDto.shortDeliveryReason || 'Giao thiếu hàng khi nhận tại kho';
+            } else {
+              line.shortDeliveryReason = undefined;
+            }
+          }
+        }
+      }
+      order.isShortDelivery = hasShort || order.lines.some((l) => l.isShortDelivery);
+    }
     if (this.databaseService?.isConnected() && dto.status === OrderStatus.CANCELLED) {
       await this.databaseService.query(
         `UPDATE app_order_inventory_reservations
@@ -2208,7 +2277,9 @@ async findOrdersByCustomer(
   }> {
     const order = await this.findOrderById(orderId);
 
-    if (customerId && order.customerId !== customerId) {
+    const orderCustNorm = order.customerId?.replace('cust-dl-', 'cust-');
+    const paramCustNorm = customerId?.replace('cust-dl-', 'cust-');
+    if (customerId && order.customerId !== customerId && orderCustNorm !== paramCustNorm) {
       throw new BadRequestException('Bạn không có quyền thao tác trên đơn hàng của đại lý khác');
     }
 
@@ -2237,6 +2308,7 @@ async findOrdersByCustomer(
 
     for (const line of order.lines) {
       let isInactive = false;
+      let inactiveReason = 'Mặt hàng đã ngừng kinh doanh và được loại khỏi đơn mới';
 
       // 1. Kiểm tra trạng thái sản phẩm qua ProductsService
       if (this.productsService) {
@@ -2244,9 +2316,13 @@ async findOrdersByCustomer(
           const product = await this.productsService.findById(line.productSku || line.productId);
           if (product && product.status === ProductStatus.INACTIVE) {
             isInactive = true;
+            inactiveReason = 'Mặt hàng đã chuyển trạng thái ngừng kinh doanh';
           }
-        } catch {
-          // Bỏ qua lỗi tìm kiếm nếu không có
+        } catch (err) {
+          if (err instanceof NotFoundException) {
+            isInactive = true;
+            inactiveReason = 'Sản phẩm đã ngừng kinh doanh hoặc không còn tồn tại trong hệ thống';
+          }
         }
       }
 
@@ -2255,7 +2331,7 @@ async findOrdersByCustomer(
           lineId: line.id,
           productSku: line.productSku,
           productName: line.productName,
-          reason: 'Mặt hàng đã ngừng kinh doanh và được loại khỏi đơn mới',
+          reason: inactiveReason,
         });
         continue;
       }
@@ -2488,6 +2564,7 @@ async findOrdersByCustomer(
       OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
+      OrderStatus.DISPATCHED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
     ]);
@@ -2613,6 +2690,7 @@ async findOrdersByCustomer(
       OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
+      OrderStatus.DISPATCHED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
     ]);
