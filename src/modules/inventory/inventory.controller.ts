@@ -49,19 +49,23 @@ export class InventoryController {
    */
   @Get('stock')
   async getStockOverview(
+    @CurrentUser() currentUser?: ICurrentUser,
     @Query('warehouse') warehouse?: string,
     @Query('warehouseId') warehouseId?: string,
     @Query('category') category?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
   ): Promise<StockOverviewItem[]> {
-    return this.inventoryService.getStockOverview({
-      warehouse: warehouse || warehouseId,
-      warehouseId: warehouseId || warehouse,
-      category,
-      status,
-      search,
-    });
+    return this.inventoryService.getStockOverview(
+      {
+        warehouse: warehouse || warehouseId,
+        warehouseId: warehouseId || warehouse,
+        category,
+        status,
+        search,
+      },
+      currentUser,
+    );
   }
 
   /**
@@ -100,8 +104,9 @@ export class InventoryController {
   )
   async getLowStockAlerts(
     @Query('warehouseId') warehouseId?: string,
+    @CurrentUser() currentUser?: ICurrentUser,
   ): Promise<LowStockAlert[]> {
-    return this.inventoryService.getLowStockAlerts(warehouseId);
+    return this.inventoryService.getLowStockAlerts(warehouseId, currentUser);
   }
 
   @Get('stocks')
@@ -268,8 +273,11 @@ export class InventoryController {
     UserRole.SALES_MANAGER,
     UserRole.ACCOUNTANT,
   )
-  async getAudits(@Query() query: QueryAuditsDto): Promise<InventoryAuditEntity[]> {
-    return this.inventoryService.getAudits(query);
+  async getAudits(
+    @Query() query: QueryAuditsDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<InventoryAuditEntity[]> {
+    return this.inventoryService.getAudits(query, currentUser);
   }
 
   /**

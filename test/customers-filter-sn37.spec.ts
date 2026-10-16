@@ -243,11 +243,13 @@ async function runTestSuite(): Promise<void> {
   console.log('========================================================================\n');
 
   if (failed > 0) {
-    process.exit(1);
+    throw new Error(`SN-37 Test Suite failed with ${failed} failure(s)`);
   }
 }
 
-runTestSuite().catch((err) => {
-  console.error('Lỗi thực thi kiểm thử:', err);
-  process.exit(1);
+describe('Subtask SN-37 Full Verification', () => {
+  it('Chay thanh cong toan bo 35 test cases kiem tra bo loc va query parameters', async () => {
+    await runTestSuite();
+  });
 });
+

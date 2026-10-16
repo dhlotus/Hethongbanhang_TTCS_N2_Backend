@@ -943,9 +943,9 @@ export class OrdersService implements OnModuleInit {
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     // 1. Phân quyền theo vai trò (SN-46):
-    // Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn do mình phụ trách
-    const userRole = currentUser?.role || (currentUser?.roles && currentUser.roles[0]);
-    const isOnlySalesRep = userRole === 'SALES_REP';
+    // 1.1. Nhân viên kinh doanh (SALES_REP) chỉ thấy đơn do mình phụ trách
+    const userRoles = (currentUser?.roles || (currentUser?.role ? [currentUser.role] : [])) as string[];
+    const isOnlySalesRep = userRoles.includes('SALES_REP') && !userRoles.includes('ADMIN') && !userRoles.includes('SALES_MANAGER');
 
     if (isOnlySalesRep && (currentUser?.id || currentUser?.username)) {
       const repId = currentUser.id;
@@ -957,6 +957,41 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
+    // 1.2. Quản lý kho / Thủ kho: Chỉ thấy đơn hàng giao từ hoặc giao tới kho/địa bàn phụ trách
+    const isWarehouseStaff = userRoles.some((r) =>
+      ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+    ) && !userRoles.includes('ADMIN') && !userRoles.includes('SALES_MANAGER');
+
+    if (isWarehouseStaff) {
+      const whId = (currentUser as any)?.warehouseId;
+      const whName = (currentUser as any)?.assignedWarehouse || (currentUser as any)?.warehouseName;
+      if (whId || whName) {
+        const cleanWhName = (whName || '').toLowerCase();
+        const isMienBac = cleanWhName.includes('bắc') || cleanWhName.includes('hà nội') || cleanWhName.includes('mb');
+        const isMienNam = cleanWhName.includes('nam') || cleanWhName.includes('sóng thần') || cleanWhName.includes('mn');
+        const isMienTrung = cleanWhName.includes('trung') || cleanWhName.includes('tây nam bộ') || cleanWhName.includes('mt');
+
+        list = list.filter((o) => {
+          if (whId && (o as any).warehouseId && String((o as any).warehouseId).toLowerCase() === String(whId).toLowerCase()) {
+            return true;
+          }
+          if (whName && (o as any).warehouseName && String((o as any).warehouseName).toLowerCase().includes(cleanWhName)) {
+            return true;
+          }
+          if (isMienBac && (o.region?.toLowerCase().includes('bắc') || o.deliveryPoint?.address?.toLowerCase().includes('hà nội') || o.deliveryPoint?.address?.toLowerCase().includes('bắc'))) {
+            return true;
+          }
+          if (isMienNam && (o.region?.toLowerCase().includes('nam') || o.deliveryPoint?.address?.toLowerCase().includes('hồ chí minh') || o.deliveryPoint?.address?.toLowerCase().includes('bình dương') || o.deliveryPoint?.address?.toLowerCase().includes('sóng thần'))) {
+            return true;
+          }
+          if (isMienTrung && (o.region?.toLowerCase().includes('trung') || o.region?.toLowerCase().includes('tây nam bộ') || o.deliveryPoint?.address?.toLowerCase().includes('cần thơ'))) {
+            return true;
+          }
+          return false;
+        });
+      }
+    }
+
     // 2. Lọc theo trạng thái đơn hàng
     if (query.status && (query.status as string) !== 'ALL') {
       const st = (query.status as string).toUpperCase().trim();
@@ -965,8 +1000,13 @@ export class OrdersService implements OnModuleInit {
 
     // 3. Lọc theo đại lý (customerId)
     if (query.customerId && query.customerId !== 'ALL') {
+      const qCust = query.customerId;
+      const qCustNorm = qCust.replace('cust-dl-', 'cust-');
       list = list.filter(
-        (o) => o.customerId === query.customerId || o.customerCode === query.customerId,
+        (o) =>
+          o.customerId === qCust ||
+          o.customerCode === qCust ||
+          (o.customerId && o.customerId.replace('cust-dl-', 'cust-') === qCustNorm),
       );
     }
 
@@ -1536,6 +1576,9 @@ export class OrdersService implements OnModuleInit {
       [OrderApprovalAction.RETURN_FOR_UPDATE]: OrderStatus.RETURNED_FOR_UPDATE,
     };
     order.status = statusByAction[action];
+    if (action === OrderApprovalAction.APPROVE && !order.approvedAt) {
+      order.approvedAt = new Date();
+    }
     order.updatedAt = new Date();
   }
 
@@ -1822,6 +1865,7 @@ export class OrdersService implements OnModuleInit {
       }
 
       const uncancelableStatuses = [
+        OrderStatus.DISPATCHED,
         OrderStatus.SHIPPED,
         OrderStatus.DELIVERED,
         OrderStatus.CLOSED,
@@ -1846,7 +1890,7 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Đơn chờ duyệt chỉ được xử lý qua chức năng xét duyệt.');
     }
-    if (this.databaseService?.isConnected() && dto.status === OrderStatus.SHIPPED) {
+    if (this.databaseService?.isConnected() && (dto.status === OrderStatus.DISPATCHED || dto.status === OrderStatus.SHIPPED)) {
       const reservations = await this.databaseService.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM app_order_inventory_reservations
          WHERE order_id = $1 AND status = 'RESERVED'`,
@@ -1861,6 +1905,66 @@ export class OrdersService implements OnModuleInit {
     const previousStatus = order.status;
     order.status = dto.status;
     order.updatedAt = new Date();
+
+    // Cập nhật các mốc thời gian thực tế theo quy trình SN-199
+    if (dto.status === OrderStatus.PROCESSING) {
+      if (!order.processingAt) order.processingAt = new Date();
+    } else if (dto.status === OrderStatus.DISPATCHED) {
+      if (!order.processingAt) order.processingAt = order.processingAt || new Date();
+      if (!order.dispatchedAt) order.dispatchedAt = new Date();
+      for (const line of order.lines) {
+        if (line.dispatchedQuantity === undefined) {
+          line.dispatchedQuantity = line.quantity;
+        }
+      }
+    } else if (dto.status === OrderStatus.SHIPPED) {
+      if (!order.processingAt) order.processingAt = order.processingAt || new Date();
+      if (!order.dispatchedAt) order.dispatchedAt = order.dispatchedAt || new Date();
+      if (!order.shippedAt) order.shippedAt = new Date();
+      for (const line of order.lines) {
+        if (line.dispatchedQuantity === undefined) {
+          line.dispatchedQuantity = line.quantity;
+        }
+      }
+    } else if (dto.status === OrderStatus.DELIVERED) {
+      if (!order.processingAt) order.processingAt = order.processingAt || new Date();
+      if (!order.dispatchedAt) order.dispatchedAt = order.dispatchedAt || new Date();
+      if (!order.shippedAt) order.shippedAt = order.shippedAt || new Date();
+      if (!order.deliveredAt) order.deliveredAt = new Date();
+    }
+
+    // Cập nhật thông tin giao vận & tài xế nếu có
+    if (dto.carrierName) order.carrierName = dto.carrierName;
+    if (dto.driverName) order.driverName = dto.driverName;
+    if (dto.driverPhone) order.driverPhone = dto.driverPhone;
+    if (dto.licensePlate) order.licensePlate = dto.licensePlate;
+    if (dto.estimatedDeliveryWindow) order.estimatedDeliveryWindow = dto.estimatedDeliveryWindow;
+
+    // Cập nhật số lượng thực tế giao nhận trên từng dòng nếu có dữ liệu xác nhận
+    if (dto.lines && dto.lines.length > 0) {
+      let hasShort = false;
+      for (const lineDto of dto.lines) {
+        const line = order.lines.find(
+          (l) => (lineDto.lineId && l.id === lineDto.lineId) || (lineDto.productId && l.productId === lineDto.productId),
+        );
+        if (line) {
+          if (lineDto.dispatchedQuantity !== undefined) {
+            line.dispatchedQuantity = lineDto.dispatchedQuantity;
+          }
+          if (lineDto.deliveredQuantity !== undefined) {
+            line.deliveredQuantity = lineDto.deliveredQuantity;
+            line.isShortDelivery = lineDto.deliveredQuantity < line.quantity;
+            if (line.isShortDelivery) {
+              hasShort = true;
+              line.shortDeliveryReason = lineDto.shortDeliveryReason || 'Giao thiếu hàng khi nhận tại kho';
+            } else {
+              line.shortDeliveryReason = undefined;
+            }
+          }
+        }
+      }
+      order.isShortDelivery = hasShort || order.lines.some((l) => l.isShortDelivery);
+    }
     if (this.databaseService?.isConnected() && dto.status === OrderStatus.CANCELLED) {
       await this.databaseService.query(
         `UPDATE app_order_inventory_reservations
@@ -2038,7 +2142,9 @@ async findOrdersByCustomer(
   }> {
     const order = await this.findOrderById(orderId);
 
-    if (customerId && order.customerId !== customerId) {
+    const orderCustNorm = order.customerId?.replace('cust-dl-', 'cust-');
+    const paramCustNorm = customerId?.replace('cust-dl-', 'cust-');
+    if (customerId && order.customerId !== customerId && orderCustNorm !== paramCustNorm) {
       throw new BadRequestException('Bạn không có quyền thao tác trên đơn hàng của đại lý khác');
     }
 
@@ -2318,6 +2424,7 @@ async findOrdersByCustomer(
       OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
+      OrderStatus.DISPATCHED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
     ]);
@@ -2443,6 +2550,7 @@ async findOrdersByCustomer(
       OrderStatus.PENDING_INVENTORY_APPROVAL,
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
+      OrderStatus.DISPATCHED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
     ]);

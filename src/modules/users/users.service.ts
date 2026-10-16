@@ -14,6 +14,7 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { UserStatus } from '../../common/enums/user-status.enum';
 import { DatabaseService } from '../../database/database.service';
 import { MailService } from '../mail/mail.service';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import {
   AVATAR_MESSAGES,
   AVATAR_URL_PREFIX,
@@ -168,6 +169,69 @@ export class UsersService implements OnModuleInit {
     }
   }
 
+  public resolveWarehouseInfo(warehouseStr?: string): {
+    warehouseId?: string;
+    warehouseCode?: string;
+    warehouseName?: string;
+  } {
+    if (!warehouseStr || !warehouseStr.trim()) return {};
+    const raw = warehouseStr.trim().toLowerCase();
+
+    // Kho Hà Nội / Miền Bắc
+    if (
+      raw.includes('hà nội') ||
+      raw.includes('ha noi') ||
+      raw.includes('kho-mb') ||
+      raw.includes('miền bắc') ||
+      raw.includes('mien bac') ||
+      raw === '11111111-0000-0000-0000-000000000002'
+    ) {
+      return {
+        warehouseId: '11111111-0000-0000-0000-000000000002',
+        warehouseCode: 'KHO-MB-01',
+        warehouseName: 'Kho Phân Phối Hà Nội',
+      };
+    }
+
+    // Kho Vùng Tây Nam Bộ / Miền Trung / Cần Thơ
+    if (
+      raw.includes('tây nam bộ') ||
+      raw.includes('tay nam bo') ||
+      raw.includes('kho-mt') ||
+      raw.includes('miền trung') ||
+      raw.includes('mien trung') ||
+      raw.includes('cần thơ') ||
+      raw.includes('can tho') ||
+      raw === '11111111-0000-0000-0000-000000000003'
+    ) {
+      return {
+        warehouseId: '11111111-0000-0000-0000-000000000003',
+        warehouseCode: 'KHO-MT-01',
+        warehouseName: 'Kho Vùng Tây Nam Bộ',
+      };
+    }
+
+    // Kho Tổng Miền Nam
+    if (
+      raw.includes('miền nam') ||
+      raw.includes('mien nam') ||
+      raw.includes('loha wh01') ||
+      raw.includes('wh01') ||
+      raw.includes('sóng thần') ||
+      raw.includes('song than') ||
+      raw === '11111111-0000-0000-0000-000000000001' ||
+      raw === '11111111-0000-4000-8000-000000000001'
+    ) {
+      return {
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseCode: 'WH01',
+        warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+      };
+    }
+
+    return {};
+  }
+
   private seedInitialUsersSync(): void {
     const defaultPassword = '123456';
     const passwordHash = bcrypt.hashSync(defaultPassword, BCRYPT_SALT_ROUNDS);
@@ -299,9 +363,63 @@ export class UsersService implements OnModuleInit {
         failedAttempts: 0,
         lockedUntil: null,
       },
+      {
+        id: 'usr-dealer-007',
+        email: 'dealer@loha.vn',
+        username: 'dealer',
+        fullName: 'Đại Lý Cửa Hàng Minh Khang',
+        phone: '0901234561',
+        role: UserRole.CUSTOMER,
+        roles: [UserRole.CUSTOMER],
+        status: UserStatus.ACTIVE,
+        customerId: 'cust-001',
+        customerCode: 'DL-0001',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
+      {
+        id: 'usr-dealer-008',
+        email: 'daily@loha.vn',
+        username: 'daily',
+        fullName: 'Đại Lý Bán Buôn An Bình',
+        phone: '0901234562',
+        role: UserRole.CUSTOMER,
+        roles: [UserRole.CUSTOMER],
+        status: UserStatus.ACTIVE,
+        customerId: 'cust-dl-0002',
+        customerCode: 'DL-0002',
+        passwordHash,
+        failedAttempts: 0,
+        lockedUntil: null,
+      },
     ];
 
+    const deletedSet = this.loadDeletedUsersFromDisk();
     for (const user of initialUsers) {
+      if (
+        (user.id && deletedSet.has(user.id.toLowerCase())) ||
+        (user.username && deletedSet.has(user.username.toLowerCase())) ||
+        (user.email && deletedSet.has(user.email.toLowerCase()))
+      ) {
+        continue;
+      }
+      if (!user.id) continue;
+      const whInfo = this.resolveWarehouseInfo(user.assignedWarehouse);
+      if (whInfo.warehouseId) {
+        user.warehouseId = whInfo.warehouseId;
+        user.assignedWarehouseId = whInfo.warehouseId;
+        user.warehouseCode = whInfo.warehouseCode;
+        user.assignedWarehouseCode = whInfo.warehouseCode;
+        user.warehouses = [
+          {
+            id: whInfo.warehouseId,
+            code: whInfo.warehouseCode || '',
+            name: whInfo.warehouseName || user.assignedWarehouse || '',
+            isPrimary: true,
+          },
+        ];
+      }
       const entity = new UserEntity(user);
       this.users.set(entity.id, entity);
     }
@@ -321,6 +439,63 @@ export class UsersService implements OnModuleInit {
     return path.join(dataDir, 'users.json');
   }
 
+  private getDeletedUsersFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'deleted_users.json');
+  }
+
+  private loadDeletedUsersFromDisk(): Set<string> {
+    try {
+      const filePath = this.getDeletedUsersFilePath();
+      if (!fs.existsSync(filePath)) return new Set();
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return new Set();
+      const list: Array<{ id?: string; username?: string; email?: string }> = JSON.parse(content);
+      const set = new Set<string>();
+      for (const item of list) {
+        if (item.id) set.add(item.id.toLowerCase());
+        if (item.username) set.add(item.username.toLowerCase());
+        if (item.email) set.add(item.email.toLowerCase());
+      }
+      return set;
+    } catch {
+      return new Set();
+    }
+  }
+
+  private recordDeletedUser(user: { id: string; username: string; email: string }): void {
+    try {
+      const filePath = this.getDeletedUsersFilePath();
+      let list: Array<{ id: string; username: string; email: string; deletedAt: string }> = [];
+      if (fs.existsSync(filePath)) {
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          if (content.trim()) {
+            list = JSON.parse(content);
+          }
+        } catch {}
+      }
+      list = list.filter(
+        (u) =>
+          u.id.toLowerCase() !== user.id.toLowerCase() &&
+          u.username.toLowerCase() !== user.username.toLowerCase() &&
+          u.email.toLowerCase() !== user.email.toLowerCase(),
+      );
+      list.push({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        deletedAt: new Date().toISOString(),
+      });
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[USERS_SERVICE] Lỗi ghi nhận deleted_users.json:', err);
+    }
+  }
+
   private loadUsersFromDisk(): void {
     try {
       const filePath = this.getStorageFilePath();
@@ -328,6 +503,7 @@ export class UsersService implements OnModuleInit {
       const content = fs.readFileSync(filePath, 'utf-8');
       if (!content.trim()) return;
       const rawList: Array<Partial<UserEntity>> = JSON.parse(content);
+      const deletedSet = this.loadDeletedUsersFromDisk();
       
       const isMock = (fullName?: string, username?: string) => {
         if (!fullName && !username) return false;
@@ -341,9 +517,14 @@ export class UsersService implements OnModuleInit {
         );
       };
 
-      // Dọn sạch các user mock khỏi Map
+      // Dọn sạch các user mock hoặc user đã bị xóa khỏi Map
       for (const [id, u] of this.users.entries()) {
-        if (isMock(u.fullName, u.username)) {
+        if (
+          isMock(u.fullName, u.username) ||
+          deletedSet.has(id.toLowerCase()) ||
+          deletedSet.has(u.username.toLowerCase()) ||
+          deletedSet.has(u.email.toLowerCase())
+        ) {
           this.users.delete(id);
         }
       }
@@ -351,6 +532,33 @@ export class UsersService implements OnModuleInit {
       for (const item of rawList) {
         if (!item.id) continue;
         if (isMock(item.fullName, item.username)) continue;
+        if (
+          deletedSet.has(item.id.toLowerCase()) ||
+          (item.username && deletedSet.has(item.username.toLowerCase())) ||
+          (item.email && deletedSet.has(item.email.toLowerCase()))
+        ) {
+          continue;
+        }
+        const whInfo = this.resolveWarehouseInfo(
+          item.assignedWarehouse || (item as any).warehouseName || item.warehouseCode,
+        );
+        if (whInfo.warehouseId) {
+          item.warehouseId = item.warehouseId || whInfo.warehouseId;
+          item.assignedWarehouseId = item.assignedWarehouseId || whInfo.warehouseId;
+          item.warehouseCode = item.warehouseCode || whInfo.warehouseCode;
+          item.assignedWarehouseCode = item.assignedWarehouseCode || whInfo.warehouseCode;
+          if (!item.warehouses || item.warehouses.length === 0) {
+            item.warehouses = [
+              {
+                id: whInfo.warehouseId,
+                code: whInfo.warehouseCode || '',
+                name: whInfo.warehouseName || item.assignedWarehouse || '',
+                isPrimary: true,
+              },
+            ];
+          }
+        }
+
         const existing = this.users.get(item.id);
         if (existing) {
           Object.assign(existing, {
@@ -393,15 +601,67 @@ export class UsersService implements OnModuleInit {
         locked_until: Date | null;
         created_at: Date;
         updated_at: Date;
+        warehouse_id?: string;
+        warehouse_name?: string;
+        warehouse_code?: string;
       }>(
         `SELECT u.id, u.username, u.email, u.password_hash, u.full_name, u.phone,
                 r.code as role_code, u.status, u.failed_attempts, u.locked_until,
-                u.created_at, u.updated_at
+                u.created_at, u.updated_at,
+                COALESCE(w.id, wm.id) AS warehouse_id,
+                COALESCE(w.name, wm.name) AS warehouse_name,
+                COALESCE(w.code, wm.code) AS warehouse_code
          FROM users u
-         JOIN roles r ON u.role_id = r.id;`,
+         JOIN roles r ON u.role_id = r.id
+         LEFT JOIN user_warehouses uw ON uw.user_id = u.id AND uw.is_primary = true
+         LEFT JOIN warehouses w ON w.id = uw.warehouse_id
+         LEFT JOIN warehouses wm ON wm.manager_id = u.id;`,
       );
 
+      const deletedSet = this.loadDeletedUsersFromDisk();
+
       for (const row of rows) {
+        if (
+          deletedSet.has(row.id.toLowerCase()) ||
+          deletedSet.has(row.username.toLowerCase()) ||
+          deletedSet.has(row.email.toLowerCase())
+        ) {
+          // Xóa triệt để khỏi PostgreSQL nếu còn tồn tại
+          try {
+            await this.dbService.query(`DELETE FROM refresh_tokens WHERE user_id = $1::uuid OR user_id::text = $1`, [row.id]);
+            await this.dbService.query(`DELETE FROM user_warehouses WHERE user_id = $1::uuid OR user_id::text = $1`, [row.id]);
+            await this.dbService.query(`UPDATE warehouses SET manager_id = NULL WHERE manager_id = $1::uuid OR manager_id::text = $1`, [row.id]);
+            await this.dbService.query(`DELETE FROM audit_logs WHERE user_id = $1::uuid OR user_id::text = $1`, [row.id]);
+            await this.dbService.query(`DELETE FROM users WHERE id = $1::uuid OR id::text = $1`, [row.id]);
+          } catch {}
+          continue;
+        }
+
+        const warehouseStr = row.warehouse_name
+          ? (row.warehouse_name.includes(row.warehouse_code || '')
+              ? row.warehouse_name
+              : `${row.warehouse_name} - ${row.warehouse_code}`)
+          : undefined;
+
+        const whInfo = this.resolveWarehouseInfo(
+          row.warehouse_name || warehouseStr || row.warehouse_code,
+        );
+
+        const warehouseId = row.warehouse_id || whInfo.warehouseId || undefined;
+        const warehouseCode = row.warehouse_code || whInfo.warehouseCode || undefined;
+        const warehouseName = row.warehouse_name || whInfo.warehouseName || warehouseStr || undefined;
+
+        // Xóa mọi bản ghi cũ trong Map có cùng username hoặc email nhưng id khác (tránh duplicate theo username/email nhưng khác ID)
+        for (const [existingId, existingUser] of this.users.entries()) {
+          if (
+            existingId !== row.id &&
+            (existingUser.username.toLowerCase() === row.username.toLowerCase() ||
+             existingUser.email.toLowerCase() === row.email.toLowerCase())
+          ) {
+            this.users.delete(existingId);
+          }
+        }
+
         const entity = new UserEntity({
           id: row.id,
           username: row.username,
@@ -411,6 +671,21 @@ export class UsersService implements OnModuleInit {
           role: (row.role_code as UserRole) || UserRole.SALES_REP,
           roles: [(row.role_code as UserRole) || UserRole.SALES_REP],
           status: (row.status as UserStatus) || UserStatus.ACTIVE,
+          assignedWarehouse: warehouseStr || warehouseName,
+          warehouseId,
+          assignedWarehouseId: warehouseId,
+          warehouseCode,
+          assignedWarehouseCode: warehouseCode,
+          warehouses: warehouseId
+            ? [
+                {
+                  id: warehouseId,
+                  code: warehouseCode || '',
+                  name: warehouseName || '',
+                  isPrimary: true,
+                },
+              ]
+            : [],
           passwordHash: row.password_hash,
           failedAttempts: row.failed_attempts || 0,
           lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
@@ -423,6 +698,7 @@ export class UsersService implements OnModuleInit {
       console.warn('[USERS_SERVICE] Lỗi nạp users từ PostgreSQL:', err);
     }
   }
+
 
   public async saveUserToDatabase(user: UserEntity): Promise<void> {
     if (!this.dbService?.isConnected()) return;
@@ -461,10 +737,62 @@ export class UsersService implements OnModuleInit {
           user.status,
         ],
       );
+
+      // Đồng bộ phân kho vào user_warehouses nếu có thông tin kho
+      if (user.assignedWarehouse) {
+        try {
+          const rawWh = user.assignedWarehouse.trim();
+          const whRows = await this.dbService.query<{ id: string; code: string; name: string }>(
+            `SELECT id, code, name FROM warehouses
+             WHERE id::text = $1
+                OR code = $1
+                OR name = $1
+                OR $1 ILIKE '%' || code || '%'
+                OR $1 ILIKE '%' || name || '%'
+             LIMIT 1`,
+            [rawWh],
+          );
+          if (whRows[0]) {
+            user.warehouseId = whRows[0].id;
+            user.assignedWarehouseId = whRows[0].id;
+            user.warehouseCode = whRows[0].code;
+            user.assignedWarehouseCode = whRows[0].code;
+            user.warehouses = [
+              {
+                id: whRows[0].id,
+                code: whRows[0].code,
+                name: whRows[0].name,
+                isPrimary: true,
+              },
+            ];
+
+            await this.dbService.query(
+              `INSERT INTO user_warehouses (user_id, warehouse_id, is_primary)
+               VALUES ($1, $2, true)
+               ON CONFLICT (user_id, warehouse_id) DO UPDATE SET is_primary = true`,
+              [userId, whRows[0].id],
+            );
+
+            // Nếu người dùng có vai trò Quản lý kho, cập nhật làm manager_id của kho
+            const isManager =
+              user.roles?.includes(UserRole.WAREHOUSE_MANAGER) ||
+              user.role === UserRole.WAREHOUSE_MANAGER;
+            if (isManager) {
+              await this.dbService.query(
+                `UPDATE warehouses SET manager_id = $1 WHERE id = $2`,
+                [userId, whRows[0].id],
+              );
+            }
+          }
+        } catch (whErr) {
+          console.warn('[USERS_SERVICE] Lỗi gán kho trong user_warehouses:', whErr);
+        }
+      }
     } catch (dbErr) {
       console.warn('[USERS_SERVICE] Lỗi lưu user vào PostgreSQL:', dbErr);
     }
   }
+
 
   /**
    * Quét thư mục uploads/avatars/ và khôi phục avatarUrl cho user dựa trên tên file.
@@ -732,6 +1060,7 @@ export class UsersService implements OnModuleInit {
     const passwordHash = await bcrypt.hash(rawPassword, saltRounds);
 
 
+    const whInfo = this.resolveWarehouseInfo(dto.assignedWarehouse);
     const newUser = new UserEntity({
       id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       username,
@@ -742,6 +1071,20 @@ export class UsersService implements OnModuleInit {
       roles,
       status: UserStatus.ACTIVE,
       assignedWarehouse: dto.assignedWarehouse?.trim(),
+      warehouseId: whInfo.warehouseId,
+      assignedWarehouseId: whInfo.warehouseId,
+      warehouseCode: whInfo.warehouseCode,
+      assignedWarehouseCode: whInfo.warehouseCode,
+      warehouses: whInfo.warehouseId
+        ? [
+            {
+              id: whInfo.warehouseId,
+              code: whInfo.warehouseCode || '',
+              name: whInfo.warehouseName || dto.assignedWarehouse?.trim() || '',
+              isPrimary: true,
+            },
+          ]
+        : [],
       passwordHash,
       failedAttempts: 0,
       lockedUntil: null,
@@ -920,6 +1263,21 @@ export class UsersService implements OnModuleInit {
 
     if (dto.assignedWarehouse !== undefined) {
       user.assignedWarehouse = dto.assignedWarehouse.trim();
+      const whInfo = this.resolveWarehouseInfo(user.assignedWarehouse);
+      user.warehouseId = whInfo.warehouseId;
+      user.assignedWarehouseId = whInfo.warehouseId;
+      user.warehouseCode = whInfo.warehouseCode;
+      user.assignedWarehouseCode = whInfo.warehouseCode;
+      user.warehouses = whInfo.warehouseId
+        ? [
+            {
+              id: whInfo.warehouseId,
+              code: whInfo.warehouseCode || '',
+              name: whInfo.warehouseName || user.assignedWarehouse || '',
+              isPrimary: true,
+            },
+          ]
+        : [];
     }
 
     if (dto.password) {
@@ -1342,6 +1700,173 @@ export class UsersService implements OnModuleInit {
     }
 
     return true;
+  }
+
+  /**
+   * Xóa vĩnh viễn tài khoản người dùng khỏi hệ thống & cơ sở dữ liệu
+   */
+  async deleteUser(
+    id: string,
+    currentUser?: ICurrentUser,
+  ): Promise<{ success: boolean; message: string; deletedId: string }> {
+    const rawNormalized = (id || '').trim().toLowerCase();
+    let targetUser: UserEntity | null = null;
+    for (const u of this.users.values()) {
+      if (
+        u.id.toLowerCase() === rawNormalized ||
+        u.username.toLowerCase() === rawNormalized ||
+        u.email.toLowerCase() === rawNormalized
+      ) {
+        targetUser = u;
+        break;
+      }
+    }
+
+    if (!targetUser && this.dbService?.isConnected()) {
+      try {
+        const rows = await this.dbService.query<{
+          id: string;
+          username: string;
+          email: string;
+          full_name: string;
+        }>(
+          `SELECT id, username, email, full_name FROM users WHERE id::text = $1 OR LOWER(email) = $2 OR LOWER(username) = $3`,
+          [id, rawNormalized, rawNormalized],
+        );
+        if (rows.length > 0) {
+          targetUser = new UserEntity({
+            id: rows[0].id,
+            username: rows[0].username,
+            email: rows[0].email,
+            fullName: rows[0].full_name,
+            role: UserRole.SALES_REP,
+            status: UserStatus.ACTIVE,
+          });
+        }
+      } catch {}
+    }
+
+    if (!targetUser) {
+      throw new NotFoundException(`Không tìm thấy tài khoản người dùng với mã ID "${id}"`);
+    }
+
+    if (
+      currentUser &&
+      (currentUser.userId === targetUser.id ||
+        currentUser.username?.toLowerCase() === targetUser.username.toLowerCase())
+    ) {
+      throw new BadRequestException('Bạn không thể tự xóa tài khoản của chính mình');
+    }
+
+    const targetUserId = targetUser.id;
+
+    // Ghi nhận vào danh sách xóa vĩnh viễn (tombstone) để không bao giờ bị khôi phục lại khi restart backend
+    this.recordDeletedUser({
+      id: targetUserId,
+      username: targetUser.username,
+      email: targetUser.email,
+    });
+
+    // 1. Xóa khỏi in-memory Map & file disk
+    this.users.delete(targetUserId);
+    this.users.delete(targetUser.id);
+    this.saveUsersToDisk();
+
+    // 2. Xóa triệt để khỏi database
+    if (this.dbService?.isConnected()) {
+      try {
+        // Tìm toàn bộ ID liên quan trong DB
+        const dbUserIds: string[] = [targetUserId, targetUser.id];
+        try {
+          const pgUsers = await this.dbService.query<{ id: string }>(
+            `SELECT id FROM users WHERE id::text = $1 OR LOWER(email) = $2 OR LOWER(username) = $3`,
+            [targetUserId, targetUser.email.toLowerCase(), targetUser.username.toLowerCase()],
+          );
+          for (const pu of pgUsers) {
+            dbUserIds.push(pu.id);
+            this.recordDeletedUser({
+              id: pu.id,
+              username: targetUser.username,
+              email: targetUser.email,
+            });
+          }
+        } catch {}
+
+        const uniqueUids = Array.from(new Set(dbUserIds.filter(Boolean)));
+
+        for (const uid of uniqueUids) {
+          try {
+            await this.dbService.query(
+              `DELETE FROM refresh_tokens WHERE user_id = $1::uuid OR user_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `DELETE FROM user_warehouses WHERE user_id = $1::uuid OR user_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `UPDATE warehouses SET manager_id = NULL WHERE manager_id = $1::uuid OR manager_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `DELETE FROM order_approvals WHERE approver_id = $1::uuid OR approver_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `DELETE FROM audit_logs WHERE user_id = $1::uuid OR user_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `UPDATE customers SET sales_rep_id = NULL WHERE sales_rep_id = $1::uuid OR sales_rep_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `UPDATE customers SET user_id = NULL WHERE user_id = $1::uuid OR user_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `UPDATE orders SET sales_rep_id = NULL WHERE sales_rep_id = $1::uuid OR sales_rep_id::text = $1`,
+              [uid],
+            );
+          } catch {}
+          try {
+            await this.dbService.query(
+              `DELETE FROM users WHERE id = $1::uuid OR id::text = $1`,
+              [uid],
+            );
+          } catch {}
+        }
+
+        try {
+          await this.dbService.query(
+            `DELETE FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $2`,
+            [targetUser.email.toLowerCase(), targetUser.username.toLowerCase()],
+          );
+        } catch {}
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi xóa user khỏi DB:', err);
+      }
+    }
+
+    return {
+      success: true,
+      message: `Đã xóa vĩnh viễn tài khoản ${targetUser.fullName} (${targetUser.username}) khỏi hệ thống và cơ sở dữ liệu`,
+      deletedId: targetUserId,
+    };
   }
 
   /**

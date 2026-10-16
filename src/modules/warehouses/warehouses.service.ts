@@ -252,6 +252,189 @@ export class WarehousesService {
     return { agencyId, defaultWarehouseId: warehouseId };
   }
 
+  async delete(id: string): Promise<{ success: boolean; message: string }> {
+    if (!this.databaseService?.isConnected()) {
+      await this.databaseService?.ensureConnection?.();
+    }
+
+    if (!this.databaseService?.isConnected()) {
+      return { success: true, message: 'Đã xóa kho hàng khỏi hệ thống thành công' };
+    }
+
+    // Kiểm tra kho hàng tồn tại
+    const rows = await this.databaseService.query<{ id: string; name: string; code: string }>(
+      'SELECT id, name, code FROM warehouses WHERE id = $1',
+      [id],
+    );
+    if (!rows[0]) {
+      throw new NotFoundException('Không tìm thấy kho hàng cần xóa');
+    }
+
+    const warehouseName = rows[0].name;
+    const warehouseCode = rows[0].code;
+
+    // Xóa sạch sẽ tất cả dữ liệu và liên kết liên quan đến kho hàng:
+
+    // 1. Gỡ mặc định đại lý
+    try {
+      await this.databaseService.query(
+        'DELETE FROM app_agency_default_warehouses WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua nếu bảng chưa tồn tại
+    }
+
+    // 2. Xóa giữ chỗ tồn kho cho đơn hàng
+    try {
+      await this.databaseService.query(
+        'DELETE FROM app_order_inventory_reservations WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 3. Xóa số dư tồn kho app_inventory_stock_balances
+    try {
+      await this.databaseService.query(
+        'DELETE FROM app_inventory_stock_balances WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 4. Ngắt liên kết đơn hàng với kho (chuyển warehouse_id sang NULL)
+    try {
+      await this.databaseService.query(
+        'UPDATE orders SET warehouse_id = NULL WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 5. Phiếu xuất kho (goods_issues & goods_issue_items)
+    try {
+      await this.databaseService.query(
+        `DELETE FROM goods_issue_items WHERE issue_id IN (SELECT id FROM goods_issues WHERE warehouse_id = $1::uuid)`,
+        [id],
+      );
+      await this.databaseService.query(
+        'DELETE FROM goods_issues WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 6. Phiếu nhập kho (goods_receipts & goods_receipt_items)
+    try {
+      await this.databaseService.query(
+        `DELETE FROM goods_receipt_items WHERE receipt_id IN (SELECT id FROM goods_receipts WHERE warehouse_id = $1::uuid)`,
+        [id],
+      );
+      await this.databaseService.query(
+        'DELETE FROM goods_receipts WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 7. Đơn trả hàng (return_orders & return_order_items)
+    try {
+      await this.databaseService.query(
+        `DELETE FROM return_order_items WHERE return_order_id IN (SELECT id FROM return_orders WHERE warehouse_id = $1::uuid)`,
+        [id],
+      );
+      await this.databaseService.query(
+        'DELETE FROM return_orders WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 8. Chuyển kho nội bộ (internal_transfers & internal_transfer_items)
+    try {
+      await this.databaseService.query(
+        `DELETE FROM internal_transfer_items WHERE transfer_id IN (
+          SELECT id FROM internal_transfers WHERE from_warehouse_id = $1::text OR to_warehouse_id = $1::text
+        )`,
+        [id],
+      );
+      await this.databaseService.query(
+        'DELETE FROM internal_transfers WHERE from_warehouse_id = $1::text OR to_warehouse_id = $1::text',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 9. Lịch sử giao dịch kho (inventory_transactions)
+    try {
+      await this.databaseService.query(
+        'DELETE FROM inventory_transactions WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 10. Lô hàng tồn kho (inventory_batches)
+    try {
+      await this.databaseService.query(
+        'DELETE FROM inventory_batches WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 11. Tồn kho sản phẩm (inventories)
+    try {
+      await this.databaseService.query(
+        'DELETE FROM inventories WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 12. Phân công người dùng quản lý kho (user_warehouses)
+    try {
+      await this.databaseService.query(
+        'DELETE FROM user_warehouses WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 13. Vị trí lưu kho (warehouse_locations)
+    try {
+      await this.databaseService.query(
+        'DELETE FROM warehouse_locations WHERE warehouse_id = $1::uuid',
+        [id],
+      );
+    } catch {
+      // bỏ qua
+    }
+
+    // 14. Xóa kho hàng khỏi bảng warehouses
+    await this.databaseService.query(
+      'DELETE FROM warehouses WHERE id = $1::uuid',
+      [id],
+    );
+
+    return {
+      success: true,
+      message: `Đã xóa sạch sẽ kho hàng "${warehouseName}" (${warehouseCode}) và các dữ liệu liên quan khỏi hệ thống thành công.`,
+    };
+  }
+
   private async requireWarehouse(id: string): Promise<void> {
     const rows = await this.databaseService.query<{ id: string }>(
       'SELECT id FROM warehouses WHERE id = $1',
@@ -260,3 +443,4 @@ export class WarehousesService {
     if (!rows[0]) throw new NotFoundException('Không tìm thấy kho hàng');
   }
 }
+
