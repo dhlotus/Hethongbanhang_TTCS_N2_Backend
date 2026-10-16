@@ -2745,4 +2745,43 @@ async findOrdersByCustomer(
       items,
     };
   }
+
+  /**
+   * Cập nhật trạng thái đơn hàng khi đưa vào phiếu soạn hàng kho (SN-186)
+   */
+  async updatePickingStatus(
+    id: string,
+    status: OrderStatus,
+    pickingSheetCode?: string,
+  ): Promise<OrderEntity> {
+    const order = await this.findOrderById(id);
+    if (!order) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng với ID: ${id}`);
+    }
+
+    const validTransitions: OrderStatus[] = [
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.DISPATCHED,
+    ];
+
+    if (!validTransitions.includes(status)) {
+      throw new BadRequestException(
+        `Trạng thái ${status} không hợp lệ cho quy trình soạn hàng kho.`,
+      );
+    }
+
+    if (this.databaseService && this.databaseService.isConnected()) {
+      await this.databaseService.query(
+        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+        [status, id],
+      );
+    }
+
+    order.status = status;
+    order.updatedAt = new Date();
+    this.orders.set(order.id, order);
+
+    return order;
+  }
 }
