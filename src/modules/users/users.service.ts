@@ -177,7 +177,7 @@ export class UsersService implements OnModuleInit {
     if (!warehouseStr || !warehouseStr.trim()) return {};
     const raw = warehouseStr.trim().toLowerCase();
 
-    // Kho Hà Nội / Miền Bắc
+    // 1. Kho Miền Bắc (Hà Nội)
     if (
       raw.includes('hà nội') ||
       raw.includes('ha noi') ||
@@ -189,34 +189,53 @@ export class UsersService implements OnModuleInit {
       return {
         warehouseId: '11111111-0000-0000-0000-000000000002',
         warehouseCode: 'KHO-MB-01',
-        warehouseName: 'Kho Phân Phối Hà Nội',
+        warehouseName: 'Kho Miền Bắc (Hà Nội)',
       };
     }
 
-    // Kho Vùng Tây Nam Bộ / Miền Trung / Cần Thơ
+    // 2. Kho Miền Trung (Đà Nẵng)
     if (
-      raw.includes('tây nam bộ') ||
-      raw.includes('tay nam bo') ||
+      raw.includes('đà nẵng') ||
+      raw.includes('da nang') ||
       raw.includes('kho-mt') ||
       raw.includes('miền trung') ||
       raw.includes('mien trung') ||
+      raw === '11111111-0000-0000-0000-000000000004'
+    ) {
+      return {
+        warehouseId: '11111111-0000-0000-0000-000000000004',
+        warehouseCode: 'KHO-MT-01',
+        warehouseName: 'Kho Miền Trung (Đà Nẵng)',
+      };
+    }
+
+    // 3. Kho Miền Tây (Cần Thơ)
+    if (
+      raw.includes('tây nam bộ') ||
+      raw.includes('tay nam bo') ||
+      raw.includes('miền tây') ||
+      raw.includes('mien tay') ||
+      raw.includes('kho-west') ||
       raw.includes('cần thơ') ||
       raw.includes('can tho') ||
       raw === '11111111-0000-0000-0000-000000000003'
     ) {
       return {
         warehouseId: '11111111-0000-0000-0000-000000000003',
-        warehouseCode: 'KHO-MT-01',
-        warehouseName: 'Kho Vùng Tây Nam Bộ',
+        warehouseCode: 'KHO-WEST-01',
+        warehouseName: 'Kho Miền Tây (Cần Thơ)',
       };
     }
 
-    // Kho Tổng Miền Nam
+    // 4. Kho Miền Nam (TP. Hồ Chí Minh)
     if (
       raw.includes('miền nam') ||
       raw.includes('mien nam') ||
       raw.includes('loha wh01') ||
       raw.includes('wh01') ||
+      raw.includes('kho-mn') ||
+      raw.includes('hồ chí minh') ||
+      raw.includes('ho chi minh') ||
       raw.includes('sóng thần') ||
       raw.includes('song than') ||
       raw === '11111111-0000-0000-0000-000000000001' ||
@@ -224,8 +243,18 @@ export class UsersService implements OnModuleInit {
     ) {
       return {
         warehouseId: '11111111-0000-0000-0000-000000000001',
-        warehouseCode: 'WH01',
-        warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+        warehouseCode: 'KHO-MN-01',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+      };
+    }
+
+    if (
+      /^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(raw)
+    ) {
+      return {
+        warehouseId: raw,
+        warehouseCode: raw,
+        warehouseName: raw,
       };
     }
 
@@ -585,9 +614,59 @@ export class UsersService implements OnModuleInit {
     }
   }
 
-  private async loadUsersFromDatabase(): Promise<void> {
+  public async loadUsersFromDatabase(): Promise<void> {
     if (!this.dbService?.isConnected()) return;
     try {
+      // 1. Nạp danh sách quan hệ phân quyền kho từ user_warehouses kèm thông tin kho
+      const uwRows = await this.dbService.query<{
+        user_id: string;
+        warehouse_id: string;
+        is_primary: boolean;
+        warehouse_code: string;
+        warehouse_name: string;
+      }>(
+        `SELECT uw.user_id, uw.warehouse_id, uw.is_primary, w.code AS warehouse_code, w.name AS warehouse_name
+         FROM user_warehouses uw
+         JOIN warehouses w ON w.id = uw.warehouse_id
+         ORDER BY uw.is_primary DESC, w.code ASC;`,
+      );
+      const userWarehousesMap = new Map<
+        string,
+        Array<{ id: string; code: string; name: string; isPrimary: boolean }>
+      >();
+      for (const uw of uwRows) {
+        const list = userWarehousesMap.get(uw.user_id) || [];
+        list.push({
+          id: uw.warehouse_id,
+          code: uw.warehouse_code,
+          name: uw.warehouse_name,
+          isPrimary: uw.is_primary,
+        });
+        userWarehousesMap.set(uw.user_id, list);
+      }
+
+      // Nạp thêm các kho mà user đang được gán trực tiếp làm manager_id
+      try {
+        const mgrRows = await this.dbService.query<{
+          manager_id: string;
+          id: string;
+          code: string;
+          name: string;
+        }>(`SELECT manager_id, id, code, name FROM warehouses WHERE manager_id IS NOT NULL;`);
+        for (const m of mgrRows) {
+          const list = userWarehousesMap.get(m.manager_id) || [];
+          if (!list.some((w) => w.id === m.id)) {
+            list.push({
+              id: m.id,
+              code: m.code,
+              name: m.name,
+              isPrimary: list.length === 0,
+            });
+            userWarehousesMap.set(m.manager_id, list);
+          }
+        }
+      } catch {}
+
       const rows = await this.dbService.query<{
         id: string;
         username: string;
@@ -637,19 +716,78 @@ export class UsersService implements OnModuleInit {
           continue;
         }
 
-        const warehouseStr = row.warehouse_name
-          ? (row.warehouse_name.includes(row.warehouse_code || '')
-              ? row.warehouse_name
-              : `${row.warehouse_name} - ${row.warehouse_code}`)
+        const isManager =
+          row.role_code === 'WAREHOUSE_MANAGER' || row.role_code === 'WH_MANAGER';
+        const isKeeper =
+          row.role_code === 'WAREHOUSE_KEEPER' || row.role_code === 'WAREHOUSE';
+
+        const userWhList = userWarehousesMap.get(row.id) || [];
+        let assignedWarehouses: Array<{
+          id: string;
+          code: string;
+          name: string;
+          isPrimary?: boolean;
+        }> = [];
+        let warehouseIds: string[] = [];
+        let warehouseId: string | undefined = undefined;
+        let warehouseCode: string | undefined = undefined;
+        let warehouseName: string | undefined = undefined;
+
+        if (isKeeper) {
+          // QUAN HỆ 1 - 1 (One-to-One): Thủ kho bám sát duy nhất 1 kho tác nghiệp
+          const single = userWhList.find((w) => w.isPrimary) || userWhList[0];
+          if (single) {
+            assignedWarehouses = [{ ...single, isPrimary: true }];
+            warehouseIds = [single.id];
+            warehouseId = single.id;
+            warehouseCode = single.code;
+            warehouseName = single.name;
+          }
+        } else if (isManager) {
+          // QUAN HỆ N - N (Many-to-Many): Quản lý kho giám sát nhiều kho cùng lúc
+          assignedWarehouses = userWhList;
+          warehouseIds = userWhList.map((w) => w.id);
+          const prim = userWhList.find((w) => w.isPrimary) || userWhList[0];
+          if (prim) {
+            warehouseId = prim.id;
+            warehouseCode = prim.code;
+            warehouseName = prim.name;
+          }
+        } else if (userWhList.length > 0) {
+          assignedWarehouses = userWhList;
+          warehouseIds = userWhList.map((w) => w.id);
+          const prim = userWhList.find((w) => w.isPrimary) || userWhList[0];
+          if (prim) {
+            warehouseId = prim.id;
+            warehouseCode = prim.code;
+            warehouseName = prim.name;
+          }
+        }
+
+        // Fallback resolve nếu chưa có trong user_warehouses
+        if (!warehouseId && (row.warehouse_name || row.warehouse_code || row.warehouse_id)) {
+          const whInfo = this.resolveWarehouseInfo(
+            row.warehouse_name || row.warehouse_code || row.warehouse_id,
+          );
+          if (whInfo.warehouseId) {
+            warehouseId = whInfo.warehouseId;
+            warehouseCode = whInfo.warehouseCode;
+            warehouseName = whInfo.warehouseName;
+            assignedWarehouses = [
+              {
+                id: whInfo.warehouseId,
+                code: whInfo.warehouseCode || '',
+                name: whInfo.warehouseName || '',
+                isPrimary: true,
+              },
+            ];
+            warehouseIds = [whInfo.warehouseId];
+          }
+        }
+
+        const warehouseStr = warehouseName
+          ? warehouseName
           : undefined;
-
-        const whInfo = this.resolveWarehouseInfo(
-          row.warehouse_name || warehouseStr || row.warehouse_code,
-        );
-
-        const warehouseId = row.warehouse_id || whInfo.warehouseId || undefined;
-        const warehouseCode = row.warehouse_code || whInfo.warehouseCode || undefined;
-        const warehouseName = row.warehouse_name || whInfo.warehouseName || warehouseStr || undefined;
 
         // Xóa mọi bản ghi cũ trong Map có cùng username hoặc email nhưng id khác (tránh duplicate theo username/email nhưng khác ID)
         for (const [existingId, existingUser] of this.users.entries()) {
@@ -671,21 +809,13 @@ export class UsersService implements OnModuleInit {
           role: (row.role_code as UserRole) || UserRole.SALES_REP,
           roles: [(row.role_code as UserRole) || UserRole.SALES_REP],
           status: (row.status as UserStatus) || UserStatus.ACTIVE,
-          assignedWarehouse: warehouseStr || warehouseName,
+          assignedWarehouse: warehouseStr,
           warehouseId,
           assignedWarehouseId: warehouseId,
           warehouseCode,
           assignedWarehouseCode: warehouseCode,
-          warehouses: warehouseId
-            ? [
-                {
-                  id: warehouseId,
-                  code: warehouseCode || '',
-                  name: warehouseName || '',
-                  isPrimary: true,
-                },
-              ]
-            : [],
+          warehouseIds,
+          warehouses: assignedWarehouses,
           passwordHash: row.password_hash,
           failedAttempts: row.failed_attempts || 0,
           lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
@@ -738,55 +868,85 @@ export class UsersService implements OnModuleInit {
         ],
       );
 
-      // Đồng bộ phân kho vào user_warehouses nếu có thông tin kho
-      if (user.assignedWarehouse) {
-        try {
-          const rawWh = user.assignedWarehouse.trim();
-          const whRows = await this.dbService.query<{ id: string; code: string; name: string }>(
-            `SELECT id, code, name FROM warehouses
-             WHERE id::text = $1
-                OR code = $1
-                OR name = $1
-                OR $1 ILIKE '%' || code || '%'
-                OR $1 ILIKE '%' || name || '%'
-             LIMIT 1`,
-            [rawWh],
-          );
-          if (whRows[0]) {
-            user.warehouseId = whRows[0].id;
-            user.assignedWarehouseId = whRows[0].id;
-            user.warehouseCode = whRows[0].code;
-            user.assignedWarehouseCode = whRows[0].code;
-            user.warehouses = [
-              {
-                id: whRows[0].id,
-                code: whRows[0].code,
-                name: whRows[0].name,
-                isPrimary: true,
-              },
-            ];
+      const isManager =
+        user.roles?.includes(UserRole.WAREHOUSE_MANAGER) ||
+        user.role === UserRole.WAREHOUSE_MANAGER;
+      const isKeeper =
+        user.roles?.includes(UserRole.WAREHOUSE_KEEPER) ||
+        user.role === UserRole.WAREHOUSE_KEEPER;
 
+      if (isKeeper) {
+        // QUAN HỆ 1 - 1: Thủ kho chỉ gán duy nhất 1 kho tác nghiệp
+        const whId =
+          user.warehouseId ||
+          user.assignedWarehouseId ||
+          (user.warehouses && user.warehouses[0]?.id);
+
+        if (whId) {
+          try {
+            await this.dbService.query(
+              `DELETE FROM user_warehouses WHERE user_id = $1::uuid OR user_id::text = $1;`,
+              [userId],
+            );
             await this.dbService.query(
               `INSERT INTO user_warehouses (user_id, warehouse_id, is_primary)
-               VALUES ($1, $2, true)
-               ON CONFLICT (user_id, warehouse_id) DO UPDATE SET is_primary = true`,
-              [userId, whRows[0].id],
+               VALUES ($1, $2::uuid, true)
+               ON CONFLICT (user_id, warehouse_id) DO UPDATE SET is_primary = true;`,
+              [userId, whId],
             );
-
-            // Nếu người dùng có vai trò Quản lý kho, cập nhật làm manager_id của kho
-            const isManager =
-              user.roles?.includes(UserRole.WAREHOUSE_MANAGER) ||
-              user.role === UserRole.WAREHOUSE_MANAGER;
-            if (isManager) {
-              await this.dbService.query(
-                `UPDATE warehouses SET manager_id = $1 WHERE id = $2`,
-                [userId, whRows[0].id],
-              );
+          } catch (kErr) {
+            console.warn('[USERS_SERVICE] Lỗi gán kho thủ kho (1-1):', kErr);
+          }
+        }
+      } else if (isManager) {
+        // QUAN HỆ N - N: Quản lý kho có thể quản lý nhiều kho cùng lúc
+        const targetIds: string[] = [];
+        if (user.warehouseIds && user.warehouseIds.length > 0) {
+          targetIds.push(...user.warehouseIds);
+        } else if (user.warehouses && user.warehouses.length > 0) {
+          targetIds.push(...user.warehouses.map((w) => w.id));
+        } else if (user.assignedWarehouse) {
+          const parts = user.assignedWarehouse.split(/[,;\n]+/);
+          for (const p of parts) {
+            const wh = this.resolveWarehouseInfo(p);
+            if (wh.warehouseId && !targetIds.includes(wh.warehouseId)) {
+              targetIds.push(wh.warehouseId);
             }
           }
-        } catch (whErr) {
-          console.warn('[USERS_SERVICE] Lỗi gán kho trong user_warehouses:', whErr);
         }
+
+        if (targetIds.length > 0) {
+          try {
+            await this.dbService.query(
+              `DELETE FROM user_warehouses WHERE user_id = $1::uuid OR user_id::text = $1;`,
+              [userId],
+            );
+            for (let i = 0; i < targetIds.length; i++) {
+              await this.dbService.query(
+                `INSERT INTO user_warehouses (user_id, warehouse_id, is_primary)
+                 VALUES ($1, $2::uuid, $3)
+                 ON CONFLICT (user_id, warehouse_id) DO UPDATE SET is_primary = EXCLUDED.is_primary;`,
+                [userId, targetIds[i], i === 0],
+              );
+            }
+            await this.dbService.query(
+              `UPDATE warehouses SET manager_id = $1 WHERE id = ANY($2::uuid[]);`,
+              [userId, targetIds],
+            );
+          } catch (mErr) {
+            console.warn('[USERS_SERVICE] Lỗi gán kho quản lý (N-N):', mErr);
+          }
+        }
+      } else if (user.warehouseId) {
+        // Vai trò khác nếu có gán kho
+        try {
+          await this.dbService.query(
+            `INSERT INTO user_warehouses (user_id, warehouse_id, is_primary)
+             VALUES ($1, $2::uuid, true)
+             ON CONFLICT (user_id, warehouse_id) DO UPDATE SET is_primary = true;`,
+            [userId, user.warehouseId],
+          );
+        } catch {}
       }
     } catch (dbErr) {
       console.warn('[USERS_SERVICE] Lỗi lưu user vào PostgreSQL:', dbErr);
@@ -1060,7 +1220,51 @@ export class UsersService implements OnModuleInit {
     const passwordHash = await bcrypt.hash(rawPassword, saltRounds);
 
 
-    const whInfo = this.resolveWarehouseInfo(dto.assignedWarehouse);
+    const isKeeperRole = roles.includes(UserRole.WAREHOUSE_KEEPER);
+    const isManagerRole = roles.includes(UserRole.WAREHOUSE_MANAGER);
+
+    let assignedWarehouseIds: string[] = [];
+    if (dto.warehouseIds && dto.warehouseIds.length > 0) {
+      assignedWarehouseIds = [...dto.warehouseIds];
+    } else if (dto.warehouseId) {
+      assignedWarehouseIds = [dto.warehouseId];
+    } else if (dto.assignedWarehouse) {
+      const parts = dto.assignedWarehouse.split(/[,;\n]+/);
+      for (const p of parts) {
+        const wh = this.resolveWarehouseInfo(p);
+        if (wh.warehouseId && !assignedWarehouseIds.includes(wh.warehouseId)) {
+          assignedWarehouseIds.push(wh.warehouseId);
+        }
+      }
+    }
+
+    // Thủ kho chỉ nhận duy nhất 1 kho (1 - 1)
+    if (isKeeperRole && assignedWarehouseIds.length > 1) {
+      assignedWarehouseIds = [assignedWarehouseIds[0]];
+    }
+
+    const assignedWarehouseObjects: Array<{
+      id: string;
+      code: string;
+      name: string;
+      isPrimary?: boolean;
+    }> = [];
+
+    for (let i = 0; i < assignedWarehouseIds.length; i++) {
+      const wh = this.resolveWarehouseInfo(assignedWarehouseIds[i]);
+      if (wh.warehouseId) {
+        assignedWarehouseObjects.push({
+          id: wh.warehouseId,
+          code: wh.warehouseCode || '',
+          name: wh.warehouseName || '',
+          isPrimary: i === 0,
+        });
+      }
+    }
+
+    const primaryWh = assignedWarehouseObjects[0];
+    const displayWarehouseName = assignedWarehouseObjects.map((w) => w.name).join(', ') || dto.assignedWarehouse?.trim();
+
     const newUser = new UserEntity({
       id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       username,
@@ -1070,21 +1274,13 @@ export class UsersService implements OnModuleInit {
       role: roles[0],
       roles,
       status: UserStatus.ACTIVE,
-      assignedWarehouse: dto.assignedWarehouse?.trim(),
-      warehouseId: whInfo.warehouseId,
-      assignedWarehouseId: whInfo.warehouseId,
-      warehouseCode: whInfo.warehouseCode,
-      assignedWarehouseCode: whInfo.warehouseCode,
-      warehouses: whInfo.warehouseId
-        ? [
-            {
-              id: whInfo.warehouseId,
-              code: whInfo.warehouseCode || '',
-              name: whInfo.warehouseName || dto.assignedWarehouse?.trim() || '',
-              isPrimary: true,
-            },
-          ]
-        : [],
+      assignedWarehouse: displayWarehouseName,
+      warehouseId: primaryWh?.id,
+      assignedWarehouseId: primaryWh?.id,
+      warehouseCode: primaryWh?.code,
+      assignedWarehouseCode: primaryWh?.code,
+      warehouseIds: assignedWarehouseIds,
+      warehouses: assignedWarehouseObjects,
       passwordHash,
       failedAttempts: 0,
       lockedUntil: null,
@@ -1261,23 +1457,62 @@ export class UsersService implements OnModuleInit {
       user.role = targetRoles[0];
     }
 
-    if (dto.assignedWarehouse !== undefined) {
-      user.assignedWarehouse = dto.assignedWarehouse.trim();
-      const whInfo = this.resolveWarehouseInfo(user.assignedWarehouse);
-      user.warehouseId = whInfo.warehouseId;
-      user.assignedWarehouseId = whInfo.warehouseId;
-      user.warehouseCode = whInfo.warehouseCode;
-      user.assignedWarehouseCode = whInfo.warehouseCode;
-      user.warehouses = whInfo.warehouseId
-        ? [
-            {
-              id: whInfo.warehouseId,
-              code: whInfo.warehouseCode || '',
-              name: whInfo.warehouseName || user.assignedWarehouse || '',
-              isPrimary: true,
-            },
-          ]
-        : [];
+    if (
+      dto.assignedWarehouse !== undefined ||
+      dto.warehouseId !== undefined ||
+      dto.warehouseIds !== undefined
+    ) {
+      const isKeeperRole = user.roles?.includes(UserRole.WAREHOUSE_KEEPER) || user.role === UserRole.WAREHOUSE_KEEPER;
+      let assignedWarehouseIds: string[] = [];
+
+      if (dto.warehouseIds && dto.warehouseIds.length > 0) {
+        assignedWarehouseIds = [...dto.warehouseIds];
+      } else if (dto.warehouseId) {
+        assignedWarehouseIds = [dto.warehouseId];
+      } else if (dto.assignedWarehouse !== undefined) {
+        const parts = dto.assignedWarehouse.trim().split(/[,;\n]+/);
+        for (const p of parts) {
+          const wh = this.resolveWarehouseInfo(p);
+          if (wh.warehouseId && !assignedWarehouseIds.includes(wh.warehouseId)) {
+            assignedWarehouseIds.push(wh.warehouseId);
+          }
+        }
+      }
+
+      if (isKeeperRole && assignedWarehouseIds.length > 1) {
+        assignedWarehouseIds = [assignedWarehouseIds[0]];
+      }
+
+      const assignedWarehouseObjects: Array<{
+        id: string;
+        code: string;
+        name: string;
+        isPrimary?: boolean;
+      }> = [];
+
+      for (let i = 0; i < assignedWarehouseIds.length; i++) {
+        const wh = this.resolveWarehouseInfo(assignedWarehouseIds[i]);
+        if (wh.warehouseId) {
+          assignedWarehouseObjects.push({
+            id: wh.warehouseId,
+            code: wh.warehouseCode || '',
+            name: wh.warehouseName || '',
+            isPrimary: i === 0,
+          });
+        }
+      }
+
+      const primaryWh = assignedWarehouseObjects[0];
+      user.warehouseId = primaryWh?.id;
+      user.assignedWarehouseId = primaryWh?.id;
+      user.warehouseCode = primaryWh?.code;
+      user.assignedWarehouseCode = primaryWh?.code;
+      user.warehouseIds = assignedWarehouseIds;
+      user.warehouses = assignedWarehouseObjects;
+      user.assignedWarehouse =
+        assignedWarehouseObjects.map((w) => w.name).join(', ') ||
+        dto.assignedWarehouse?.trim() ||
+        user.assignedWarehouse;
     }
 
     if (dto.password) {

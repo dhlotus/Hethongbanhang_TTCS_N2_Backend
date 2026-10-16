@@ -134,9 +134,9 @@ async function runTest() {
   // 5. Kiểm tra chi tiết phiếu có lưu đúng supplierId và productId
   const detail = await service.findOne(receipt.id);
   assert(
-    detail.supplierId === VALID_SUPPLIER_UUID && detail.items[0]?.productId === VALID_PRODUCT_UUID,
+    detail.supplierId === VALID_SUPPLIER_UUID && detail.items?.[0]?.productId === VALID_PRODUCT_UUID,
     'Chi tiết phiếu lưu trữ chính xác UUID của nhà cung cấp và sản phẩm',
-    `supplierId: ${detail.supplierId}, productId: ${detail.items[0]?.productId}`,
+    `supplierId: ${detail.supplierId}, productId: ${detail.items?.[0]?.productId}`,
   );
 
   await dbService.onModuleDestroy();

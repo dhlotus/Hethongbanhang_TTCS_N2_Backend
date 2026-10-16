@@ -190,6 +190,14 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   createdSource?: string;
+
+  @IsOptional()
+  @IsString()
+  warehouseId?: string;
+
+  @IsOptional()
+  @IsString()
+  warehouseName?: string;
 }
 
 /**

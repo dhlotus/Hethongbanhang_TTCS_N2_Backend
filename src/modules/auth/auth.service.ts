@@ -105,6 +105,7 @@ export class AuthService {
    * Đăng nhập người dùng, kiểm tra khóa tạm thời và cấp phát cặp Access Token & Refresh Token
    */
   async login(loginDto: LoginDto): Promise<LoginResponseDto> {
+    await this.usersService.loadUsersFromDatabase().catch(() => {});
     const identifier = (loginDto.username || loginDto.email || '').trim().toLowerCase();
     const user = await this.usersService.findByEmailOrUsername(identifier);
 
@@ -186,6 +187,7 @@ export class AuthService {
     const warehouseCode = user.warehouseCode || (user as any).assignedWarehouseCode || null;
     const warehouseName = user.assignedWarehouse || null;
     const warehouses = (user as any).warehouses || (warehouseId ? [{ id: warehouseId, code: warehouseCode || '', name: warehouseName || '', isPrimary: true }] : []);
+    const warehouseIds = (user as any).warehouseIds || warehouses.map((w: any) => w.id);
 
     const userInfo: IAuthUserInfo = {
       id: user.id,
@@ -201,6 +203,7 @@ export class AuthService {
       warehouseCode,
       assignedWarehouseCode: warehouseCode,
       warehouseName,
+      warehouseIds,
       warehouses,
       avatarUrl: user.avatarUrl ?? null,
     };
@@ -349,6 +352,8 @@ export class AuthService {
       warehouseCode: user.warehouseCode ?? undefined,
       warehouseName: user.warehouseName ?? undefined,
       assignedWarehouse: user.assignedWarehouse ?? undefined,
+      warehouseIds: user.warehouseIds ?? undefined,
+      warehouses: user.warehouses ?? undefined,
     };
 
     const [accessToken, refreshToken] = await Promise.all([

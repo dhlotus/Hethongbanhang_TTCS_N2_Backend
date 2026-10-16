@@ -66,7 +66,17 @@ export class AdjustStockDto {
   @IsString()
   warehouseLocation?: string;
 
+  @IsNotEmpty({ message: 'Kho điều chỉnh (warehouseId) không được để trống' })
+  @IsString({ message: 'Mã kho (warehouseId) phải là chuỗi ký tự' })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  warehouseId: string;
+
   @IsOptional()
-  @IsString()
-  warehouseId?: string;
+  @IsString({ message: 'Mã kho (warehouse_id) phải là chuỗi ký tự' })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  warehouse_id?: string;
 }

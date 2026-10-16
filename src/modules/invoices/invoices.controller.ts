@@ -3,13 +3,17 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import { InvoicesService, InvoiceItem } from './invoices.service';
+import type { Response } from 'express';
+import { InvoicesService, InvoiceItem, DealerDebtSummary } from './invoices.service';
+import { DebtReminderSchedulerService } from './debt-reminder-scheduler.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -18,18 +22,106 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 
 /**
- * Controller Hoá đơn & Công nợ (Module 7)
- * Matrix: Customer R*, Sales Rep R*, Warehouse —, WH Manager —, Accountant F, Sales Manager R, Admin F
+ * Controller Hoá đơn & Sổ Công nợ Đại lý (Module 7 - SN-207 & SN-208)
  */
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InvoicesController {
-  constructor(private readonly invoicesService: InvoicesService) {}
+  constructor(
+    private readonly invoicesService: InvoicesService,
+    private readonly debtReminderSchedulerService: DebtReminderSchedulerService,
+  ) {}
 
   /**
-   * Danh sách hoá đơn bán hàng
+   * Tổng hợp công nợ và hạn mức còn lại của đại lý (SN-207 C)
+   * GET /api/invoices/my-debt-summary
+   */
+  @Get('my-debt-summary')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async getMyDebtSummary(@CurrentUser() currentUser: ICurrentUser): Promise<DealerDebtSummary> {
+    return this.invoicesService.getMyDebtSummary(currentUser);
+  }
+
+  /**
+   * Kích hoạt thủ công tác vụ kiểm tra và gửi nhắc hạn thanh toán (SN-208 A, B, C, D)
+   * POST /api/invoices/reminders/trigger
+   */
+  @Post('reminders/trigger')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.CUSTOMER,
+  )
+  async triggerReminders(@Query('force') force?: string, @Body() _body?: Record<string, any>) {
+    return this.debtReminderSchedulerService.processDebtReminders({
+      forceRetry: force === 'true',
+    });
+  }
+
+  /**
+   * Lấy lịch sử gửi nhắc nợ và cảnh báo quá hạn (SN-208 D)
+   * GET /api/invoices/reminders/logs
+   */
+  @Get('reminders/logs')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.CUSTOMER,
+  )
+  async getReminderLogs() {
+    return this.debtReminderSchedulerService.getReminderLogs();
+  }
+
+  /**
+   * Lấy thông báo nhắc nợ trong ứng dụng của đại lý (SN-208 A, B)
+   * GET /api/invoices/notifications
+   */
+  @Get('notifications')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async getDebtNotifications(@CurrentUser() currentUser: ICurrentUser) {
+    const targetCustId = this.invoicesService.resolveTargetCustomerId(currentUser);
+    return this.debtReminderSchedulerService.getInAppNotificationsForCustomer(targetCustId);
+  }
+
+  /**
+   * Đánh dấu đã đọc thông báo trong ứng dụng
+   * PATCH /api/invoices/notifications/:id/read
+   */
+  @Patch('notifications/:id/read')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async markNotificationRead(@Param('id') id: string) {
+    const success = await this.debtReminderSchedulerService.markNotificationAsRead(id);
+    return { success, id };
+  }
+
+  /**
+   * Danh sách hoá đơn bán hàng (SN-207 A)
    * GET /api/invoices
-   * Matrix: Customer R*, Sales Rep R*, Warehouse —, WH Manager —, Accountant F, Sales Manager R, Admin F
    */
   @Get()
   @Roles(
@@ -44,13 +136,50 @@ export class InvoicesController {
     @Query() query: Record<string, string>,
     @CurrentUser() currentUser: ICurrentUser,
   ): Promise<InvoiceItem[]> {
-    return this.invoicesService.findAll(query, currentUser);
+    return this.invoicesService.findAll(query as any, currentUser);
   }
 
   /**
-   * Chi tiết hoá đơn
+   * Tải hóa đơn PDF / HTML chuẩn in ấn (SN-207 B)
+   * GET /api/invoices/:id/pdf
+   */
+  @Get(':id/pdf')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async downloadInvoicePdf(
+    @Param('id') id: string,
+    @Query('format') format: string,
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+  ) {
+    if (format === 'html') {
+      const result = await this.invoicesService.generateInvoicePdfHtml(id, currentUser);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="Hoa_Don_${result.invoice.invoiceCode}.html"`,
+      );
+      return res.send(result.html);
+    }
+
+    const result = await this.invoicesService.generateInvoicePdfBuffer(id, currentUser);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="Hoa_Don_${result.invoice.invoiceCode}.pdf"`,
+    );
+    return res.send(result.buffer);
+  }
+
+  /**
+   * Chi tiết hoá đơn (SN-207 B)
    * GET /api/invoices/:id
-   * Matrix: Customer R*, Sales Rep R*, Warehouse —, WH Manager —, Accountant F, Sales Manager R, Admin F
    */
   @Get(':id')
   @Roles(
@@ -69,9 +198,27 @@ export class InvoicesController {
   }
 
   /**
+   * Ghi nhận thanh toán hóa đơn công nợ (SN-207 C)
+   * POST /api/invoices/:id/payments
+   */
+  @Post(':id/payments')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.ADMIN,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+  )
+  async recordPayment(
+    @Param('id') id: string,
+    @Body() dto: { amount: number; paymentMethod?: string; note?: string },
+    @CurrentUser() currentUser: ICurrentUser,
+  ) {
+    return this.invoicesService.recordPayment(id, dto, currentUser);
+  }
+
+  /**
    * Phát hành hoá đơn mới
    * POST /api/invoices
-   * Matrix: Accountant F, Admin F
    */
   @Post()
   @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)
@@ -83,9 +230,8 @@ export class InvoicesController {
   }
 
   /**
-   * Cập nhật hoá đơn (Ghi nhận thanh toán / điều chỉnh)
+   * Cập nhật hoá đơn
    * PATCH /api/invoices/:id
-   * Matrix: Accountant F, Admin F
    */
   @Patch(':id')
   @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)
@@ -99,7 +245,6 @@ export class InvoicesController {
   /**
    * Hủy / xóa hoá đơn
    * DELETE /api/invoices/:id
-   * Matrix: Accountant F, Admin F
    */
   @Delete(':id')
   @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)

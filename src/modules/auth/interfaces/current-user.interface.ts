@@ -13,6 +13,7 @@ export interface ICurrentUser {
   warehouseCode?: string | null;
   warehouseName?: string | null;
   assignedWarehouse?: string | null;
+  warehouseIds?: string[];
   warehouses?: Array<{ id: string; code: string; name: string; isPrimary?: boolean }>;
 }
 

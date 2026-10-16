@@ -8,6 +8,7 @@ import { ProductUnitEntity } from './product-unit.entity';
  */
 export class ProductEntity {
   id: string;
+  uuid?: string;
   sku: string;
   name: string;
   parentCategory: string;
