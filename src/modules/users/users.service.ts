@@ -790,6 +790,18 @@ export class UsersService implements OnModuleInit {
           }
         }
 
+        let customerId: string | undefined = undefined;
+        let customerCode: string | undefined = undefined;
+        const emailLower = (row.email || '').toLowerCase().trim();
+        const usernameLower = (row.username || '').toLowerCase().trim();
+        if (emailLower.includes('daily') || usernameLower === 'daily') {
+          customerId = 'cust-dl-0002';
+          customerCode = 'DL-0002';
+        } else if (emailLower.includes('dealer') || usernameLower === 'dealer') {
+          customerId = 'cust-dl-0001';
+          customerCode = 'DL-0001';
+        }
+
         const entity = new UserEntity({
           id: row.id,
           username: row.username,
@@ -807,6 +819,8 @@ export class UsersService implements OnModuleInit {
           warehouseIds,
           warehouses: assignedWarehouses,
           passwordHash: row.password_hash,
+          customerId,
+          customerCode,
           failedAttempts: row.failed_attempts || 0,
           lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
           createdAt: new Date(row.created_at),

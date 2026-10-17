@@ -15,6 +15,9 @@ export interface IAuthUserInfo {
   warehouseIds?: string[];
   warehouses?: Array<{ id: string; code: string; name: string; isPrimary?: boolean }>;
   avatarUrl?: string | null;
+  customerId?: string | null;
+  customerCode?: string | null;
+  agencyId?: string | null;
 }
 
 export class TokenResponseDto {
