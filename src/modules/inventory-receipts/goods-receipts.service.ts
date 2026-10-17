@@ -312,15 +312,50 @@ export class GoodsReceiptsService implements OnModuleInit {
 
       let productName = `Mặt hàng (${i.productId.slice(0, 8)})`;
       let productCode = i.productId.slice(0, 8).toUpperCase();
-      if (i.productId === '33333333-0000-0000-0000-000000000001' || i.productId === 'LH-MILK-900G') {
+      const pid = (i.productId || '').toLowerCase();
+      if (pid === '33333333-0000-0000-0000-000000000001' || pid === '33333333-0000-4000-8000-000000000001' || pid === 'lh-milk-900g') {
         productName = 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g';
         productCode = 'LH-MILK-900G';
-      } else if (i.productId === '33333333-0000-0000-0000-000000000002' || i.productId === 'LH-NUT-180ML') {
+      } else if (pid === '33333333-0000-0000-0000-000000000002' || pid === '33333333-0000-4000-8000-000000000002' || pid === 'lh-nut-180ml') {
         productName = 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml';
         productCode = 'LH-NUT-180ML';
-      } else if (i.productId === '33333333-0000-0000-0000-000000000003' || i.productId === 'LH-TEA-450ML') {
-        productName = 'Trà Oolong Thượng Hạng Loha Tea 450ml';
-        productCode = 'LH-TEA-450ML';
+      } else if (pid === '33333333-0000-0000-0000-000000000003' || pid === '33333333-0000-4000-8000-000000000003' || pid === 'lh-nest-70ml') {
+        productName = 'Nước Yến Sào Chưng Đường Phèn Loha Nest 70ml';
+        productCode = 'LH-NEST-70ML';
+      } else if (pid === '33333333-0000-0000-0000-000000000004' || pid === '33333333-0000-4000-8000-000000000004' || pid === 'lh-cereal-500g') {
+        productName = 'Ngũ Cốc Dinh Dưỡng Hạt Mầm Loha Meal 500g';
+        productCode = 'LH-CEREAL-500G';
+      } else if (pid === '33333333-0000-0000-0000-000000000005' || pid === '33333333-0000-4000-8000-000000000005' || pid === 'lh-collagen-50ml') {
+        productName = 'Nước Uống Collagen Đông Trùng Hạ Thảo 50ml';
+        productCode = 'LH-COLLAGEN-50ML';
+      } else if (pid === '33333333-0000-0000-0000-000000000006' || pid === '33333333-0000-4000-8000-000000000006' || pid === 'lh-tea-240ml' || pid === 'lh-tea-450ml') {
+        productName = 'Trà Hoa Cúc La Hán Quả Thanh Nhiệt 240ml';
+        productCode = 'LH-TEA-240ML';
+      } else if (pid === '33333333-0000-0000-0000-000000000007' || pid === '33333333-0000-4000-8000-000000000007' || pid === 'lh-water-500ml') {
+        productName = 'Nước Khoáng Kiềm Thiên Nhiên Loha Ion 500ml';
+        productCode = 'LH-WATER-500ML';
+      } else if (pid === '33333333-0000-0000-0000-000000000008' || pid === '33333333-0000-4000-8000-000000000008' || pid === 'lh-milk-past-1l') {
+        productName = 'Sữa Tươi Thanh Trùng Nguyên Chất 1 Lít';
+        productCode = 'LH-MILK-PAST-1L';
+      } else if (pid === '33333333-0000-0000-0000-000000000009' || pid === '33333333-0000-4000-8000-000000000009' || pid === 'lh-nest-prem-100g') {
+        productName = 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g';
+        productCode = 'LH-NEST-PREM-100G';
+      } else if (pid === '33333333-0000-0000-0000-000000000010' || pid === '33333333-0000-4000-8000-000000000010' || pid === 'lh-nuts-mix-250g') {
+        productName = 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g';
+        productCode = 'LH-NUTS-MIX-250G';
+      } else if (pid === '33333333-0000-0000-0000-000000000011' || pid === '33333333-0000-4000-8000-000000000011' || pid === 'lh-old-coffee-can') {
+        productName = 'Cà Phê Sữa Đóng Lon Loha Classic 240ml (Mẫu Cũ)';
+        productCode = 'LH-OLD-COFFEE-CAN';
+      }
+
+      let resolvedUnit = (i as any).unitName || i.unitId;
+      if (!resolvedUnit || resolvedUnit.startsWith('unit-') || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedUnit)) {
+        const factor = Number(i.conversionFactor) || 1;
+        if (factor >= 20 || factor === 24) resolvedUnit = 'Thùng';
+        else if (factor === 12) resolvedUnit = 'Thùng';
+        else if (factor === 6) resolvedUnit = 'Lốc';
+        else if (factor === 1) resolvedUnit = 'Lon';
+        else resolvedUnit = 'Đơn vị';
       }
 
       return {
@@ -329,8 +364,8 @@ export class GoodsReceiptsService implements OnModuleInit {
         productId: i.productId,
         productName,
         productCode,
-        unitId: i.unitId,
-        unitName: i.unitId,
+        unitId: resolvedUnit,
+        unitName: resolvedUnit,
         packageQuantity: Number(i.packageQuantity),
         conversionFactor: Number(i.conversionFactor),
         baseQuantity: baseQty,
@@ -657,7 +692,7 @@ export class GoodsReceiptsService implements OnModuleInit {
             ) VALUES ($1, $2, $3, 'IMPORT', $4, $5, $6, 'GOODS_RECEIPT', $7, $8, CURRENT_TIMESTAMP)`,
             [
               targetWarehouseId, item.product_id, batchId, baseQty,
-              balanceAfter, baseUnitCost, receipt.code, receiverId
+              balanceAfter, baseUnitCost, receipt.code, transactionUserId
             ]
           );
         }

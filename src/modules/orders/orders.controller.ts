@@ -23,6 +23,7 @@ import {
 import { QueryOrdersDto } from './dto/query-orders.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { DecideOrderDto } from './dto/decide-order.dto';
+import { UpdateOrderPickingDto } from './dto/update-order-picking.dto';
 import { OrderEntity } from './entities/order.entity';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { OrdersService } from './orders.service';
@@ -458,5 +459,19 @@ export class OrdersController {
     @Param('id') id: string,
   ): Promise<OrderApprovalHistoryEntity[]> {
     return this.ordersService.getApprovalHistory(id);
+  }
+
+  /**
+   * Cập nhật trạng thái đơn hàng khi đưa vào phiếu soạn hàng kho (SN-186)
+   * PATCH /api/orders/:id/picking-status
+   */
+  @Patch(':id/picking-status')
+  @Roles(UserRole.WAREHOUSE_KEEPER, UserRole.ADMIN, UserRole.SALES_MANAGER)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async updateOrderPickingStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderPickingDto,
+  ): Promise<OrderEntity> {
+    return this.ordersService.updatePickingStatus(id, dto.status, dto.pickingSheetCode);
   }
 }

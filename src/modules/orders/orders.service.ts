@@ -38,6 +38,7 @@ import { OrderApprovalAction } from './entities/order-approval-action.enum';
 import { OrderApprovalHistoryEntity } from './entities/order-approval-history.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { InventoryService } from '../inventory/inventory.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   StockReservationEntity,
   StockReservationStatus,
@@ -115,6 +116,8 @@ export class OrdersService implements OnModuleInit {
     private readonly inventoryService?: InventoryService,
     @Optional()
     private readonly databaseService?: DatabaseService,
+    @Optional()
+    private readonly notificationsService?: NotificationsService,
   ) {
     if (!this.databaseService || !this.databaseService.isConnected()) {
       for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
@@ -965,6 +968,26 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
+    // Phát thông báo tới 5 nhóm đối tượng người dùng & chính Đại lý B2B đặt đơn
+    if (this.notificationsService) {
+      try {
+        await this.notificationsService.notifyOrderCreated({
+          id: newOrder.id,
+          orderCode: newOrder.orderCode,
+          customerId: newOrder.customerId,
+          customerName: newOrder.customerName,
+          grandTotal: newOrder.grandTotal,
+          lines: newOrder.lines,
+          warehouseId: newOrder.warehouseId,
+          salesRepId: newOrder.salesRepId,
+          isCreditLimitExceeded: newOrder.isCreditLimitExceeded,
+          status: newOrder.status,
+        });
+      } catch (notifErr) {
+        this.logger.warn(`Không thể phát thông báo đơn hàng [${newOrder.orderCode}]: ${notifErr}`);
+      }
+    }
+
     return newOrder;
     });
   }
@@ -1064,21 +1087,70 @@ export class OrdersService implements OnModuleInit {
 
     // 3. Lọc theo đại lý (customerId)
     if (query.customerId && query.customerId !== 'ALL') {
-      const qCust = query.customerId;
-      const qCustNorm = qCust.replace('cust-dl-', 'cust-');
+      const qCust = query.customerId.toLowerCase().trim();
+      let matchedCode: string | undefined;
+      let matchedId: string | undefined;
+      let matchedName: string | undefined;
+      try {
+        const cust = await this.customersService.getCustomerById(query.customerId);
+        if (cust) {
+          matchedCode = cust.code?.toLowerCase().trim();
+          matchedId = cust.id?.toLowerCase().trim();
+          matchedName = cust.name?.toLowerCase().trim();
+        }
+      } catch {
+        // bỏ qua nếu không tìm thấy
+      }
+
+      // Tập hợp các định danh chính xác của riêng đại lý này
+      const validIdentifiers = new Set<string>();
+      if (qCust) validIdentifiers.add(qCust);
+      if (matchedId) validIdentifiers.add(matchedId);
+      if (matchedCode) validIdentifiers.add(matchedCode);
+
+      // Xử lý các tiền tố chuẩn hóa theo mã: ví dụ DL-0001 -> cust-dl-0001, cust-0001, cust-001
+      // Nếu mã là dạng vùng miền như DL-DN-001 -> chỉ khớp cust-dl-dn-001, dl-dn-001
+      const targetCode = matchedCode || qCust;
+      const m = targetCode.match(/^(?:cust-)?(?:dl-)?([a-z]+-)?(\d+)$/i);
+      if (m) {
+        const regionalPrefix = (m[1] || '').toLowerCase(); // e.g. 'dn-' hoặc ''
+        const num = parseInt(m[2], 10);
+        if (!isNaN(num)) {
+          validIdentifiers.add(`cust-dl-${regionalPrefix}${String(num).padStart(4, '0')}`);
+          validIdentifiers.add(`cust-${regionalPrefix}${String(num).padStart(3, '0')}`);
+          validIdentifiers.add(`cust-${regionalPrefix}${String(num).padStart(4, '0')}`);
+          validIdentifiers.add(`dl-${regionalPrefix}${String(num).padStart(4, '0')}`);
+          validIdentifiers.add(`dl-${regionalPrefix}${String(num).padStart(3, '0')}`);
+        }
+      }
+
+      // Hỗ trợ map bổ sung cho các UUID mẫu
+      if (qCust === 'cust-dl-0001' || qCust === 'cust-001' || qCust === '55555555-0000-0000-0000-000000000001' || qCust === 'dl-0001' || qCust === 'dl-mk-001') {
+        validIdentifiers.add('cust-dl-0001');
+        validIdentifiers.add('cust-001');
+        validIdentifiers.add('dl-0001');
+        validIdentifiers.add('dl-mk-001');
+        validIdentifiers.add('55555555-0000-0000-0000-000000000001');
+      }
+      if (qCust === 'cust-dl-0002' || qCust === 'cust-002' || qCust === '55555555-0000-0000-0000-000000000002' || qCust === 'dl-0002' || qCust === 'dl-ab-002') {
+        validIdentifiers.add('cust-dl-0002');
+        validIdentifiers.add('cust-002');
+        validIdentifiers.add('dl-0002');
+        validIdentifiers.add('dl-ab-002');
+        validIdentifiers.add('55555555-0000-0000-0000-000000000002');
+      }
+
       list = list.filter((o) => {
-        if (o.customerId === qCust || o.customerCode === qCust) return true;
-        if (o.customerId && o.customerId.replace('cust-dl-', 'cust-') === qCustNorm) return true;
-        // Map cust-dl-0002 / DL-0002 / DL-AB-002 / 55555555-0000-0000-0000-000000000002
-        if (
-          (qCust === 'cust-dl-0002' || qCust === '55555555-0000-0000-0000-000000000002' || qCust === 'DL-0002' || qCust === 'DL-AB-002') &&
-          (o.customerId === 'cust-dl-0002' || o.customerId === 'cust-002' || o.customerCode === 'DL-0002' || o.customerCode === 'DL-AB-002')
-        ) return true;
-        // Map cust-dl-0001 / cust-001 / DL-0001 / DL-MK-001 / 55555555-0000-0000-0000-000000000001
-        if (
-          (qCust === 'cust-dl-0001' || qCust === 'cust-001' || qCust === '55555555-0000-0000-0000-000000000001' || qCust === 'DL-0001' || qCust === 'DL-MK-001') &&
-          (o.customerId === 'cust-dl-0001' || o.customerId === 'cust-001' || o.customerCode === 'DL-0001' || o.customerCode === 'DL-MK-001')
-        ) return true;
+        const oCustId = (o.customerId || '').toLowerCase().trim();
+        const oCustCode = (o.customerCode || '').toLowerCase().trim();
+        const oCustName = (o.customerName || '').toLowerCase().trim();
+
+        if (validIdentifiers.has(oCustId) || validIdentifiers.has(oCustCode)) {
+          return true;
+        }
+        if (matchedName && oCustName && oCustName === matchedName) {
+          return true;
+        }
         return false;
       });
     }
@@ -2841,5 +2913,44 @@ async findOrdersByCustomer(
       note: order.note,
       items,
     };
+  }
+
+  /**
+   * Cập nhật trạng thái đơn hàng khi đưa vào phiếu soạn hàng kho (SN-186)
+   */
+  async updatePickingStatus(
+    id: string,
+    status: OrderStatus,
+    pickingSheetCode?: string,
+  ): Promise<OrderEntity> {
+    const order = await this.findOrderById(id);
+    if (!order) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng với ID: ${id}`);
+    }
+
+    const validTransitions: OrderStatus[] = [
+      OrderStatus.APPROVED,
+      OrderStatus.PROCESSING,
+      OrderStatus.DISPATCHED,
+    ];
+
+    if (!validTransitions.includes(status)) {
+      throw new BadRequestException(
+        `Trạng thái ${status} không hợp lệ cho quy trình soạn hàng kho.`,
+      );
+    }
+
+    if (this.databaseService && this.databaseService.isConnected()) {
+      await this.databaseService.query(
+        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+        [status, id],
+      );
+    }
+
+    order.status = status;
+    order.updatedAt = new Date();
+    this.orders.set(order.id, order);
+
+    return order;
   }
 }

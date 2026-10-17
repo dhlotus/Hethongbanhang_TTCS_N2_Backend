@@ -66,7 +66,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
-    if (!warehouseId && this.dbService?.isConnected()) {
+    if (this.dbService?.isConnected()) {
       try {
         const whRes = await this.dbService.query<{ warehouse_id: string; code: string; name: string }>(
           `SELECT COALESCE(w.id, wm.id) as warehouse_id, COALESCE(w.code, wm.code) as code, COALESCE(w.name, wm.name) as name
@@ -74,6 +74,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
            JOIN warehouses w ON uw.warehouse_id = w.id
            FULL OUTER JOIN warehouses wm ON wm.manager_id = $1::uuid
            WHERE uw.user_id = $1::uuid OR uw.user_id::text = $1 OR wm.manager_id = $1::uuid OR wm.manager_id::text = $1
+           ORDER BY uw.is_primary DESC
            LIMIT 1`,
           [payload.sub],
         );
@@ -81,6 +82,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           warehouseId = whRes[0].warehouse_id;
           warehouseCode = whRes[0].code;
           warehouseName = whRes[0].name;
+          assignedWarehouse = whRes[0].name;
           warehouses = [{ id: warehouseId, code: warehouseCode || '', name: warehouseName || '', isPrimary: true }];
         }
       } catch {}

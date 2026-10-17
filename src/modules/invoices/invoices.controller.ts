@@ -61,7 +61,7 @@ export class InvoicesController {
     UserRole.SALES_MANAGER,
     UserRole.CUSTOMER,
   )
-  async triggerReminders(@Query('force') force?: string) {
+  async triggerReminders(@Query('force') force?: string, @Body() _body?: Record<string, any>) {
     return this.debtReminderSchedulerService.processDebtReminders({
       forceRetry: force === 'true',
     });
@@ -115,7 +115,7 @@ export class InvoicesController {
     UserRole.ADMIN,
   )
   async markNotificationRead(@Param('id') id: string) {
-    const success = this.debtReminderSchedulerService.markNotificationAsRead(id);
+    const success = await this.debtReminderSchedulerService.markNotificationAsRead(id);
     return { success, id };
   }
 
@@ -154,16 +154,27 @@ export class InvoicesController {
   )
   async downloadInvoicePdf(
     @Param('id') id: string,
+    @Query('format') format: string,
     @CurrentUser() currentUser: ICurrentUser,
     @Res() res: Response,
   ) {
-    const result = await this.invoicesService.generateInvoicePdfHtml(id, currentUser);
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (format === 'html') {
+      const result = await this.invoicesService.generateInvoicePdfHtml(id, currentUser);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="Hoa_Don_${result.invoice.invoiceCode}.html"`,
+      );
+      return res.send(result.html);
+    }
+
+    const result = await this.invoicesService.generateInvoicePdfBuffer(id, currentUser);
+    res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="Hoa_Don_${result.invoice.invoiceCode}.html"`,
+      `attachment; filename="Hoa_Don_${result.invoice.invoiceCode}.pdf"`,
     );
-    return res.send(result.html);
+    return res.send(result.buffer);
   }
 
   /**

@@ -1,6 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsNumber,
@@ -147,4 +148,14 @@ export class CreateProductDto {
     return value ?? obj.product_units;
   })
   units?: ProductUnitDto[];
+
+  @IsOptional()
+  @IsBoolean({ message: 'Cờ quản lý lô phải là kiểu boolean' })
+  @Transform(({ value, obj }: { value: unknown; obj: Record<string, unknown> }) => {
+    const raw = value !== undefined ? value : obj?.is_batch_managed;
+    if (raw === undefined || raw === null) return true;
+    if (typeof raw === 'string') return raw === 'true' || raw === '1';
+    return Boolean(raw);
+  })
+  isBatchManaged?: boolean;
 }
