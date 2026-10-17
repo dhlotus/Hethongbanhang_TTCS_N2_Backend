@@ -25,6 +25,7 @@ import { GoodsReceiptsModule } from './modules/inventory-receipts/goods-receipts
 import { WarehousesModule } from './modules/warehouses/warehouses.module';
 import { InternalTransfersModule } from './modules/inventory-transfers/internal-transfers.module';
 import { ReceiptsModule } from './modules/receipts/receipts.module';
+import { DeliveryTripsModule } from './modules/delivery-trips/delivery-trips.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { ReceiptsModule } from './modules/receipts/receipts.module';
     DashboardModule,
     WarehousesModule,
     ReceiptsModule,
+    DeliveryTripsModule,
   ],
 })
 export class AppModule { }
