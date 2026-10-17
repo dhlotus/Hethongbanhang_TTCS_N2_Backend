@@ -70,9 +70,27 @@ export class OrdersController {
     delete (query as any).agencyId;
 
     let agencyId = currentUser.agencyId || currentUser.customerId;
-    if (!agencyId && currentUser.roles?.includes(UserRole.CUSTOMER)) {
-      agencyId = 'cust-001';
+    const emailLower = (currentUser.email || '').toLowerCase();
+    const userLower = (currentUser.username || '').toLowerCase();
+
+    if (
+      agencyId === '55555555-0000-0000-0000-000000000002' ||
+      agencyId === 'DL-AB-002' ||
+      emailLower.includes('daily') ||
+      userLower === 'daily'
+    ) {
+      agencyId = 'cust-dl-0002';
+    } else if (
+      agencyId === '55555555-0000-0000-0000-000000000001' ||
+      agencyId === 'DL-MK-001' ||
+      emailLower.includes('dealer') ||
+      userLower === 'dealer'
+    ) {
+      agencyId = 'cust-dl-0001';
+    } else if (!agencyId && currentUser.roles?.includes(UserRole.CUSTOMER)) {
+      agencyId = 'cust-dl-0001';
     }
+
     if (!agencyId) {
       throw new ForbiddenException(
         'Tài khoản của bạn chưa được liên kết với hồ sơ Đại lý hợp lệ.',

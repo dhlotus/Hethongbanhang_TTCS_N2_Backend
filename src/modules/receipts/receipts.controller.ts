@@ -7,13 +7,15 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { ReceiptsService } from './receipts.service';
+import { ReceiptsService, PaginatedReceiptsResult } from './receipts.service';
 import { Receipt } from './entities/receipt.entity';
 import { ReceiptPrintDto } from './dto/receipt-print.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 
 /**
  * Controller Phiếu thu tiền (Subtask: SN-209 - Parent Story: SN-201 / Sprint 7)
@@ -25,11 +27,13 @@ export class ReceiptsController {
   constructor(private readonly receiptsService: ReceiptsService) {}
 
   /**
-   * Danh sách phiếu thu tiền
+   * Danh sách phiếu thu tiền (Hỗ trợ phân trang, tìm kiếm và lọc hình thức chuẩn Backend)
    * GET /api/receipts
    */
   @Get()
   @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
     UserRole.ACCOUNTANT,
     UserRole.ACCOUNTANT_DEBT,
     UserRole.ADMIN,
@@ -39,8 +43,15 @@ export class ReceiptsController {
   async findAll(
     @Query('search') search?: string,
     @Query('customerId') customerId?: string,
-  ): Promise<Receipt[]> {
-    return this.receiptsService.findAll({ search, customerId });
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<Receipt[] | PaginatedReceiptsResult> {
+    return this.receiptsService.findAll(
+      { search, customerId, paymentMethod, page, limit },
+      currentUser,
+    );
   }
 
   /**

@@ -1,0 +1,523 @@
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { DatabaseService } from '../../database/database.service';
+import { NotificationEntity } from './entities/notification.entity';
+import { CreateNotificationDto } from './dto';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+
+interface TargetUser {
+  id: string;
+  username: string;
+  fullName: string;
+  roleName: string;
+}
+
+@Injectable()
+export class NotificationsService implements OnModuleInit {
+  private readonly logger = new Logger(NotificationsService.name);
+  private memoryNotifications: NotificationEntity[] = [];
+
+  constructor(@Optional() private readonly databaseService?: DatabaseService) {}
+
+  async onModuleInit(): Promise<void> {
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(`
+          CREATE TABLE IF NOT EXISTS app_system_notifications (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id TEXT NOT NULL,
+            recipient_name TEXT,
+            recipient_role TEXT,
+            order_id TEXT,
+            order_code TEXT,
+            customer_name TEXT,
+            type TEXT NOT NULL DEFAULT 'ORDER',
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            amount NUMERIC,
+            link TEXT NOT NULL DEFAULT '/sales/orders',
+            is_read BOOLEAN NOT NULL DEFAULT FALSE,
+            priority TEXT NOT NULL DEFAULT 'normal',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_app_notif_user_id ON app_system_notifications(user_id);
+          CREATE INDEX IF NOT EXISTS idx_app_notif_created_at ON app_system_notifications(created_at DESC);
+        `);
+        this.logger.log('Đã khởi tạo bảng CSDL app_system_notifications thành công.');
+      } catch (err) {
+        this.logger.error(`Lỗi khởi tạo bảng notifications: ${err}`);
+      }
+    }
+  }
+
+  /**
+   * Tạo thông báo cho một người dùng cụ thể
+   */
+  async createNotification(dto: CreateNotificationDto): Promise<NotificationEntity> {
+    if (this.databaseService?.isConnected()) {
+      const rows = await this.databaseService.query<any>(
+        `INSERT INTO app_system_notifications (
+          user_id, recipient_name, recipient_role, order_id, order_code,
+          customer_name, type, title, message, amount, link, priority
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *;`,
+        [
+          dto.userId,
+          dto.recipientName || null,
+          dto.recipientRole || null,
+          dto.orderId || null,
+          dto.orderCode || null,
+          dto.customerName || null,
+          dto.type || 'ORDER',
+          dto.title,
+          dto.message,
+          dto.amount || null,
+          dto.link || '/sales/orders',
+          dto.priority || 'normal',
+        ],
+      );
+
+      const r = rows[0];
+      return new NotificationEntity({
+        id: r.id,
+        userId: r.user_id,
+        recipientName: r.recipient_name,
+        recipientRole: r.recipient_role,
+        orderId: r.order_id,
+        orderCode: r.order_code,
+        customerName: r.customer_name,
+        type: r.type,
+        title: r.title,
+        message: r.message,
+        amount: Number(r.amount) || 0,
+        link: r.link,
+        isRead: r.is_read,
+        priority: r.priority,
+        createdAt: new Date(r.created_at),
+      });
+    }
+
+    const notif = new NotificationEntity({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      ...dto,
+      type: dto.type || 'ORDER',
+      isRead: false,
+      priority: dto.priority || 'normal',
+      createdAt: new Date(),
+    });
+    this.memoryNotifications.unshift(notif);
+    return notif;
+  }
+
+  /**
+   * Phát thông báo xác nhận đặt đơn hàng B2B tới 5 nhóm đối tượng:
+   * 1. Tất cả tài khoản Admin hệ thống (role_id = 1)
+   * 2. Tất cả tài khoản Quản trị kinh doanh (role_id = 2)
+   * 3. Tất cả tài khoản Quản lý kho (role_id = 4)
+   * 4. Đúng 1 Nhân viên kinh doanh phụ trách đại lý đó
+   * 5. Đúng 1 Thủ kho (nhân viên kho) phụ trách kho được gán vào đại lý
+   */
+  async notifyOrderCreated(order: {
+    id: string;
+    orderCode: string;
+    customerId: string;
+    customerName: string;
+    grandTotal: number;
+    lines?: any[];
+    warehouseId?: string;
+    salesRepId?: string;
+    isCreditLimitExceeded?: boolean;
+    status?: string;
+  }): Promise<{ notifiedCount: number; recipients: string[] }> {
+    const recipientsMap = new Map<string, TargetUser>();
+
+    const amountFormatted = new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND',
+    }).format(order.grandTotal || 0);
+
+    const itemCount = order.lines?.length || 0;
+    const statusText = order.isCreditLimitExceeded
+      ? 'Chờ phê duyệt hạn mức'
+      : 'Chờ xử lý xuất kho';
+
+    const title = `Đơn hàng B2B mới từ ${order.customerName}`;
+    const message = `Đại lý ${order.customerName} vừa đặt đơn hàng B2B [${order.orderCode}] gồm ${itemCount} sản phẩm, tổng thanh toán: ${amountFormatted}. Trạng thái: ${statusText}.`;
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Lấy tất cả tài khoản Admin hệ thống (role_id = 1 hoặc role_name chứa admin/quản trị hệ thống)
+        const admins = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 1 OR r.name ILIKE '%quản trị hệ thống%' OR r.code ILIKE '%admin%';`,
+        );
+        for (const a of admins) {
+          recipientsMap.set(String(a.id), {
+            id: String(a.id),
+            username: a.username,
+            fullName: a.full_name,
+            roleName: 'Quản trị hệ thống',
+          });
+        }
+
+        // 2. Lấy tất cả tài khoản Quản trị kinh doanh (role_id = 2 hoặc role_name chứa quản lý kinh doanh)
+        const salesManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 2 OR r.name ILIKE '%quản lý kinh doanh%' OR r.code ILIKE '%sales_manager%';`,
+        );
+        for (const sm of salesManagers) {
+          recipientsMap.set(String(sm.id), {
+            id: String(sm.id),
+            username: sm.username,
+            fullName: sm.full_name,
+            roleName: 'Quản lý kinh doanh',
+          });
+        }
+
+        // 3. Lấy tất cả tài khoản Quản lý kho (role_id = 4 hoặc role_name chứa quản lý kho)
+        const warehouseManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 4 OR r.name ILIKE '%quản lý kho%' OR r.code ILIKE '%warehouse_manager%';`,
+        );
+        for (const wm of warehouseManagers) {
+          recipientsMap.set(String(wm.id), {
+            id: String(wm.id),
+            username: wm.username,
+            fullName: wm.full_name,
+            roleName: 'Quản lý kho',
+          });
+        }
+
+        // 4. Đúng 1 Nhân viên kinh doanh phụ trách đại lý đó
+        let salesRepId = order.salesRepId;
+        if (!salesRepId && order.customerId) {
+          const custRows = await this.databaseService.query<any>(
+            `SELECT sales_rep_id FROM customers WHERE id::text = $1 OR code = $1 LIMIT 1;`,
+            [order.customerId],
+          );
+          salesRepId = custRows[0]?.sales_rep_id;
+        }
+
+        if (salesRepId) {
+          const repRows = await this.databaseService.query<any>(
+            `SELECT u.id, u.username, u.full_name, r.name as role_name
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE u.id::text = $1 OR u.username = $1 LIMIT 1;`,
+            [salesRepId],
+          );
+          if (repRows[0]) {
+            recipientsMap.set(String(repRows[0].id), {
+              id: String(repRows[0].id),
+              username: repRows[0].username,
+              fullName: repRows[0].full_name,
+              roleName: 'Nhân viên kinh doanh phụ trách',
+            });
+          }
+        }
+
+        // 5. Đúng 1 Thủ kho (nhân viên kho) phụ trách kho được gán vào đại lý
+        let whId = order.warehouseId;
+        if (!whId && order.customerId) {
+          const agencyWh = await this.databaseService.query<any>(
+            `SELECT warehouse_id FROM app_agency_default_warehouses WHERE agency_key = $1 LIMIT 1;`,
+            [order.customerId],
+          );
+          whId = agencyWh[0]?.warehouse_id;
+        }
+
+        if (whId) {
+          const whRows = await this.databaseService.query<any>(
+            `SELECT manager_id FROM warehouses WHERE id::text = $1 OR code = $1 LIMIT 1;`,
+            [whId],
+          );
+          const staffId = whRows[0]?.manager_id;
+          if (staffId) {
+            const staffRows = await this.databaseService.query<any>(
+              `SELECT u.id, u.username, u.full_name, r.name as role_name
+               FROM users u
+               LEFT JOIN roles r ON r.id = u.role_id
+               WHERE u.id::text = $1 OR u.username = $1 LIMIT 1;`,
+              [staffId],
+            );
+            if (staffRows[0]) {
+              recipientsMap.set(String(staffRows[0].id), {
+                id: String(staffRows[0].id),
+                username: staffRows[0].username,
+                fullName: staffRows[0].full_name,
+                roleName: 'Thủ kho phụ trách kho',
+              });
+            }
+          }
+        }
+        // 6. Gửi thông báo cho chính Đại lý B2B vừa đặt đơn hàng
+        const agencyUserIds = new Set<string>();
+        if (order.customerId) {
+          agencyUserIds.add(String(order.customerId));
+          const custUserRows = await this.databaseService.query<any>(
+            `SELECT user_id FROM customers WHERE id::text = $1 OR code = $1 LIMIT 1;`,
+            [order.customerId],
+          );
+          if (custUserRows[0]?.user_id) {
+            agencyUserIds.add(String(custUserRows[0].user_id));
+          }
+          const userRows = await this.databaseService.query<any>(
+            `SELECT id FROM users WHERE id::text = $1 OR username = $1 LIMIT 1;`,
+            [order.customerId],
+          );
+          if (userRows[0]?.id) {
+            agencyUserIds.add(String(userRows[0].id));
+          }
+        }
+
+        const agencyTitle = `Xác nhận đặt đơn thành công`;
+        const agencyMessage = `Bạn đã gửi xác nhận đơn thành công [${order.orderCode}]. Tổng thanh toán: ${amountFormatted}. Đơn hàng đang được bộ phận kho vận xử lý.`;
+        const agencyLink = `/portal/tracking?orderId=${order.id}`;
+
+        for (const agId of agencyUserIds) {
+          await this.createNotification({
+            userId: agId,
+            recipientName: order.customerName,
+            recipientRole: 'Đại lý / Khách hàng B2B',
+            orderId: order.id,
+            orderCode: order.orderCode,
+            customerName: order.customerName,
+            type: 'ORDER',
+            title: agencyTitle,
+            message: agencyMessage,
+            amount: order.grandTotal,
+            link: agencyLink,
+            priority: 'high',
+          });
+        }
+      } catch (queryErr) {
+        this.logger.error(`Lỗi khi truy vấn danh sách người nhận thông báo: ${queryErr}`);
+      }
+    }
+
+    // Nếu bộ nhớ DB không có hoặc fallback
+    if (recipientsMap.size === 0) {
+      recipientsMap.set('admin-default', {
+        id: 'admin-default',
+        username: 'admin',
+        fullName: 'Quản trị hệ thống',
+        roleName: 'Quản trị hệ thống',
+      });
+    }
+
+    const recipientLogs: string[] = [];
+
+    // Gửi thông báo đến 5 nhóm tài khoản quản trị & nhân viên
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderId: order.id,
+        orderCode: order.orderCode,
+        customerName: order.customerName,
+        type: 'ORDER',
+        title,
+        message,
+        amount: order.grandTotal,
+        link: `/sales/orders?orderId=${order.id}`,
+        priority: order.isCreditLimitExceeded ? 'high' : 'normal',
+      });
+      recipientLogs.push(`${target.fullName} (${target.username} - ${target.roleName})`);
+    }
+
+    this.logger.log(
+      `Đã phát thông báo đơn hàng [${order.orderCode}] tới ${recipientsMap.size} tài khoản quản trị/nhân viên và Đại lý ${order.customerName}`,
+    );
+
+    return {
+      notifiedCount: recipientsMap.size + 1,
+      recipients: recipientLogs,
+    };
+  }
+
+  /**
+   * Lấy danh sách thông báo cho người dùng hiện tại theo phân quyền hoặc query parameters
+   */
+  async getNotificationsForUser(
+    user?: ICurrentUser,
+    query?: { limit?: string; userId?: string; role?: string; customerId?: string; username?: string },
+  ): Promise<NotificationEntity[]> {
+    const limit = query?.limit ? parseInt(query.limit, 10) : 50;
+
+    if (this.databaseService?.isConnected()) {
+      const explicitUserId = query?.userId || user?.userId || user?.username || query?.username;
+      const explicitRole = (query?.role || user?.roles?.[0] || '').toUpperCase();
+      const explicitCustomerId = query?.customerId || user?.agencyId || user?.customerId;
+
+      let rows: any[] = [];
+
+      // 1. Nếu là Đại lý / Khách hàng B2B (Cổng portal)
+      if (
+        explicitRole.includes('CUSTOMER') ||
+        explicitRole.includes('AGENCY') ||
+        explicitCustomerId
+      ) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE (
+            ($1::text IS NOT NULL AND user_id = $1) OR
+            ($2::text IS NOT NULL AND user_id = $2) OR
+            recipient_role ILIKE '%đại lý%' OR
+            recipient_role ILIKE '%khách hàng%'
+          )
+          ORDER BY created_at DESC LIMIT $3;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [
+          explicitCustomerId || explicitUserId || null,
+          explicitUserId || null,
+          limit,
+        ]);
+      }
+      // 2. Nếu là Admin hoặc Quản trị kinh doanh
+      else if (
+        explicitRole.includes('ADMIN') ||
+        explicitRole.includes('SALES_MANAGER') ||
+        explicitRole.includes('SALES_ADMIN')
+      ) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE (
+            ($1::text IS NOT NULL AND user_id = $1) OR
+            recipient_role ILIKE '%quản trị%' OR
+            recipient_role ILIKE '%kinh doanh%' OR
+            recipient_role ILIKE '%admin%'
+          )
+          ORDER BY created_at DESC LIMIT $2;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
+      }
+      // 3. Nếu là Quản lý kho
+      else if (
+        explicitRole.includes('INVENTORY') ||
+        explicitRole.includes('WAREHOUSE_MANAGER')
+      ) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE (
+            ($1::text IS NOT NULL AND user_id = $1) OR
+            recipient_role ILIKE '%quản lý kho%' OR
+            recipient_role ILIKE '%kho%'
+          )
+          ORDER BY created_at DESC LIMIT $2;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
+      }
+      // 4. Nếu là Thủ kho
+      else if (explicitRole.includes('KEEPER') || explicitRole.includes('STAFF')) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE (
+            ($1::text IS NOT NULL AND user_id = $1) OR
+            recipient_role ILIKE '%thủ kho%'
+          )
+          ORDER BY created_at DESC LIMIT $2;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
+      }
+      // 5. Nếu là Nhân viên kinh doanh
+      else if (explicitRole.includes('SALES_REP') || explicitRole.includes('REP')) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE (
+            ($1::text IS NOT NULL AND user_id = $1) OR
+            recipient_role ILIKE '%kinh doanh phụ trách%'
+          )
+          ORDER BY created_at DESC LIMIT $2;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
+      }
+      // 6. Nếu có userId cụ thể
+      else if (explicitUserId) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE user_id = $1
+          ORDER BY created_at DESC LIMIT $2;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [explicitUserId, limit]);
+      }
+
+      // Fallback an toàn: Nếu không tìm thấy hoặc người dùng là khách vãng lai, trả về danh sách thông báo hệ thống mới nhất
+      if (!rows || rows.length === 0) {
+        rows = await this.databaseService.query<any>(
+          `SELECT * FROM app_system_notifications ORDER BY created_at DESC LIMIT $1;`,
+          [limit],
+        );
+      }
+
+      return rows.map((r) => this.mapDbRowToEntity(r));
+    }
+
+    const userId = user?.userId || query?.userId || 'admin';
+    return this.memoryNotifications.filter((n) => n.userId === userId || userId === 'admin');
+  }
+
+  private mapDbRowToEntity(r: any): NotificationEntity {
+    return new NotificationEntity({
+      id: r.id,
+      userId: r.user_id,
+      recipientName: r.recipient_name,
+      recipientRole: r.recipient_role,
+      orderId: r.order_id,
+      orderCode: r.order_code,
+      customerName: r.customer_name,
+      type: r.type,
+      title: r.title,
+      message: r.message,
+      amount: Number(r.amount) || 0,
+      link: r.link,
+      isRead: r.is_read,
+      priority: r.priority,
+      createdAt: new Date(r.created_at),
+    });
+  }
+
+  /**
+   * Đánh dấu đã đọc một thông báo
+   */
+  async markAsRead(id: string, user?: ICurrentUser): Promise<boolean> {
+    if (this.databaseService?.isConnected()) {
+      await this.databaseService.query(
+        `UPDATE app_system_notifications SET is_read = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id::text = $1;`,
+        [id],
+      );
+      return true;
+    }
+    const found = this.memoryNotifications.find((n) => n.id === id);
+    if (found) found.isRead = true;
+    return true;
+  }
+
+  /**
+   * Đánh dấu tất cả đã đọc
+   */
+  async markAllAsRead(user?: ICurrentUser): Promise<boolean> {
+    const userId = user?.userId || user?.username;
+    if (this.databaseService?.isConnected()) {
+      if (userId) {
+        await this.databaseService.query(
+          `UPDATE app_system_notifications SET is_read = TRUE, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1;`,
+          [userId],
+        );
+      } else {
+        await this.databaseService.query(
+          `UPDATE app_system_notifications SET is_read = TRUE, updated_at = CURRENT_TIMESTAMP;`,
+        );
+      }
+      return true;
+    }
+    this.memoryNotifications.forEach((n) => (n.isRead = true));
+    return true;
+  }
+}

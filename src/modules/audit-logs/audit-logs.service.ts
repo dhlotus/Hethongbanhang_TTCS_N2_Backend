@@ -82,7 +82,7 @@ export class AuditLogsService implements OnModuleInit {
   private seedInitialAuditLogs(): void {
     const adminUser = 'usr-admin-001';
     const warehouseUser = 'usr-wh-004';
-    const salesManagerUser = 'usr-sm-003';
+    const salesManagerUser = 'usr-salesmgr-003';
     const accountantUser = 'usr-acc-006';
 
     const initialSeeds: Partial<AuditLogEntity>[] = [
@@ -296,7 +296,17 @@ export class AuditLogsService implements OnModuleInit {
    */
   private async joinUserInfo(log: AuditLogEntity): Promise<AuditLogUserInfo> {
     try {
-      const user = await this.usersService.findById(log.user_id);
+      let user = await this.usersService.findById(log.user_id);
+      if (!user) {
+        const allUsers = (await this.usersService.findAll({ limit: 200 })).data;
+        user = allUsers.find(
+          (u) =>
+            u.id.toLowerCase() === log.user_id?.toLowerCase() ||
+            u.username.toLowerCase() === log.user_id?.toLowerCase() ||
+            (log.user_id === 'usr-sm-003' && u.id === 'usr-salesmgr-003'),
+        ) as any;
+      }
+
       if (user) {
         return {
           id: user.id,
@@ -304,6 +314,8 @@ export class AuditLogsService implements OnModuleInit {
           email: user.email,
           role: (user.roles && user.roles[0]) || user.role || 'ADMIN',
           ip_address: log.ip_address,
+          avatarUrl: user.avatarUrl ?? null,
+          avatar_url: user.avatarUrl ?? null,
         };
       }
     } catch {
@@ -316,6 +328,8 @@ export class AuditLogsService implements OnModuleInit {
       email: '',
       role: 'ADMIN',
       ip_address: log.ip_address,
+      avatarUrl: null,
+      avatar_url: null,
     };
   }
 
@@ -435,6 +449,7 @@ export class AuditLogsService implements OnModuleInit {
           user_full_name?: string;
           user_email?: string;
           user_role?: string;
+          user_avatar_url?: string;
         }>(
           `SELECT 
              a.id,
@@ -448,6 +463,7 @@ export class AuditLogsService implements OnModuleInit {
              a.created_at,
              u.full_name AS user_full_name,
              u.email AS user_email,
+             u.avatar_url AS user_avatar_url,
              COALESCE(r.code, 'ADMIN') AS user_role
            FROM audit_logs a
            LEFT JOIN users u ON a.user_id = u.id
@@ -476,6 +492,8 @@ export class AuditLogsService implements OnModuleInit {
               email: r.user_email || '',
               role: r.user_role || 'ADMIN',
               ip_address: r.ip_address,
+              avatarUrl: r.user_avatar_url || null,
+              avatar_url: r.user_avatar_url || null,
             },
           });
         });
@@ -612,6 +630,7 @@ export class AuditLogsService implements OnModuleInit {
           user_full_name?: string;
           user_email?: string;
           user_role?: string;
+          user_avatar_url?: string;
         }>(
           `SELECT 
              a.id,
@@ -625,6 +644,7 @@ export class AuditLogsService implements OnModuleInit {
              a.created_at,
              u.full_name AS user_full_name,
              u.email AS user_email,
+             u.avatar_url AS user_avatar_url,
              COALESCE(r.code, 'ADMIN') AS user_role
            FROM audit_logs a
            LEFT JOIN users u ON a.user_id = u.id
@@ -652,6 +672,8 @@ export class AuditLogsService implements OnModuleInit {
               email: r.user_email || '',
               role: r.user_role || 'ADMIN',
               ip_address: r.ip_address,
+              avatarUrl: r.user_avatar_url || null,
+              avatar_url: r.user_avatar_url || null,
             },
           });
         }

@@ -36,6 +36,8 @@ import {
   UpdateAuditItemsDto,
   CompleteAuditDto,
   QueryAuditsDto,
+  QueryBatchesDto,
+  CheckBatchDispatchDto,
 } from './dto';
 
 /**
@@ -217,9 +219,23 @@ export class InventoryController {
   )
   async getTransactions(
     @Query('sku') sku?: string,
+    @Query('warehouse') warehouse?: string,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('type') type?: string,
+    @Query('search') search?: string,
     @Query('limit') limit?: number,
   ): Promise<InventoryTransactionEntity[]> {
-    return this.inventoryService.getTransactions(sku, limit);
+    return this.inventoryService.getTransactions({
+      sku,
+      warehouse: warehouse || warehouseId,
+      startDate,
+      endDate,
+      type,
+      search,
+      limit,
+    });
   }
 
   /**
@@ -401,6 +417,10 @@ export class InventoryController {
     return this.inventoryService.cancelAudit(id, undefined, user);
   }
 
+  // =========================================================================
+  // THEO DÕI LÔ HÀNG, HẠN SỬ DỤNG & GỢI Ý XUẤT FEFO (SN-184, SN-187)
+  // =========================================================================
+
   /**
    * Lấy danh sách gợi ý Lô xuất theo nguyên tắc hạn dùng gần nhất FEFO (SN-187)
    * GET /api/inventory/batches/fefo-recommendations?warehouseId=...&productId=...&requiredQuantity=...
@@ -420,25 +440,51 @@ export class InventoryController {
   }
 
   /**
-   * Lấy danh sách toàn bộ Lô hàng của sản phẩm tại kho để thủ kho tra cứu (SN-187)
-   * GET /api/inventory/batches?warehouseId=...&productId=...
+   * Thống kê tổng quan lô hàng và cảnh báo cận hạn / quá hạn (SN-184 AC-3)
+   * GET /inventory/batches/stats?warehouseId=...&expiryThresholdDays=30
+   */
+  @Get('batches/stats')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getBatchStats(
+    @Query('warehouseId') warehouseId?: string,
+    @Query('expiryThresholdDays') thresholdDays?: number,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.getBatchStats(
+      warehouseId,
+      thresholdDays ? Number(thresholdDays) : 30,
+      currentUser,
+    );
+  }
+
+  /**
+   * Truy vấn danh sách lô hàng kèm cảnh báo cận hạn (SN-184 AC-2 & AC-3)
+   * GET /inventory/batches?warehouseId=...&status=...&expiryThresholdDays=30
+   * Quyền: WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN, SALES_MANAGER, ACCOUNTANT
    */
   @Get('batches')
   @Roles(
     UserRole.ADMIN,
-    UserRole.WAREHOUSE_MANAGER,
     UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
     UserRole.WH_MANAGER,
     UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
   )
   async getBatches(
-    @Query('warehouseId') warehouseId?: string,
-    @Query('productId') productId?: string,
-  ): Promise<FefoBatchDetail[]> {
-    return this.fefoService.getBatchesByProduct(
-      warehouseId || DEFAULT_WAREHOUSE_ID,
-      productId || '',
-    );
+    @Query() query: QueryBatchesDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.getBatches(query, currentUser);
   }
 
   /**
@@ -460,5 +506,25 @@ export class InventoryController {
   ) {
     return this.fefoService.confirmFefoDispatch(dto, user);
   }
-}
 
+  /**
+   * Kiểm tra điều kiện xuất kho của lô hàng và ghi đè của Quản lý kho (SN-184 AC-4)
+   * POST /inventory/batches/check-dispatch
+   * Chặn xuất lô đã quá hạn trừ khi Quản lý kho xác nhận ghi đè kèm lý do
+   */
+  @Post('batches/check-dispatch')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+  )
+  @HttpCode(HttpStatus.OK)
+  async checkBatchDispatch(
+    @Body() dto: CheckBatchDispatchDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.checkBatchDispatch(dto, currentUser);
+  }
+}

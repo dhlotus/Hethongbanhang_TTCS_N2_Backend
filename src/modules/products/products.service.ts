@@ -66,6 +66,9 @@ export class ProductsService implements OnModuleInit {
     'LH-OLD-COFFEE-CAN',
   ]);
 
+  private lastDbLoadTimestamp = 0;
+  private readonly DB_CACHE_TTL_MS = 15000;
+
   constructor(
     @Optional() private readonly dbService?: DatabaseService,
     @Optional()
@@ -193,7 +196,12 @@ export class ProductsService implements OnModuleInit {
   /**
    * Tải danh mục sản phẩm từ cơ sở dữ liệu PostgreSQL (nếu đã kết nối)
    */
-  private async loadProductsFromDatabase(): Promise<void> {
+  private async loadProductsFromDatabase(force: boolean = false): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    if (!force && this.products.size > 0 && Date.now() - this.lastDbLoadTimestamp < this.DB_CACHE_TTL_MS) {
+      return;
+    }
+    this.lastDbLoadTimestamp = Date.now();
     try {
       const rows = await this.dbService!.query<{
         id: string;
@@ -211,8 +219,9 @@ export class ProductsService implements OnModuleInit {
         updated_at: Date;
         price?: string | number;
         stock_quantity?: string | number;
+        is_batch_managed?: boolean;
       }>(
-        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.created_at, p.updated_at,
+        `SELECT p.id, p.sku, p.name, p.category_id, p.base_unit, p.cost_price, p.status, p.image_url, p.is_batch_managed, p.created_at, p.updated_at,
                 c.name as category_name, c.code as category_code,
                 pcat.name as parent_category_name,
                 COALESCE(pli.price, ROUND(p.cost_price * 1.35)) as price,
@@ -298,6 +307,7 @@ export class ProductsService implements OnModuleInit {
             stockQuantity: stock,
             status: (row.status as ProductStatus) || ProductStatus.ACTIVE,
             imageUrl: row.image_url,
+            isBatchManaged: row.is_batch_managed !== undefined ? Boolean(row.is_batch_managed) : true,
             hasTransactions: false,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
@@ -308,6 +318,13 @@ export class ProductsService implements OnModuleInit {
     } catch {
       // Fallback êm ái nếu có lỗi truy vấn
     }
+  }
+
+  /**
+   * Hủy cache dữ liệu sản phẩm trong bộ nhớ để làm mới từ Database khi có thay đổi
+   */
+  public invalidateProductCache(): void {
+    this.lastDbLoadTimestamp = 0;
   }
 
   /**
@@ -939,6 +956,10 @@ export class ProductsService implements OnModuleInit {
       throw new BadRequestException('Giá vốn không được âm');
     }
 
+    if (costPrice > 0 && dto.price <= costPrice) {
+      throw new BadRequestException('Giá niêm yết bắt buộc phải lớn hơn giá vốn');
+    }
+
     // Tính toán biên lợi nhuận (margin %)
     const margin =
       dto.price > 0
@@ -1036,6 +1057,7 @@ export class ProductsService implements OnModuleInit {
       status: dto.status ?? ProductStatus.ACTIVE,
       imageUrl: dto.imageUrl?.trim(),
       description: dto.description?.trim(),
+      isBatchManaged: dto.isBatchManaged !== undefined ? Boolean(dto.isBatchManaged) : true,
       hasTransactions: false,
     });
 
@@ -1062,14 +1084,15 @@ export class ProductsService implements OnModuleInit {
         }
 
         const prodRows = await this.dbService.query<{ id: string }>(
-          `INSERT INTO products (sku, name, category_id, base_unit, cost_price, status, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `INSERT INTO products (sku, name, category_id, base_unit, cost_price, status, image_url, is_batch_managed)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (sku) DO UPDATE SET
              name = EXCLUDED.name,
              cost_price = EXCLUDED.cost_price,
              category_id = EXCLUDED.category_id,
              status = EXCLUDED.status,
              image_url = EXCLUDED.image_url,
+             is_batch_managed = EXCLUDED.is_batch_managed,
              updated_at = CURRENT_TIMESTAMP
            RETURNING id;`,
           [
@@ -1080,6 +1103,7 @@ export class ProductsService implements OnModuleInit {
             newProduct.costPrice,
             newProduct.status,
             newProduct.imageUrl || null,
+            newProduct.isBatchManaged,
           ],
         );
 
@@ -1249,6 +1273,10 @@ export class ProductsService implements OnModuleInit {
       product.costPrice = Number(dto.costPrice);
     }
 
+    if (product.costPrice > 0 && product.price <= product.costPrice) {
+      throw new BadRequestException('Giá niêm yết bắt buộc phải lớn hơn giá vốn');
+    }
+
     // Tự động tính toán lại margin khi giá bán hoặc giá vốn thay đổi
     if (dto.price !== undefined || dto.costPrice !== undefined) {
       product.margin =
@@ -1344,6 +1372,10 @@ export class ProductsService implements OnModuleInit {
       product.units = updatedUnits;
     }
 
+    if (dto.isBatchManaged !== undefined) {
+      product.isBatchManaged = Boolean(dto.isBatchManaged);
+    }
+
     product.updatedAt = new Date();
     this.products.set(product.id, product);
 
@@ -1377,6 +1409,7 @@ export class ProductsService implements OnModuleInit {
                status = COALESCE($4, status),
                image_url = COALESCE($5, image_url),
                category_id = COALESCE($7, category_id),
+               is_batch_managed = COALESCE($8, is_batch_managed),
                updated_at = CURRENT_TIMESTAMP
            WHERE sku = $6;`,
           [
@@ -1387,6 +1420,7 @@ export class ProductsService implements OnModuleInit {
             dto.imageUrl ? dto.imageUrl.trim() : null,
             product.sku,
             dbCategoryId,
+            dto.isBatchManaged !== undefined ? Boolean(dto.isBatchManaged) : null,
           ],
         );
       } catch {}
@@ -1946,6 +1980,9 @@ export class ProductsService implements OnModuleInit {
       if (!baseUnit) errors.push('Đơn vị tính không được để trống');
       if (price <= 0) errors.push('Giá niêm yết phải lớn hơn 0');
       if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
+      if (price > 0 && costPrice > 0 && price <= costPrice) {
+        errors.push('Giá niêm yết bắt buộc phải lớn hơn giá vốn');
+      }
 
       const existingProduct = Array.from(this.products.values()).find(
         (p) => p.sku.toLowerCase() === sku?.toLowerCase(),
