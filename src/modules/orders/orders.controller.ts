@@ -185,9 +185,38 @@ export class OrdersController {
             role: currentUser.roles?.[0],
             username: currentUser.username,
             roles: currentUser.roles,
+            warehouseId: currentUser.warehouseId,
+            warehouseCode: currentUser.warehouseCode,
+            warehouseName: currentUser.warehouseName,
+            assignedWarehouse: currentUser.assignedWarehouse,
+            warehouses: currentUser.warehouses,
+            warehouseIds: currentUser.warehouseIds,
           }
         : undefined,
     );
+  }
+
+  /**
+   * Lấy danh sách đơn hàng cho phép xuất kho chuẩn ERP (SN-188)
+   * GET /api/orders/for-shipment
+   * Chỉ trả về các đơn đã được duyệt (APPROVED, READY_TO_SHIP, PROCESSING)
+   * Tuyệt đối loại bỏ các đơn CANCELLED, DRAFT, PENDING
+   */
+  @Get('for-shipment')
+  @Public()
+  @UseGuards(JwtAuthGuard)
+  async getOrdersForShipment(
+    @Query() query: QueryOrdersDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<{
+    data: OrderEntity[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    query.forShipment = true;
+    return this.getOrders(query, currentUser);
   }
 
   /**
