@@ -6,6 +6,8 @@ export interface AuditLogUserInfo {
   email: string;
   role?: string;
   ip_address: string;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
 }
 
 export class AuditLogEntity {
