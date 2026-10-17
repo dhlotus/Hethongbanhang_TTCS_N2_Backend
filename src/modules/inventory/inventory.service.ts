@@ -381,53 +381,274 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Khởi tạo một số giao dịch sổ kho mẫu lưu vết quy đổi (SN-23)
+   * Khởi tạo các giao dịch sổ kho mẫu phong phú phục vụ Thẻ kho (SN-185 & SN-23)
    */
   private seedInitialTransactions(): void {
     const now = Date.now();
+    const day = 86400000;
 
-    const seedTx1 = new InventoryTransactionEntity({
-      id: 'tx-seed-001',
-      productId: 'prod-001',
-      sku: 'LH-MILK-900G',
-      productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
-      transactionType: 'IMPORT',
-      inputQuantity: 10,
-      inputUnit: 'Thùng',
-      conversionRate: 24, // Snapshot: 1 Thùng = 24 Lon
-      baseQuantityChange: 240, // 10 * 24 = 240 Lon
-      baseUnit: 'Lon',
-      previousStock: 100,
-      newStock: 1500,
-      reason: 'Nhập lô hàng mới từ Nhà máy Dược Loha',
-      referenceCode: 'PNK-2026-0891',
-      warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-      performedBy: 'usr-wh-keeper',
-      createdAt: new Date(now - 86400000 * 2),
-    });
+    const transactions: InventoryTransactionEntity[] = [
+      // 1. LH-MILK-900G (Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-01',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'IMPORT',
+        inputQuantity: 10,
+        inputUnit: 'Thùng',
+        conversionRate: 24,
+        baseQuantityChange: 240,
+        baseUnit: 'Lon',
+        previousStock: 100,
+        newStock: 340,
+        reason: 'Nhập lô hàng mới từ Nhà máy Dược Loha',
+        referenceCode: 'PNK-2026-0891',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 6),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-02',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'ORDER',
+        inputQuantity: -50,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: -50,
+        baseUnit: 'Lon',
+        previousStock: 340,
+        newStock: 290,
+        reason: 'Xuất bán đơn hàng đại lý #DH-2026-1002 (Đại lý Sữa Miền Nam)',
+        referenceCode: 'DH-2026-1002',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 4.5),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-03',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'TRANSFER',
+        inputQuantity: -30,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: -30,
+        baseUnit: 'Lon',
+        previousStock: 290,
+        newStock: 260,
+        reason: 'Điều chuyển nội bộ sang Kho Vận Hà Nội phục vụ thị trường phía Bắc',
+        referenceCode: 'PCK-2026-0045',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Quản lý kho Đỗ Quốc Bảo',
+        createdAt: new Date(now - day * 3),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-04',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'ADJUSTMENT',
+        inputQuantity: -2,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: -2,
+        baseUnit: 'Lon',
+        previousStock: 260,
+        newStock: 258,
+        reason: 'Điều chỉnh kiểm kê định kỳ: Hao hụt 2 lon do móp méo khi bốc xếp',
+        referenceCode: 'PKK-20261008-001',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Quản lý kho Đỗ Quốc Bảo',
+        createdAt: new Date(now - day * 2),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-05',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'IMPORT',
+        inputQuantity: 1242,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: 1242,
+        baseUnit: 'Lon',
+        previousStock: 258,
+        newStock: 1500,
+        reason: 'Nhập bổ sung lượng lớn theo hợp đồng cung ứng số HD-2026-44',
+        referenceCode: 'PNK-2026-0905',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 1),
+      }),
 
-    const seedTx2 = new InventoryTransactionEntity({
-      id: 'tx-seed-002',
-      productId: 'prod-002',
-      sku: 'LH-NUT-180ML',
-      productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
-      transactionType: 'IMPORT',
-      inputQuantity: 25,
-      inputUnit: 'Thùng',
-      conversionRate: 48, // Snapshot: 1 Thùng = 48 Hộp
-      baseQuantityChange: 1200, // 25 * 48 = 1200 Hộp
-      baseUnit: 'Hộp',
-      previousStock: 0,
-      newStock: 1200,
-      reason: 'Nhập kho thành phẩm theo lệnh sản xuất #LSX-1102',
-      referenceCode: 'PNK-2026-0892',
-      warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-      performedBy: 'usr-wh-keeper',
-      createdAt: new Date(now - 86400000),
-    });
+      // 2. LH-NUT-180ML (Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-nut-01',
+        productId: 'prod-002',
+        sku: 'LH-NUT-180ML',
+        productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        transactionType: 'IMPORT',
+        inputQuantity: 25,
+        inputUnit: 'Thùng',
+        conversionRate: 48,
+        baseQuantityChange: 1200,
+        baseUnit: 'Hộp',
+        previousStock: 0,
+        newStock: 1200,
+        reason: 'Nhập kho thành phẩm theo lệnh sản xuất #LSX-1102',
+        referenceCode: 'PNK-2026-0892',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 5),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-nut-02',
+        productId: 'prod-002',
+        sku: 'LH-NUT-180ML',
+        productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        transactionType: 'ORDER',
+        inputQuantity: -120,
+        inputUnit: 'Hộp',
+        conversionRate: 1,
+        baseQuantityChange: -120,
+        baseUnit: 'Hộp',
+        previousStock: 1200,
+        newStock: 1080,
+        reason: 'Xuất bán theo đơn hàng #DH-2026-1008 cho Chuỗi siêu thị Loha Mart',
+        referenceCode: 'DH-2026-1008',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 3),
+      }),
 
-    this.writeLedger(seedTx1);
-    this.writeLedger(seedTx2);
+      // 3. LH-BIRD-NEST (Yến Sào & Thực Phẩm Bổ Dưỡng)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-bird-01',
+        productId: 'prod-003',
+        sku: 'LH-BIRD-NEST',
+        productName: 'Tổ Yến Chưng Đông Trùng Hạ Thảo Cao Cấp 70ml',
+        transactionType: 'IMPORT',
+        inputQuantity: 600,
+        inputUnit: 'Hũ',
+        conversionRate: 1,
+        baseQuantityChange: 600,
+        baseUnit: 'Hũ',
+        previousStock: 0,
+        newStock: 600,
+        reason: 'Nhập kho thành phẩm cao cấp từ Xưởng Yến Sào Nha Trang',
+        referenceCode: 'PNK-2026-0895',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 4),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-bird-02',
+        productId: 'prod-003',
+        sku: 'LH-BIRD-NEST',
+        productName: 'Tổ Yến Chưng Đông Trùng Hạ Thảo Cao Cấp 70ml',
+        transactionType: 'ORDER',
+        inputQuantity: -20,
+        inputUnit: 'Hũ',
+        conversionRate: 1,
+        baseQuantityChange: -20,
+        baseUnit: 'Hũ',
+        previousStock: 600,
+        newStock: 580,
+        reason: 'Xuất giao hàng đơn VIP #DH-2026-1015 (Đại lý Dinh Dưỡng An Tâm)',
+        referenceCode: 'DH-2026-1015',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 2),
+      }),
+
+      // 4. LH-COFFEE-250G (Cà Phê Rang Xay)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-coffee-01',
+        productId: 'prod-004',
+        sku: 'LH-COFFEE-250G',
+        productName: 'Cà Phê Rang Xay Nguyên Chất Robusta & Arabica 250g',
+        transactionType: 'IMPORT',
+        inputQuantity: 500,
+        inputUnit: 'Gói',
+        conversionRate: 1,
+        baseQuantityChange: 500,
+        baseUnit: 'Gói',
+        previousStock: 0,
+        newStock: 500,
+        reason: 'Nhập lô cà phê thu hoạch mới từ Nông trại Buôn Ma Thuột',
+        referenceCode: 'PNK-2026-0898',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 5),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-coffee-02',
+        productId: 'prod-004',
+        sku: 'LH-COFFEE-250G',
+        productName: 'Cà Phê Rang Xay Nguyên Chất Robusta & Arabica 250g',
+        transactionType: 'TRANSFER',
+        inputQuantity: -90,
+        inputUnit: 'Gói',
+        conversionRate: 1,
+        baseQuantityChange: -90,
+        baseUnit: 'Gói',
+        previousStock: 500,
+        newStock: 410,
+        reason: 'Điều chuyển kho nội bộ sang Kho Trung Chuyển Đà Nẵng',
+        referenceCode: 'PCK-2026-0048',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Quản lý kho Đỗ Quốc Bảo',
+        createdAt: new Date(now - day * 2.5),
+      }),
+
+      // 5. LH-TEA-350ML (Trà Thảo Mộc)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-tea-01',
+        productId: 'prod-005',
+        sku: 'LH-TEA-350ML',
+        productName: 'Trà Thảo Mộc Hoa Cúc & Kỷ Tử Thanh Nhiệt 350ml',
+        transactionType: 'IMPORT',
+        inputQuantity: 300,
+        inputUnit: 'Chai',
+        conversionRate: 1,
+        baseQuantityChange: 300,
+        baseUnit: 'Chai',
+        previousStock: 0,
+        newStock: 300,
+        reason: 'Nhập hàng đợt 1 từ Công ty Trà Thảo Dược Thiên Nhiên',
+        referenceCode: 'PNK-2026-0901',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 4),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-tea-02',
+        productId: 'prod-005',
+        sku: 'LH-TEA-350ML',
+        productName: 'Trà Thảo Mộc Hoa Cúc & Kỷ Tử Thanh Nhiệt 350ml',
+        transactionType: 'EXPORT',
+        inputQuantity: -40,
+        inputUnit: 'Chai',
+        conversionRate: 1,
+        baseQuantityChange: -40,
+        baseUnit: 'Chai',
+        previousStock: 300,
+        newStock: 260,
+        reason: 'Xuất mẫu thử nghiệm và giới thiệu sản phẩm tại Hội chợ Thương mại',
+        referenceCode: 'PXK-2026-0015',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 1.5),
+      }),
+    ];
+
+    for (const tx of transactions) {
+      this.writeLedger(tx);
+    }
   }
 
   /**
@@ -1504,12 +1725,29 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Truy vấn sổ kho và lịch sử biến động giao dịch (Fix #4: đọc từ ledger Map)
+   * Truy vấn sổ kho và lịch sử biến động giao dịch (SN-185: Thẻ kho hàng hóa)
    */
   async getTransactions(
-    sku?: string,
-    limit?: number,
+    queryOrSku?: string | {
+      sku?: string;
+      warehouse?: string;
+      startDate?: string;
+      endDate?: string;
+      type?: string;
+      search?: string;
+      limit?: number;
+    },
+    limitParam?: number,
   ): Promise<InventoryTransactionEntity[]> {
+    const q = typeof queryOrSku === 'string' ? { sku: queryOrSku, limit: limitParam } : (queryOrSku || {});
+    const sku = q.sku;
+    const warehouse = q.warehouse;
+    const startDate = q.startDate;
+    const endDate = q.endDate;
+    const type = q.type;
+    const search = q.search;
+    const limit = q.limit;
+
     // Gom toàn bộ giao dịch từ tất cả bucket, sắp xếp mới nhất lên đầu
     let list: InventoryTransactionEntity[] = [];
     for (const bucket of this.ledger.values()) {
@@ -1517,7 +1755,7 @@ export class InventoryService implements OnModuleInit {
     }
     list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    if (sku) {
+    if (sku && sku.trim() !== '') {
       const cleanSku = sku.trim().toUpperCase();
       list = list.filter((t) => {
         const tSku = t.sku.toUpperCase();
@@ -1528,7 +1766,47 @@ export class InventoryService implements OnModuleInit {
       });
     }
 
-    const max = limit && limit > 0 ? Number(limit) : 100;
+    if (warehouse && warehouse.trim() !== '' && warehouse.toUpperCase() !== 'ALL') {
+      const cleanWh = warehouse.trim().toLowerCase();
+      list = list.filter((t) => {
+        const tWh = (t.warehouse || '').toLowerCase();
+        return tWh.includes(cleanWh) || cleanWh.includes(tWh);
+      });
+    }
+
+    if (type && type.trim() !== '' && type.toUpperCase() !== 'ALL') {
+      const cleanType = type.trim().toUpperCase();
+      list = list.filter((t) => (t.transactionType || t.type) === cleanType);
+    }
+
+    if (startDate && startDate.trim() !== '') {
+      const start = new Date(startDate);
+      if (!isNaN(start.getTime())) {
+        start.setHours(0, 0, 0, 0);
+        list = list.filter((t) => new Date(t.createdAt).getTime() >= start.getTime());
+      }
+    }
+
+    if (endDate && endDate.trim() !== '') {
+      const end = new Date(endDate);
+      if (!isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        list = list.filter((t) => new Date(t.createdAt).getTime() <= end.getTime());
+      }
+    }
+
+    if (search && search.trim() !== '') {
+      const s = search.trim().toLowerCase();
+      list = list.filter((t) =>
+        (t.referenceCode || '').toLowerCase().includes(s) ||
+        (t.productName || '').toLowerCase().includes(s) ||
+        (t.sku || '').toLowerCase().includes(s) ||
+        (t.reason || '').toLowerCase().includes(s) ||
+        (t.performedBy || '').toLowerCase().includes(s)
+      );
+    }
+
+    const max = limit && limit > 0 ? Number(limit) : 500;
     return list.slice(0, max);
   }
 

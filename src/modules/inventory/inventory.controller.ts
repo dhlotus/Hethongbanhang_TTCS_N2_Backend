@@ -207,9 +207,23 @@ export class InventoryController {
   )
   async getTransactions(
     @Query('sku') sku?: string,
+    @Query('warehouse') warehouse?: string,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('type') type?: string,
+    @Query('search') search?: string,
     @Query('limit') limit?: number,
   ): Promise<InventoryTransactionEntity[]> {
-    return this.inventoryService.getTransactions(sku, limit);
+    return this.inventoryService.getTransactions({
+      sku,
+      warehouse: warehouse || warehouseId,
+      startDate,
+      endDate,
+      type,
+      search,
+      limit,
+    });
   }
 
   /**
