@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { InvoicesService, InvoiceItem, DealerDebtSummary } from './invoices.service';
+import { InvoicesService, InvoiceItem, DealerDebtSummary, PaginatedInvoicesResult } from './invoices.service';
 import { DebtReminderSchedulerService } from './debt-reminder-scheduler.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -135,7 +135,7 @@ export class InvoicesController {
   async findAll(
     @Query() query: Record<string, string>,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<InvoiceItem[]> {
+  ): Promise<InvoiceItem[] | PaginatedInvoicesResult> {
     return this.invoicesService.findAll(query as any, currentUser);
   }
 

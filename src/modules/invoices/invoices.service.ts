@@ -79,6 +79,14 @@ export interface DealerDebtSummary {
   creditStatus: string;
 }
 
+export interface PaginatedInvoicesResult {
+  data: InvoiceItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 @Injectable()
 export class InvoicesService implements OnModuleInit {
   private readonly logger = new Logger(InvoicesService.name);
@@ -421,9 +429,11 @@ export class InvoicesService implements OnModuleInit {
       search?: string;
       sortBy?: string;
       sortOrder?: 'asc' | 'desc';
+      page?: number | string;
+      limit?: number | string;
     },
     currentUser?: ICurrentUser,
-  ): Promise<InvoiceItem[]> {
+  ): Promise<InvoiceItem[] | PaginatedInvoicesResult> {
     // Luôn đồng bộ dữ liệu mới nhất từ PostgreSQL
     if (this.databaseService?.isConnected()) {
       await this.syncFromDatabase();
@@ -471,12 +481,27 @@ export class InvoicesService implements OnModuleInit {
     // Lọc theo trạng thái nợ
     if (query?.status) {
       const now = new Date();
-      if (query.status === 'OVERDUE') {
+      const statusParam = String(query.status).toUpperCase().trim();
+      if (statusParam === 'OVERDUE') {
         list = list.filter((inv) => inv.remainingAmount > 0 && new Date(inv.dueDate) < now);
-      } else if (query.status === 'UNPAID') {
-        list = list.filter((inv) => inv.paidAmount === 0 && inv.status !== 'PAID');
+      } else if (statusParam === 'UNPAID') {
+        list = list.filter(
+          (inv) =>
+            (inv.status === 'UNPAID' || inv.status === 'ISSUED' || inv.paidAmount === 0) &&
+            inv.status !== 'PAID' &&
+            !(inv.remainingAmount > 0 && new Date(inv.dueDate) < now),
+        );
+      } else if (statusParam === 'PARTIAL' || statusParam === 'PARTIALLY_PAID') {
+        list = list.filter(
+          (inv) =>
+            (inv.status === 'PARTIALLY_PAID' || (inv.paidAmount > 0 && inv.remainingAmount > 0)) &&
+            inv.status !== 'PAID' &&
+            !(inv.remainingAmount > 0 && new Date(inv.dueDate) < now),
+        );
+      } else if (statusParam === 'PAID') {
+        list = list.filter((inv) => inv.status === 'PAID' || inv.remainingAmount === 0);
       } else {
-        list = list.filter((inv) => inv.status === query.status);
+        list = list.filter((inv) => inv.status === statusParam);
       }
     }
 
@@ -504,6 +529,24 @@ export class InvoicesService implements OnModuleInit {
       if (valA > valB) return isAsc ? 1 : -1;
       return 0;
     });
+
+    // Hỗ trợ phân trang khi client gửi page hoặc limit
+    if (query?.page !== undefined || query?.limit !== undefined) {
+      const total = list.length;
+      const page = Math.max(1, Number(query.page || 1));
+      const limit = Math.max(1, Math.min(100, Number(query.limit || 10)));
+      const totalPages = Math.ceil(total / limit) || 1;
+      const offset = (page - 1) * limit;
+      const data = list.slice(offset, offset + limit);
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+      };
+    }
 
     return list;
   }
