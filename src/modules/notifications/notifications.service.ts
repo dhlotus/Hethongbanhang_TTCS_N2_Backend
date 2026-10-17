@@ -517,7 +517,193 @@ export class NotificationsService implements OnModuleInit {
       }
       return true;
     }
-    this.memoryNotifications.forEach((n) => (n.isRead = true));
     return true;
   }
+
+  /**
+   * SN-188: Sự kiện 1: Phát thông báo khi tạo phiếu xuất chuẩn FEFO
+   * Đối tượng nhận: Nhân viên kho phụ trách & Quản lý kho.
+   * Nội dung: "Phiếu xuất mới [ma_phieu] đã được tạo theo chuẩn FEFO cho lô [batch_no]."
+   */
+  async notifyShipmentFefoCreated(data: {
+    shipmentId: string;
+    orderCode: string;
+    batchNumbers: string[];
+    warehouseId?: string;
+    creatorId?: string;
+    creatorName?: string;
+    creatorUsername?: string;
+  }): Promise<void> {
+    const recipientsMap = new Map<string, TargetUser>();
+    const batchText = data.batchNumbers.length > 0 ? data.batchNumbers.join(', ') : 'mặc định';
+    const title = `Phiếu xuất kho mới theo chuẩn FEFO`;
+    const message = `Phiếu xuất mới ${data.shipmentId} đã được tạo theo chuẩn FEFO cho lô ${batchText}.`;
+    const link = `/inventory/shipments/${data.shipmentId}`;
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Quản lý kho (role_id = 4 hoặc tên chứa quản lý kho)
+        const whManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 4 OR r.name ILIKE '%quản lý kho%' OR r.code ILIKE '%warehouse_manager%';`,
+        );
+        for (const wm of whManagers) {
+          recipientsMap.set(String(wm.id), {
+            id: String(wm.id),
+            username: wm.username,
+            fullName: wm.full_name,
+            roleName: 'Quản lý kho',
+          });
+        }
+
+        // 2. Nhân viên kho / Thủ kho (role_id = 5 hoặc phụ trách kho)
+        if (data.warehouseId) {
+          const keepers = await this.databaseService.query<any>(
+            `SELECT u.id, u.username, u.full_name, r.name as role_name
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE (u.warehouse_id = $1 OR u.role_id = 5 OR r.name ILIKE '%thủ kho%')
+             LIMIT 5;`,
+            [data.warehouseId],
+          );
+          for (const k of keepers) {
+            recipientsMap.set(String(k.id), {
+              id: String(k.id),
+              username: k.username,
+              fullName: k.full_name,
+              roleName: 'Thủ kho phụ trách',
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm người nhận thông báo FEFO: ${err}`);
+      }
+    }
+
+    // Gửi thông báo đến danh sách người nhận (Quản lý kho & Thủ kho phụ trách)
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title,
+        message,
+        link,
+        priority: 'normal',
+      });
+    }
+
+    // 3. THÔNG BÁO CÁ NHÂN: Gửi thông báo trực tiếp cho chính Thủ kho vừa tạo phiếu để xem lại
+    if (data.creatorId || data.creatorUsername) {
+      const creatorKey = String(data.creatorId || data.creatorUsername);
+      await this.createNotification({
+        userId: creatorKey,
+        recipientName: data.creatorName || 'Bạn',
+        recipientRole: 'Thủ kho tạo phiếu',
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title: 'Tạo phiếu xuất kho thành công',
+        message: `Bạn đã tạo thành công phiếu xuất kho [${data.shipmentId}] cho đơn hàng [${data.orderCode}]. Hàng hóa đã được phân bổ lô xuất kho chuẩn FEFO.`,
+        link,
+        priority: 'high',
+      });
+    }
+  }
+
+  /**
+   * SN-188: Sự kiện 2: Phát thông báo Cảnh báo ghi đè lô xuất kho (FEFO Override)
+   * Đối tượng nhận: Quản lý kho & Admin (Quản trị hệ thống).
+   * Nội dung: "⚠️ Cảnh báo ghi đè lô xuất kho: Thủ kho [ten_thu_kho] vừa đổi lô sản phẩm [sku] từ [lo_goi_y] sang [lo_thuc_te]. Lý do: [override_reason]."
+   */
+  async notifyShipmentBatchOverridden(data: {
+    shipmentId: string;
+    orderCode: string;
+    keeperName: string;
+    sku: string;
+    suggestedBatch: string;
+    actualBatch: string;
+    reason: string;
+    creatorId?: string;
+    creatorUsername?: string;
+  }): Promise<void> {
+    const recipientsMap = new Map<string, TargetUser>();
+    const title = `⚠️ Cảnh báo ghi đè lô xuất kho`;
+    const message = `⚠️ Cảnh báo ghi đè lô xuất kho: Thủ kho ${data.keeperName || 'Thủ kho'} vừa đổi lô sản phẩm ${data.sku} từ ${data.suggestedBatch || 'FEFO'} sang ${data.actualBatch}. Lý do: ${data.reason}.`;
+    const link = `/inventory/shipments/${data.shipmentId}`;
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Quản trị hệ thống (Admin)
+        const admins = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 1 OR r.name ILIKE '%quản trị hệ thống%' OR r.code ILIKE '%admin%';`,
+        );
+        for (const a of admins) {
+          recipientsMap.set(String(a.id), {
+            id: String(a.id),
+            username: a.username,
+            fullName: a.full_name,
+            roleName: 'Quản trị hệ thống',
+          });
+        }
+
+        // 2. Quản lý kho
+        const whManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 4 OR r.name ILIKE '%quản lý kho%' OR r.code ILIKE '%warehouse_manager%';`,
+        );
+        for (const wm of whManagers) {
+          recipientsMap.set(String(wm.id), {
+            id: String(wm.id),
+            username: wm.username,
+            fullName: wm.full_name,
+            roleName: 'Quản lý kho',
+          });
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm người nhận cảnh báo ghi đè lô: ${err}`);
+      }
+    }
+
+    // Gửi thông báo đến danh sách người nhận
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title,
+        message,
+        link,
+        priority: 'high',
+      });
+    }
+
+    // THÔNG BÁO CÁ NHÂN: Gửi cho chính người tạo phiếu
+    if (data.creatorId || data.creatorUsername) {
+      const creatorKey = String(data.creatorId || data.creatorUsername);
+      await this.createNotification({
+        userId: creatorKey,
+        recipientName: data.keeperName || 'Bạn',
+        recipientRole: 'Thủ kho tạo phiếu',
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title: 'Tạo phiếu xuất kho (Ghi đè FEFO)',
+        message: `Bạn đã tạo thành công phiếu xuất kho [${data.shipmentId}] cho đơn hàng [${data.orderCode}] với yêu cầu ghi đè lô xuất kho cho sản phẩm ${data.sku}.`,
+        link,
+        priority: 'high',
+      });
+    }
+  }
 }
+
+

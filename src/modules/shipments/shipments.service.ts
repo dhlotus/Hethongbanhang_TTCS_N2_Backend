@@ -7,11 +7,13 @@ import {
   Inject,
   forwardRef,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { OrdersService } from '../orders/orders.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   DeliveryTripEntity,
   DeliveryTripStopEntity,
@@ -23,6 +25,24 @@ import {
   AssignDriverDto,
 } from './dto/delivery-trip.dto';
 
+export interface ShipmentBatchItem {
+  id?: string;
+  sku_code: string;
+  skuCode?: string;
+  product_name?: string;
+  productName?: string;
+  quantity_requested: number;
+  quantityRequested?: number;
+  selected_batch_no: string;
+  selectedBatchNo?: string;
+  fefo_suggested_batch_no?: string;
+  fefoSuggestedBatchNo?: string;
+  is_overridden: boolean;
+  isOverridden?: boolean;
+  override_reason?: string | null;
+  overrideReason?: string | null;
+}
+
 export interface ShipmentItem {
   id: string;
   orderId: string;
@@ -31,17 +51,20 @@ export interface ShipmentItem {
   customerName: string;
   salesRepId?: string;
   warehouseId?: string;
+  warehouseName?: string;
   status: 'PENDING' | 'PICKING' | 'PACKED' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED';
   deliveryAddress?: string;
   receiverName?: string;
   phone?: string;
   trackingNumber?: string;
   carrierName?: string;
+  shippingCarrier?: string;
   proofOfDeliveryUrl?: string;
   deliveryNote?: string;
   failureReason?: string;
   tripId?: string;
   tripCode?: string;
+  items?: ShipmentBatchItem[];
   shippedAt?: Date;
   deliveredAt?: Date;
   createdAt: Date;
@@ -49,7 +72,7 @@ export interface ShipmentItem {
 }
 
 @Injectable()
-export class ShipmentsService {
+export class ShipmentsService implements OnModuleInit {
   private readonly logger = new Logger(ShipmentsService.name);
   private readonly shipments = new Map<string, ShipmentItem>();
   private readonly trips = new Map<string, DeliveryTripEntity>();
@@ -59,9 +82,64 @@ export class ShipmentsService {
     @Optional()
     @Inject(forwardRef(() => OrdersService))
     private readonly ordersService?: OrdersService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {
     this.seedInitialShipments();
     this.seedInitialTrips();
+  }
+
+  async onModuleInit() {
+    await this.ensureShipmentTables();
+  }
+
+  async ensureShipmentTables(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      await this.databaseService.query(`
+        CREATE TABLE IF NOT EXISTS shipments (
+          id VARCHAR(100) PRIMARY KEY,
+          order_id VARCHAR(100) NOT NULL,
+          order_code VARCHAR(100),
+          customer_id VARCHAR(100),
+          customer_name VARCHAR(255),
+          sales_rep_id VARCHAR(100),
+          warehouse_id VARCHAR(100),
+          status VARCHAR(50) DEFAULT 'PICKING',
+          delivery_address TEXT,
+          receiver_name VARCHAR(255),
+          phone VARCHAR(50),
+          carrier_name VARCHAR(100),
+          tracking_number VARCHAR(100),
+          proof_of_delivery_url TEXT,
+          delivery_note TEXT,
+          failure_reason TEXT,
+          trip_id VARCHAR(100),
+          trip_code VARCHAR(100),
+          created_by VARCHAR(100),
+          shipped_at TIMESTAMPTZ,
+          delivered_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS shipment_items (
+          id BIGSERIAL PRIMARY KEY,
+          shipment_id VARCHAR(100) NOT NULL,
+          sku_code VARCHAR(100) NOT NULL,
+          product_name VARCHAR(255),
+          quantity_requested NUMERIC(15, 2) NOT NULL DEFAULT 1,
+          selected_batch_no VARCHAR(100) NOT NULL,
+          fefo_suggested_batch_no VARCHAR(100),
+          is_overridden BOOLEAN DEFAULT FALSE,
+          override_reason TEXT,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_shipment_items_shipment_id ON shipment_items(shipment_id);
+      `);
+    } catch (err) {
+      this.logger.warn(`Lỗi tạo bảng shipments/shipment_items: ${err}`);
+    }
   }
 
   private seedInitialShipments() {
@@ -199,7 +277,75 @@ export class ShipmentsService {
   }
 
   async findById(id: string, currentUser?: ICurrentUser): Promise<ShipmentItem> {
-    const shipment = this.shipments.get(id);
+    let shipment = this.shipments.get(id);
+
+    // Nếu có DB, tìm trong DB và load kèm danh sách items
+    if (this.databaseService?.isConnected()) {
+      try {
+        const rows = await this.databaseService.query<any>(
+          `SELECT s.*, w.name as warehouse_name
+           FROM shipments s
+           LEFT JOIN warehouses w ON s.warehouse_id = w.id::text OR s.warehouse_id = w.code
+           WHERE s.id = $1;`,
+          [id],
+        );
+        if (rows && rows.length > 0) {
+          const r = rows[0];
+          const itemRows = await this.databaseService.query<any>(
+            `SELECT * FROM shipment_items WHERE shipment_id = $1 ORDER BY created_at ASC;`,
+            [id],
+          );
+
+          shipment = {
+            id: r.id,
+            orderId: r.order_id,
+            orderCode: r.order_code,
+            customerId: r.customer_id,
+            customerName: r.customer_name,
+            salesRepId: r.sales_rep_id,
+            warehouseId: r.warehouse_id,
+            warehouseName: r.warehouse_name,
+            status: r.status,
+            deliveryAddress: r.delivery_address,
+            receiverName: r.receiver_name,
+            phone: r.phone,
+            carrierName: r.carrier_name,
+            shippingCarrier: r.carrier_name,
+            trackingNumber: r.tracking_number,
+            proofOfDeliveryUrl: r.proof_of_delivery_url,
+            deliveryNote: r.delivery_note,
+            failureReason: r.failure_reason,
+            tripId: r.trip_id,
+            tripCode: r.trip_code,
+            shippedAt: r.shipped_at ? new Date(r.shipped_at) : undefined,
+            deliveredAt: r.delivered_at ? new Date(r.delivered_at) : undefined,
+            createdAt: new Date(r.created_at),
+            updatedAt: new Date(r.updated_at),
+            items: (itemRows || []).map((it: any) => ({
+              id: it.id,
+              sku_code: it.sku_code,
+              skuCode: it.sku_code,
+              product_name: it.product_name,
+              productName: it.product_name,
+              quantity_requested: Number(it.quantity_requested) || 0,
+              quantityRequested: Number(it.quantity_requested) || 0,
+              selected_batch_no: it.selected_batch_no,
+              selectedBatchNo: it.selected_batch_no,
+              fefo_suggested_batch_no: it.fefo_suggested_batch_no,
+              fefoSuggestedBatchNo: it.fefo_suggested_batch_no,
+              is_overridden: it.is_overridden,
+              isOverridden: it.is_overridden,
+              override_reason: it.override_reason,
+              overrideReason: it.override_reason,
+            })),
+          };
+          this.shipments.set(id, shipment);
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm shipment ${id} trong DB: ${err}`);
+      }
+    }
+
     if (!shipment) {
       throw new NotFoundException(`Không tìm thấy phiếu xuất kho ${id}`);
     }
@@ -209,7 +355,11 @@ export class ShipmentsService {
       const isManagerOrAdmin =
         roles.includes(UserRole.ADMIN) ||
         roles.includes(UserRole.SALES_MANAGER) ||
-        roles.includes('BUSINESS_MANAGER');
+        roles.includes('BUSINESS_MANAGER') ||
+        roles.includes(UserRole.WAREHOUSE_MANAGER) ||
+        roles.includes(UserRole.WAREHOUSE_KEEPER) ||
+        roles.includes(UserRole.WAREHOUSE) ||
+        roles.includes(UserRole.WH_MANAGER);
 
       if (!isManagerOrAdmin) {
         if (roles.includes(UserRole.CUSTOMER)) {
@@ -238,41 +388,271 @@ export class ShipmentsService {
     return shipment;
   }
 
-  async create(dto: Partial<ShipmentItem>, user?: ICurrentUser): Promise<ShipmentItem> {
-    if (!dto.orderCode || !dto.orderCode.trim()) {
+  /**
+   * SN-188: Tạo phiếu xuất kho kèm chi tiết lô xuất FEFO và kiểm soát ghi đè thủ công
+   * POST /api/inventory/shipments hoặc POST /api/shipments
+   */
+  async create(dto: any, user?: ICurrentUser): Promise<ShipmentItem> {
+    const orderCode = (dto.order_id || dto.orderId || dto.orderCode || '').trim();
+    if (!orderCode) {
       throw new BadRequestException('Mã đơn hàng không được để trống');
     }
-    if (!dto.customerName || !dto.customerName.trim()) {
-      throw new BadRequestException('Tên đại lý / Khách hàng không được để trống');
-    }
-    if (dto.phone) {
-      const cleanPhone = dto.phone.trim();
+    const customerName = (dto.customer_name || dto.customerName || 'Đại lý').trim();
+    const warehouseId = dto.warehouse_id || dto.warehouseId || '11111111-0000-0000-0000-000000000001';
+    const receiverName = dto.receiver_name || dto.receiverName;
+    const phone = dto.receiver_phone || dto.phone;
+    const deliveryAddress = dto.delivery_address || dto.deliveryAddress;
+    const carrierName = dto.shipping_carrier || dto.carrierName || 'Đội xe nội bộ LOHA';
+    const trackingNumber =
+      dto.tracking_number ||
+      dto.trackingNumber ||
+      `TRK-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    if (phone) {
+      const cleanPhone = phone.trim();
       if (!/^0[0-9]{9}$/.test(cleanPhone)) {
         throw new BadRequestException('Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng số 0');
       }
     }
+
+    const items: ShipmentBatchItem[] = (dto.items || []).map((it: any) => ({
+      sku_code: it.sku_code || it.skuCode || it.sku,
+      product_name: it.product_name || it.productName || it.name,
+      quantity_requested: Number(it.quantity_requested || it.quantityRequested || it.quantity) || 1,
+      selected_batch_no: it.selected_batch_no || it.selectedBatchNo || it.batch_no || it.batchNumber,
+      is_overridden: Boolean(it.is_overridden ?? it.isOverridden),
+      override_reason: it.override_reason || it.overrideReason || null,
+      fefo_suggested_batch_no: it.fefo_suggested_batch_no || it.fefoSuggestedBatchNo,
+    }));
+
+    // Kiểm tra từng item xuất kho
+    for (const item of items) {
+      if (!item.sku_code) {
+        throw new BadRequestException('Mã sản phẩm (sku_code) không được để trống');
+      }
+      if (!item.selected_batch_no) {
+        throw new BadRequestException(`Chưa chọn lô xuất kho cho sản phẩm ${item.sku_code}`);
+      }
+
+      if (this.databaseService?.isConnected()) {
+        // 1. Lấy thông tin lô hàng được chọn
+        const batchRows = await this.databaseService.query<any>(
+          `SELECT b.*, p.sku as product_sku, p.name as product_name
+           FROM inventory_batches b
+           LEFT JOIN products p ON b.product_id = p.id
+           WHERE (b.batch_number = $1 OR b.batch_no = $1)
+             AND (b.warehouse_id::text = $2::text OR b.warehouse_id IS NULL OR $2 = 'all')
+           LIMIT 1;`,
+          [item.selected_batch_no, warehouseId],
+        );
+
+        if (!batchRows || batchRows.length === 0) {
+          throw new BadRequestException(`Không tìm thấy lô hàng "${item.selected_batch_no}" tại kho xuất`);
+        }
+
+        const batch = batchRows[0];
+        item.product_name = item.product_name || batch.product_name;
+        const availableQty = Math.max(0, Number(batch.quantity || 0) - Number(batch.allocated_quantity || 0));
+
+        if (availableQty < item.quantity_requested) {
+          throw new BadRequestException(
+            `Lô hàng "${item.selected_batch_no}" chỉ còn ${availableQty} tồn khả dụng, không đủ xuất ${item.quantity_requested}`,
+          );
+        }
+
+        // 2. Tìm lô chuẩn FEFO của SKU này tại kho
+        const fefoRows = await this.databaseService.query<any>(
+          `SELECT b.* 
+           FROM inventory_batches b
+           LEFT JOIN products p ON b.product_id = p.id
+           WHERE (p.sku = $1 OR b.sku_code = $1)
+             AND (b.warehouse_id::text = $2::text OR b.warehouse_id IS NULL OR $2 = 'all')
+             AND (b.quantity - COALESCE(b.allocated_quantity, 0)) >= $3
+             AND b.status = 'ACTIVE'
+             AND b.expiry_date >= CURRENT_DATE
+           ORDER BY b.expiry_date ASC, b.created_at ASC
+           LIMIT 1;`,
+          [item.sku_code, warehouseId, item.quantity_requested],
+        );
+
+        let fefoBatchNo = fefoRows?.[0]?.batch_number || fefoRows?.[0]?.batch_no;
+        if (!fefoBatchNo && fefoRows?.length === 0) {
+          // Fallback tìm lô cận date bất kỳ còn tồn > 0
+          const fallbackFefo = await this.databaseService.query<any>(
+            `SELECT b.* 
+             FROM inventory_batches b
+             LEFT JOIN products p ON b.product_id = p.id
+             WHERE (p.sku = $1 OR b.sku_code = $1)
+               AND (b.warehouse_id::text = $2::text OR b.warehouse_id IS NULL OR $2 = 'all')
+               AND (b.quantity - COALESCE(b.allocated_quantity, 0)) > 0
+               AND b.status = 'ACTIVE'
+               AND b.expiry_date >= CURRENT_DATE
+             ORDER BY b.expiry_date ASC, b.created_at ASC
+             LIMIT 1;`,
+            [item.sku_code, warehouseId],
+          );
+          fefoBatchNo = fallbackFefo?.[0]?.batch_number || fallbackFefo?.[0]?.batch_no;
+        }
+
+        item.fefo_suggested_batch_no = fefoBatchNo || item.selected_batch_no;
+
+        // 3. Kiểm tra ghi đè lô FEFO:
+        if (fefoBatchNo && item.selected_batch_no !== fefoBatchNo) {
+          item.is_overridden = true;
+          if (!item.override_reason || !item.override_reason.trim()) {
+            throw new BadRequestException(
+              `Sản phẩm "${item.sku_code}" đang xuất lô "${item.selected_batch_no}" khác với lô gợi ý FEFO cận date nhất ("${fefoBatchNo}"). Bắt buộc phải xác nhận ghi đè và nhập lý do ghi đè!`,
+            );
+          }
+        }
+      }
+    }
+
     const id = `shp-${Date.now()}`;
     const newShipment: ShipmentItem = {
       id,
-      orderId: dto.orderId || 'ord-unknown',
-      orderCode: dto.orderCode || 'DH-UNKNOWN',
-      customerId: dto.customerId || 'cust-001',
-      customerName: dto.customerName || 'Đại lý',
-      salesRepId: dto.salesRepId,
-      warehouseId: dto.warehouseId || 'wh-001',
+      orderId: dto.order_id || dto.orderId || orderCode,
+      orderCode,
+      customerId: dto.customer_id || dto.customerId || 'cust-001',
+      customerName,
+      salesRepId: dto.salesRepId || dto.sales_rep_id,
+      warehouseId,
       status: dto.status && dto.status !== 'PENDING' ? dto.status : 'PICKING',
-      deliveryAddress: dto.deliveryAddress,
-      receiverName: dto.receiverName,
-      phone: dto.phone,
-      trackingNumber: dto.trackingNumber,
-      carrierName: dto.carrierName,
+      deliveryAddress,
+      receiverName,
+      phone,
+      trackingNumber,
+      carrierName,
+      shippingCarrier: carrierName,
+      items,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+
+    // Lưu vào database nếu có kết nối
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `INSERT INTO shipments (
+            id, order_id, order_code, customer_id, customer_name, sales_rep_id,
+            warehouse_id, status, delivery_address, receiver_name, phone,
+            carrier_name, tracking_number, created_by, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`,
+          [
+            newShipment.id,
+            newShipment.orderId,
+            newShipment.orderCode,
+            newShipment.customerId,
+            newShipment.customerName,
+            newShipment.salesRepId || null,
+            newShipment.warehouseId || null,
+            newShipment.status,
+            newShipment.deliveryAddress || null,
+            newShipment.receiverName || null,
+            newShipment.phone || null,
+            newShipment.carrierName || null,
+            newShipment.trackingNumber || null,
+            user?.userId || user?.username || 'system',
+          ],
+        );
+
+        // Lưu từng item vào bảng shipment_items và trừ tồn kho lô
+        for (const it of items) {
+          await this.databaseService.query(
+            `INSERT INTO shipment_items (
+              shipment_id, sku_code, product_name, quantity_requested,
+              selected_batch_no, fefo_suggested_batch_no, is_overridden, override_reason
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
+            [
+              newShipment.id,
+              it.sku_code,
+              it.product_name || null,
+              it.quantity_requested,
+              it.selected_batch_no,
+              it.fefo_suggested_batch_no || null,
+              it.is_overridden,
+              it.override_reason || null,
+            ],
+          );
+
+          // Trừ tồn kho lô hàng
+          await this.databaseService.query(
+            `UPDATE inventory_batches 
+             SET quantity = GREATEST(0, quantity - $1),
+                 quantity_available = GREATEST(0, quantity_available - $1),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE (batch_number = $2 OR batch_no = $2)
+               AND (warehouse_id::text = $3::text OR warehouse_id IS NULL OR $3 = 'all');`,
+            [it.quantity_requested, it.selected_batch_no, warehouseId],
+          );
+
+          // Trừ tồn kho tổng trong inventories
+          try {
+            await this.databaseService.query(
+              `UPDATE inventories
+               SET on_hand = GREATEST(0, on_hand - $1),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE product_id IN (SELECT id FROM products WHERE sku = $2)
+                 AND warehouse_id::text = $3::text;`,
+              [it.quantity_requested, it.sku_code, warehouseId],
+            );
+          } catch {
+            // inventories update fallback
+          }
+        }
+      } catch (dbErr) {
+        this.logger.error(`Lỗi ghi shipment vào database: ${dbErr}`);
+      }
+    }
+
     this.shipments.set(id, newShipment);
+
+    // Đồng bộ trạng thái đơn hàng
     if (newShipment.orderCode || newShipment.orderId) {
       await this.syncOrder(newShipment.orderCode || newShipment.orderId, newShipment.status);
     }
+
+    // SN-188: Gửi thông báo đa tầng (Notifications)
+    if (this.notificationsService) {
+      try {
+        const creatorId = user?.userId || (user as any)?.id || '';
+        const creatorName = (user as any)?.fullName || user?.username || 'Thủ kho';
+        const creatorUsername = user?.username || '';
+
+        const overriddenItems = items.filter((it) => it.is_overridden && it.override_reason);
+        if (overriddenItems.length > 0) {
+          // Sự kiện 2: Cảnh báo ghi đè lô (FEFO Override)
+          for (const ov of overriddenItems) {
+            await this.notificationsService.notifyShipmentBatchOverridden({
+              shipmentId: newShipment.id,
+              orderCode: newShipment.orderCode,
+              keeperName: creatorName,
+              sku: ov.sku_code,
+              suggestedBatch: ov.fefo_suggested_batch_no || 'Lô FEFO',
+              actualBatch: ov.selected_batch_no,
+              reason: ov.override_reason || 'Không rõ',
+              creatorId,
+              creatorUsername,
+            });
+          }
+        } else {
+          // Sự kiện 1: Phiếu xuất tạo chuẩn FEFO
+          const batchNos = items.map((it) => it.selected_batch_no);
+          await this.notificationsService.notifyShipmentFefoCreated({
+            shipmentId: newShipment.id,
+            orderCode: newShipment.orderCode,
+            batchNumbers: batchNos,
+            warehouseId: newShipment.warehouseId,
+            creatorId,
+            creatorName,
+            creatorUsername,
+          });
+        }
+      } catch (notifErr) {
+        this.logger.error(`Lỗi gửi thông báo phiếu xuất kho: ${notifErr}`);
+      }
+    }
+
     return newShipment;
   }
 

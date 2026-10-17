@@ -11,6 +11,10 @@ import {
   Put,
   Query,
   UseGuards,
+  Inject,
+  forwardRef,
+  Optional,
+  BadRequestException,
 } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -31,6 +35,7 @@ import {
   QueryBatchesDto,
   CheckBatchDispatchDto,
 } from './dto';
+import { ShipmentsService } from '../shipments/shipments.service';
 
 /**
  * Controller Quản lý Tồn kho & Sổ kho (SN-10, EP-04 & SN-23):
@@ -42,7 +47,12 @@ import {
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
+  constructor(
+    private readonly inventoryService: InventoryService,
+    @Optional()
+    @Inject(forwardRef(() => ShipmentsService))
+    private readonly shipmentsService?: ShipmentsService,
+  ) {}
 
   /**
    * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
@@ -476,6 +486,102 @@ export class InventoryController {
     @CurrentUser() currentUser?: ICurrentUser,
   ) {
     return this.inventoryService.checkBatchDispatch(dto, currentUser);
+  }
+
+  /**
+   * SN-188: Gợi ý lô xuất kho theo nguyên tắc FEFO (Hạn dùng gần nhất xuất trước)
+   * GET /api/inventory/batches/suggest-fefo?skuCode=...&quantity=...&warehouseId=...
+   */
+  @Get('batches/suggest-fefo')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async suggestFefo(
+    @Query('skuCode') skuCode?: string,
+    @Query('sku') sku?: string,
+    @Query('productId') productId?: string,
+    @Query('quantity') quantity?: number,
+    @Query('warehouseId') warehouseId?: string,
+  ) {
+    return this.inventoryService.suggestFefoBatch({
+      skuCode,
+      sku,
+      productId,
+      quantity: quantity ? Number(quantity) : 1,
+      warehouseId,
+    });
+  }
+
+  /**
+   * SN-188: Lấy danh sách tất cả các lô khả dụng của một SKU tại kho (phục vụ Popup Đổi Lô)
+   * GET /api/inventory/batches/by-sku?skuCode=...&warehouseId=...
+   */
+  @Get('batches/by-sku')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getBatchesBySku(
+    @Query('skuCode') skuCode?: string,
+    @Query('sku') sku?: string,
+    @Query('productId') productId?: string,
+    @Query('warehouseId') warehouseId?: string,
+  ) {
+    return this.inventoryService.getBatchesBySku({
+      skuCode,
+      sku,
+      productId,
+      warehouseId,
+    });
+  }
+
+  /**
+   * SN-188: Tạo phiếu xuất kho (FEFO) qua prefix /inventory/shipments
+   * POST /api/inventory/shipments
+   */
+  @Post('shipments')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  @HttpCode(HttpStatus.CREATED)
+  async createInventoryShipment(
+    @Body() dto: any,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    if (!this.shipmentsService) {
+      throw new BadRequestException('Dịch vụ xuất kho chưa sẵn sàng');
+    }
+    return this.shipmentsService.create(dto, currentUser);
+  }
+
+  /**
+   * SN-188: Xem chi tiết phiếu xuất kho (FEFO) qua prefix /inventory/shipments/:id
+   * GET /api/inventory/shipments/:id
+   */
+  @Get('shipments/:id')
+  async getInventoryShipmentById(
+    @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    if (!this.shipmentsService) {
+      throw new BadRequestException('Dịch vụ xuất kho chưa sẵn sàng');
+    }
+    return this.shipmentsService.findById(id, currentUser);
   }
 }
 

@@ -55,4 +55,11 @@ export class QueryOrdersDto {
   @IsOptional()
   @IsString()
   dateType?: 'CREATED' | 'DELIVERY' | string;
+
+  @IsOptional()
+  forShipment?: boolean | string;
+
+  @IsOptional()
+  @IsString()
+  warehouseId?: string;
 }
