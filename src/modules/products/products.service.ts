@@ -956,6 +956,10 @@ export class ProductsService implements OnModuleInit {
       throw new BadRequestException('Giá vốn không được âm');
     }
 
+    if (costPrice > 0 && dto.price <= costPrice) {
+      throw new BadRequestException('Giá niêm yết bắt buộc phải lớn hơn giá vốn');
+    }
+
     // Tính toán biên lợi nhuận (margin %)
     const margin =
       dto.price > 0
@@ -1267,6 +1271,10 @@ export class ProductsService implements OnModuleInit {
         throw new BadRequestException('Giá vốn không được âm');
       }
       product.costPrice = Number(dto.costPrice);
+    }
+
+    if (product.costPrice > 0 && product.price <= product.costPrice) {
+      throw new BadRequestException('Giá niêm yết bắt buộc phải lớn hơn giá vốn');
     }
 
     // Tự động tính toán lại margin khi giá bán hoặc giá vốn thay đổi
@@ -1972,6 +1980,9 @@ export class ProductsService implements OnModuleInit {
       if (!baseUnit) errors.push('Đơn vị tính không được để trống');
       if (price <= 0) errors.push('Giá niêm yết phải lớn hơn 0');
       if (costPrice <= 0) errors.push('Giá vốn phải lớn hơn 0');
+      if (price > 0 && costPrice > 0 && price <= costPrice) {
+        errors.push('Giá niêm yết bắt buộc phải lớn hơn giá vốn');
+      }
 
       const existingProduct = Array.from(this.products.values()).find(
         (p) => p.sku.toLowerCase() === sku?.toLowerCase(),
