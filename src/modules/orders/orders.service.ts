@@ -1075,14 +1075,56 @@ export class OrdersService implements OnModuleInit {
 
     // 3. Lọc theo đại lý (customerId)
     if (query.customerId && query.customerId !== 'ALL') {
-      const qCust = query.customerId;
-      const qCustNorm = qCust.replace('cust-dl-', 'cust-');
-      list = list.filter(
-        (o) =>
-          o.customerId === qCust ||
-          o.customerCode === qCust ||
-          (o.customerId && o.customerId.replace('cust-dl-', 'cust-') === qCustNorm),
-      );
+      const qCust = query.customerId.toLowerCase().trim();
+      let matchedCode: string | undefined;
+      let matchedId: string | undefined;
+      let matchedName: string | undefined;
+      try {
+        const cust = await this.customersService.getCustomerById(query.customerId);
+        if (cust) {
+          matchedCode = cust.code?.toLowerCase().trim();
+          matchedId = cust.id?.toLowerCase().trim();
+          matchedName = cust.name?.toLowerCase().trim();
+        }
+      } catch {
+        // bỏ qua nếu không tìm thấy
+      }
+
+      // Tập hợp các định danh chính xác của riêng đại lý này
+      const validIdentifiers = new Set<string>();
+      if (qCust) validIdentifiers.add(qCust);
+      if (matchedId) validIdentifiers.add(matchedId);
+      if (matchedCode) validIdentifiers.add(matchedCode);
+
+      // Xử lý các tiền tố chuẩn hóa theo mã: ví dụ DL-0001 -> cust-dl-0001, cust-0001, cust-001
+      // Nếu mã là dạng vùng miền như DL-DN-001 -> chỉ khớp cust-dl-dn-001, dl-dn-001
+      const targetCode = matchedCode || qCust;
+      const m = targetCode.match(/^(?:cust-)?(?:dl-)?([a-z]+-)?(\d+)$/i);
+      if (m) {
+        const regionalPrefix = (m[1] || '').toLowerCase(); // e.g. 'dn-' hoặc ''
+        const num = parseInt(m[2], 10);
+        if (!isNaN(num)) {
+          validIdentifiers.add(`cust-dl-${regionalPrefix}${String(num).padStart(4, '0')}`);
+          validIdentifiers.add(`cust-${regionalPrefix}${String(num).padStart(3, '0')}`);
+          validIdentifiers.add(`cust-${regionalPrefix}${String(num).padStart(4, '0')}`);
+          validIdentifiers.add(`dl-${regionalPrefix}${String(num).padStart(4, '0')}`);
+          validIdentifiers.add(`dl-${regionalPrefix}${String(num).padStart(3, '0')}`);
+        }
+      }
+
+      list = list.filter((o) => {
+        const oCustId = (o.customerId || '').toLowerCase().trim();
+        const oCustCode = (o.customerCode || '').toLowerCase().trim();
+        const oCustName = (o.customerName || '').toLowerCase().trim();
+
+        if (validIdentifiers.has(oCustId) || validIdentifiers.has(oCustCode)) {
+          return true;
+        }
+        if (matchedName && oCustName && oCustName === matchedName) {
+          return true;
+        }
+        return false;
+      });
     }
 
     // 4. Lọc theo nhân viên kinh doanh (salesRepId / assignedUser)
