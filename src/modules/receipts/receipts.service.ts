@@ -10,6 +10,16 @@ import {
 } from './entities/receipt.entity';
 import { ReceiptPrintDto } from './dto/receipt-print.dto';
 import { numberToVietnameseWords } from '../../common/utils/number-to-vietnamese-words.util';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { UserRole } from '../../common/enums/user-role.enum';
+
+export interface PaginatedReceiptsResult {
+  data: Receipt[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 const COMPANY_INFO = {
   name: 'CÔNG TY CỔ PHẦN THỰC PHẨM DINH DƯỠNG LOHA GOLD',
@@ -119,12 +129,63 @@ export class ReceiptsService {
   }
 
   /**
-   * Lấy danh sách phiếu thu
+   * Lấy danh sách phiếu thu với tìm kiếm, lọc hình thức và phân trang chuẩn Backend
    */
-  async findAll(query?: { search?: string; customerId?: string }): Promise<Receipt[]> {
+  async findAll(
+    query?: {
+      search?: string;
+      customerId?: string;
+      paymentMethod?: string;
+      page?: number | string;
+      limit?: number | string;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<Receipt[] | PaginatedReceiptsResult> {
     let list = Array.from(new Set(this.receipts.values()));
 
-    if (query?.search) {
+    // 1. Phân quyền xem phiếu thu theo Role: Đại lý chỉ xem phiếu thu của mình
+    if (currentUser?.roles) {
+      const roles = currentUser.roles.map((r) => String(r));
+      const isManagerOrAdminOrAccountant =
+        roles.includes(UserRole.ADMIN) ||
+        roles.includes(UserRole.SALES_MANAGER) ||
+        roles.includes('BUSINESS_MANAGER') ||
+        roles.includes(UserRole.ACCOUNTANT) ||
+        roles.includes('ACCOUNTANT_DEBT');
+
+      if (!isManagerOrAdminOrAccountant && roles.includes(UserRole.CUSTOMER)) {
+        const email = (currentUser.email || '').toLowerCase().trim();
+        const uname = (currentUser.username || '').toLowerCase().trim();
+        let targetCustId = currentUser.customerId || currentUser.agencyId || currentUser.userId;
+        if (uname === 'dealer' || email === 'dealer@loha.vn') {
+          targetCustId = 'cust-001';
+        } else if (uname === 'daily' || email === 'daily@loha.vn') {
+          targetCustId = 'cust-002';
+        }
+        list = list.filter(
+          (r) =>
+            r.customerId === targetCustId ||
+            (targetCustId === 'cust-001' &&
+              (r.customerId === '55555555-0000-0000-0000-000000000001' || r.customerCode === 'DL-0001')) ||
+            (targetCustId === 'cust-002' &&
+              (r.customerId === '55555555-0000-0000-0000-000000000002' || r.customerCode === 'DL-0002')),
+        );
+      }
+    }
+
+    // 2. Lọc theo customerId nếu có
+    if (query?.customerId) {
+      list = list.filter((r) => r.customerId === query.customerId);
+    }
+
+    // 3. Lọc theo hình thức thanh toán (paymentMethod)
+    if (query?.paymentMethod && query.paymentMethod !== 'ALL') {
+      const method = query.paymentMethod.toUpperCase().trim();
+      list = list.filter((r) => r.paymentMethod === method);
+    }
+
+    // 4. Tìm kiếm từ khóa (Mã phiếu, Tên đại lý, Mã đại lý, Chứng từ gốc, Người thu, Ghi chú)
+    if (query?.search && query.search.trim()) {
       const q = query.search.trim().toLowerCase();
       list = list.filter(
         (r) =>
@@ -132,16 +193,33 @@ export class ReceiptsService {
           r.customerName.toLowerCase().includes(q) ||
           r.customerCode.toLowerCase().includes(q) ||
           (r.referenceCode && r.referenceCode.toLowerCase().includes(q)) ||
-          r.collectorName.toLowerCase().includes(q),
+          r.collectorName.toLowerCase().includes(q) ||
+          (r.notes && r.notes.toLowerCase().includes(q)),
       );
     }
 
-    if (query?.customerId) {
-      list = list.filter((r) => r.customerId === query.customerId);
+    // 5. Sắp xếp ngày tạo mới nhất lên đầu
+    list.sort((a, b) => b.paymentDate.getTime() - a.paymentDate.getTime());
+
+    // 6. Hỗ trợ phân trang khi client gửi page hoặc limit
+    if (query?.page !== undefined || query?.limit !== undefined) {
+      const total = list.length;
+      const page = Math.max(1, Number(query.page || 1));
+      const limit = Math.max(1, Math.min(100, Number(query.limit || 10)));
+      const totalPages = Math.ceil(total / limit) || 1;
+      const offset = (page - 1) * limit;
+      const data = list.slice(offset, offset + limit);
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+      };
     }
 
-    // Sắp xếp ngày tạo mới nhất lên đầu
-    return list.sort((a, b) => b.paymentDate.getTime() - a.paymentDate.getTime());
+    return list;
   }
 
   /**
