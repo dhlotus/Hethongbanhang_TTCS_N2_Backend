@@ -628,7 +628,7 @@ export class InventoryService implements OnModuleInit {
           });
         }
 
-        // Bổ sung các đơn hàng APPROVED/PROCESSING từ app_order_records nếu chưa có trong stock_reservations
+        // Bổ sung các đơn hàng APPROVED/PROCESSING/PACKED từ app_order_records nếu chưa có trong stock_reservations
         const orderQuery = warehouseId !== 'ALL'
           ? `SELECT id, order_code,
                   COALESCE(payload->>'status', 'APPROVED') as order_status,
@@ -637,7 +637,7 @@ export class InventoryService implements OnModuleInit {
                   payload->>'reservedUntil' as reserved_until,
                   created_at::text
            FROM app_order_records
-           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING')
+           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING', 'PACKED')
              AND (payload->>'warehouseId' = $1 OR payload->>'warehouse_id' = $1)`
           : `SELECT id, order_code,
                   COALESCE(payload->>'status', 'APPROVED') as order_status,
@@ -646,7 +646,7 @@ export class InventoryService implements OnModuleInit {
                   payload->>'reservedUntil' as reserved_until,
                   created_at::text
            FROM app_order_records
-           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING')`;
+           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING', 'PACKED')`;
 
         const activeOrderRows = await this.databaseService.query<{
           id: string;
