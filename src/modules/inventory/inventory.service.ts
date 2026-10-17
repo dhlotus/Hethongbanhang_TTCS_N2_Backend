@@ -1770,7 +1770,16 @@ export class InventoryService implements OnModuleInit {
       const cleanWh = warehouse.trim().toLowerCase();
       list = list.filter((t) => {
         const tWh = (t.warehouse || '').toLowerCase();
-        return tWh.includes(cleanWh) || cleanWh.includes(tWh);
+        if (tWh.includes(cleanWh) || cleanWh.includes(tWh)) return true;
+        const isSouth = (s: string) => s.includes('nam') || s.includes('mn') || s.includes('wh01') || s.includes('hồ chí minh');
+        const isNorth = (s: string) => s.includes('bắc') || s.includes('bac') || s.includes('mb') || s.includes('wh02') || s.includes('hà nội');
+        const isCentral = (s: string) => s.includes('trung') || s.includes('mt') || s.includes('wh03') || s.includes('đà nẵng');
+        const isWest = (s: string) => s.includes('tây') || s.includes('tay') || s.includes('west') || s.includes('cần thơ');
+        if (isSouth(cleanWh) && isSouth(tWh)) return true;
+        if (isNorth(cleanWh) && isNorth(tWh)) return true;
+        if (isCentral(cleanWh) && isCentral(tWh)) return true;
+        if (isWest(cleanWh) && isWest(tWh)) return true;
+        return false;
       });
     }
 
