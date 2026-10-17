@@ -42,9 +42,23 @@ export class InventoryBatchEntity {
     this.locationCode = (raw.locationCode || raw.location_code) as string | undefined;
     this.baseUnit = String(raw.baseUnit || raw.base_unit || 'Đơn vị');
     
-    // Ngày sản xuất & Hạn sử dụng
-    this.mfgDate = raw.mfgDate ? String(raw.mfgDate).split('T')[0] : (raw.mfg_date ? String(raw.mfg_date).split('T')[0] : undefined);
-    this.expiryDate = raw.expiryDate ? String(raw.expiryDate).split('T')[0] : (raw.expiry_date ? String(raw.expiry_date).split('T')[0] : '');
+    // Ngày sản xuất & Hạn sử dụng - Parse an toàn chuẩn YYYY-MM-DD tránh lỗi Invalid Date khi DB trả về Date object
+    const parseToIsoDateString = (val: unknown): string => {
+      if (!val) return '';
+      if (val instanceof Date) {
+        return isNaN(val.getTime()) ? '' : val.toISOString().split('T')[0];
+      }
+      const str = String(val).trim();
+      if (!str) return '';
+      if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+        return str.substring(0, 10);
+      }
+      const parsed = new Date(str);
+      return !isNaN(parsed.getTime()) ? parsed.toISOString().split('T')[0] : str.split('T')[0];
+    };
+
+    this.mfgDate = parseToIsoDateString(raw.mfgDate || raw.mfg_date) || undefined;
+    this.expiryDate = parseToIsoDateString(raw.expiryDate || raw.expiry_date);
 
     // Tồn kho
     this.quantity = Number(raw.quantity ?? 0);

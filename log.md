@@ -965,3 +965,50 @@ est build -> 0 lỗi.
 - **Trạng thái kiểm thử:**
   - Unit Test: `npx jest test/receipts-sn209.spec.ts` -> 4/4 test cases PASSED (100%).
   - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 5] - [SN-188]: Gợi ý Lô Xuất Kho Theo Nguyên Tắc FEFO & Kiểm Soát Ghi Đè Thủ Công
+- **Thời gian hoàn thành:** 2026-10-17
+- **Mã Jira / Task:** SN-188 (Sprint 5 - Quản lý Kho & Xuất kho FEFO)
+- **Tiêu đề:** "Gợi ý lô xuất FEFO (First Expired, First Out) và cơ chế kiểm soát ghi đè lô thủ công kèm lý do bắt buộc."
+- **Danh sách file thay đổi:**
+  - `src/modules/inventory/inventory.controller.ts`: Bổ sung endpoints `GET /inventory/batches/suggest-fefo`, `GET /inventory/batches/by-sku`, `POST /inventory/shipments`, `GET /inventory/shipments/:id`.
+  - `src/modules/inventory/inventory.service.ts`: Triển khai thuật toán đề xuất lô FEFO (`suggestFefoBatch`), lấy danh sách lô theo SKU sắp xếp HSD tăng dần (`getBatchesBySku`).
+  - `src/modules/shipments/shipments.service.ts`: Triển khai kiểm tra tồn kho lô, bắt buộc `is_overridden = true` và `override_reason` khi chọn lô khác FEFO gợi ý; transaction trừ tồn kho lô và tạo phiếu xuất kho; cơ chế khởi tạo bảng `shipments` và `shipment_items` an toàn (`ensureShipmentTables`).
+  - `src/modules/shipments/shipments.module.ts`: Đăng ký import `InventoryModule`.
+  - `src/modules/notifications/notifications.service.ts`: Bổ sung thông báo đa tầng với deep link `/app/inventory/shipments/:id`: (1) Sự kiện tạo phiếu xuất chuẩn FEFO và (2) Sự kiện cảnh báo ghi đè lô FEFO cho Quản lý kho & Admin.
+- **Chi tiết kỹ thuật:**
+  - **API Gợi ý FEFO:** `GET /inventory/batches/suggest-fefo?skuCode=...&quantity=...&warehouseId=...` truy vấn và đề xuất lô cận date nhất còn đủ tồn khả dụng (`expiry_date ASC, quantity_available >= requested`).
+  - **API Tạo phiếu & Kiểm soát ghi đè:** `POST /inventory/shipments` xác thực chặt chẽ: nếu `selected_batch_no !== fefo_suggested_batch_no` thì bắt buộc `is_overridden === true` và `override_reason` không được để trống.
+  - **Thông báo Real-time & Deep Link:** Tự động gửi thông báo chuông tới Quản lý kho & Admin khi có ghi đè, kèm deep link điều hướng trực tiếp tới phiếu xuất để đối chiếu.
+- **Trạng thái kiểm thử:**
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 5] - [SN-188-FIX]: Sửa Lỗi Nghiệp Vụ Lọc Đơn Hàng Cho Phép Xuất Kho (Dropdown 'Chọn Đơn Hàng')
+- **Thời gian hoàn thành:** 2026-10-17
+- **Mã Jira / Task:** SN-188-FIX (Nghiệp vụ Xuất kho ERP)
+- **Vấn đề đã khắc phục:** API trước đó trả về cả các đơn hàng CANCELLED (đã hủy), DRAFT (nháp), PENDING (chờ duyệt), dẫn đến việc thủ kho có thể chọn xuất kho cho cả đơn đã hủy.
+- **Danh sách file thay đổi:**
+  - `src/modules/orders/dto/query-orders.dto.ts`: Bổ sung tham số truy vấn `forShipment?: boolean | string`.
+  - `src/modules/orders/orders.service.ts`: Cập nhật logic `findAllOrders`: khi `forShipment` bật hoặc lọc theo quy trình kho, chỉ lọc các đơn hàng đã duyệt (`APPROVED`, `READY_TO_SHIP`, `PROCESSING`); tuyệt đối loại trừ các đơn `CANCELLED`, `DRAFT`, `PENDING`, `PENDING_APPROVAL`, `PENDING_INVENTORY_APPROVAL`, `REJECTED`, `RETURNED_FOR_UPDATE`, `RETURNED`, `CLOSED`, `COMPLETED`, `DISPATCHED`.
+  - `src/modules/orders/orders.controller.ts`: Bổ sung endpoint `GET /api/orders/for-shipment` chuyên dụng cho quy trình xuất kho.
+- **Trạng thái kiểm thử:**
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 5] - [SN-188-RBAC]: Phân Quyền Kho Xuất Hàng Cho Nhân Viên Kho (Chỉ Tạo Phiếu Kho Được Phân Công)
+- **Thời gian hoàn thành:** 2026-10-17
+- **Mã Jira / Task:** SN-188-RBAC (Phân quyền xuất kho đa chi nhánh / đa kho)
+- **Vấn đề đã xử lý:** Nhân viên kho miền Bắc (hoặc kho khác) trước đó thấy và chọn được các đơn hàng của đại lý mua hàng ở Miền Trung (Đà Nẵng), Miền Nam (TP.HCM).
+- **Danh sách file thay đổi:**
+  - `src/modules/orders/dto/query-orders.dto.ts`: Bổ sung tham số truy vấn `warehouseId?: string`.
+  - `src/modules/orders/orders.controller.ts`: Truyền đầy đủ context phân quyền kho của `currentUser` (`warehouseId`, `warehouseCode`, `warehouseName`, `assignedWarehouse`, `warehouses`, `warehouseIds`) vào `findAllOrders`.
+  - `src/modules/orders/orders.service.ts`: Cập nhật logic `findAllOrders`:
+    - Nhân viên kho (`WAREHOUSE_KEEPER`, `WAREHOUSE_MANAGER`) chỉ được phép xem và xuất kho các đơn hàng của đại lý mua hàng tại kho/địa bàn phụ trách (Ví dụ: Thủ kho Miền Bắc chỉ hiển thị đơn đại lý Miền Bắc, loại trừ 100% đơn Miền Trung, Miền Nam).
+    - Hỗ trợ lọc chính xác theo param `query.warehouseId`.
+- **Trạng thái kiểm thử:**
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.

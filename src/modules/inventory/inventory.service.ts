@@ -1770,7 +1770,16 @@ export class InventoryService implements OnModuleInit {
       const cleanWh = warehouse.trim().toLowerCase();
       list = list.filter((t) => {
         const tWh = (t.warehouse || '').toLowerCase();
-        return tWh.includes(cleanWh) || cleanWh.includes(tWh);
+        if (tWh.includes(cleanWh) || cleanWh.includes(tWh)) return true;
+        const isSouth = (s: string) => s.includes('nam') || s.includes('mn') || s.includes('wh01') || s.includes('hồ chí minh');
+        const isNorth = (s: string) => s.includes('bắc') || s.includes('bac') || s.includes('mb') || s.includes('wh02') || s.includes('hà nội');
+        const isCentral = (s: string) => s.includes('trung') || s.includes('mt') || s.includes('wh03') || s.includes('đà nẵng');
+        const isWest = (s: string) => s.includes('tây') || s.includes('tay') || s.includes('west') || s.includes('cần thơ');
+        if (isSouth(cleanWh) && isSouth(tWh)) return true;
+        if (isNorth(cleanWh) && isNorth(tWh)) return true;
+        if (isCentral(cleanWh) && isCentral(tWh)) return true;
+        if (isWest(cleanWh) && isWest(tWh)) return true;
+        return false;
       });
     }
 
@@ -2762,6 +2771,129 @@ export class InventoryService implements OnModuleInit {
     return {
       success: true,
       message: `Đã xóa sản phẩm "${prod?.name || resolvedSku}" khỏi kho thành công!`,
+    };
+  }
+
+  /**
+   * SN-188: Gợi ý lô xuất kho theo nguyên tắc FEFO (Hạn dùng gần nhất xuất trước)
+   * GET /api/inventory/batches/suggest-fefo?skuCode=...&quantity=...&warehouseId=...
+   */
+  async suggestFefoBatch(params: {
+    skuCode?: string;
+    sku?: string;
+    productId?: string;
+    quantity?: number;
+    warehouseId?: string;
+  }): Promise<{
+    suggestedBatch: any;
+    allBatches: any[];
+    isSufficient: boolean;
+    requiredQuantity: number;
+  }> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+
+    const targetSku = (params.skuCode || params.sku || '').trim().toLowerCase();
+    const targetPid = (params.productId || '').trim().toLowerCase();
+    const targetWh = (params.warehouseId || '').trim().toLowerCase();
+    const requiredQty = Number(params.quantity) || 1;
+
+    // Lọc các lô của sản phẩm tại kho
+    let candidates = Array.from(this.batches.values()).map(
+      (b) => new InventoryBatchEntity(b),
+    );
+
+    candidates = candidates.filter((b) => {
+      // Khớp sản phẩm theo SKU hoặc ProductId
+      const matchProduct =
+        (targetSku && b.productSku.toLowerCase() === targetSku) ||
+        (targetPid && b.productId.toLowerCase() === targetPid);
+
+      if (!matchProduct) return false;
+
+      // Khớp kho nếu có truyền
+      if (targetWh && targetWh !== 'all') {
+        const matchWh =
+          b.warehouseId.toLowerCase() === targetWh ||
+          b.warehouseName.toLowerCase().includes(targetWh);
+        if (!matchWh) return false;
+      }
+
+      // Chỉ lấy lô còn hạn và còn tồn khả dụng > 0
+      return b.status !== 'EXPIRED' && b.availableQuantity > 0;
+    });
+
+    // Sắp xếp theo chuẩn FEFO: ExpiryDate tăng dần (hạn gần nhất xếp trước)
+    candidates.sort((a, b) => {
+      const getExpMs = (dateStr: string): number => {
+        if (!dateStr) return Infinity;
+        const d = new Date(dateStr);
+        return isNaN(d.getTime()) ? Infinity : d.getTime();
+      };
+      const timeA = getExpMs(a.expiryDate);
+      const timeB = getExpMs(b.expiryDate);
+      if (timeA !== timeB) return timeA - timeB;
+      const createdA = a.createdAt instanceof Date && !isNaN(a.createdAt.getTime()) ? a.createdAt.getTime() : 0;
+      const createdB = b.createdAt instanceof Date && !isNaN(b.createdAt.getTime()) ? b.createdAt.getTime() : 0;
+      return createdA - createdB;
+    });
+
+    if (candidates.length === 0) {
+      return {
+        suggestedBatch: null,
+        allBatches: [],
+        isSufficient: false,
+        requiredQuantity: requiredQty,
+      };
+    }
+
+    // Ưu tiên lô cận date nhất còn đủ số lượng yêu cầu
+    let chosen = candidates.find((b) => b.availableQuantity >= requiredQty);
+    // Nếu không có lô đơn lẻ nào đủ, chọn lô cận date nhất đầu tiên
+    if (!chosen) {
+      chosen = candidates[0];
+    }
+
+    return {
+      suggestedBatch: chosen.toJSON(),
+      allBatches: candidates.map((c, idx) => ({
+        ...c.toJSON(),
+        isFefoRecommended: idx === 0,
+      })),
+      isSufficient: chosen.availableQuantity >= requiredQty,
+      requiredQuantity: requiredQty,
+    };
+  }
+
+  /**
+   * SN-188: Lấy danh sách tất cả các lô khả dụng của một SKU tại kho (phục vụ Popup Đổi Lô)
+   * GET /api/inventory/batches/by-sku?skuCode=...&warehouseId=...
+   */
+  async getBatchesBySku(params: {
+    skuCode?: string;
+    sku?: string;
+    productId?: string;
+    warehouseId?: string;
+  }): Promise<{
+    skuCode: string;
+    fefoSuggestedBatchNo: string | null;
+    batches: any[];
+  }> {
+    const res = await this.suggestFefoBatch({
+      ...params,
+      quantity: 1,
+    });
+
+    return {
+      skuCode: params.skuCode || params.sku || '',
+      fefoSuggestedBatchNo: res.suggestedBatch
+        ? res.suggestedBatch.batchNumber || res.suggestedBatch.batch_number
+        : null,
+      batches: res.allBatches,
     };
   }
 }
