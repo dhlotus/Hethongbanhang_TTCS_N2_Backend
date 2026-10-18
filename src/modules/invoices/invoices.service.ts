@@ -60,6 +60,7 @@ export interface InvoiceItem {
   orderId: string;
   orderCode: string;
   customerId: string;
+  customerCode?: string;
   customerName: string;
   customerEmail?: string;
   salesRepId?: string;
@@ -954,12 +955,35 @@ export class InvoicesService implements OnModuleInit {
     };
   }
 
+  private formatCustomerCode(invoice: InvoiceItem): string {
+    if (invoice.customerCode && !invoice.customerCode.includes('-0000-') && !invoice.customerCode.startsWith('5555')) {
+      return invoice.customerCode;
+    }
+    const id = invoice.customerId || '';
+    if (id === '55555555-0000-0000-0000-000000000001' || id === 'cust-001' || id === 'cust-dl-0001') {
+      return 'DL-0001';
+    }
+    if (id === '55555555-0000-0000-0000-000000000002' || id === 'cust-002' || id === 'cust-dl-0002') {
+      return 'DL-0002';
+    }
+    if (id === '55555555-0000-0000-0000-000000000003' || id === 'cust-003' || id === 'cust-dl-0003') {
+      return 'DL-0003';
+    }
+    if (id.startsWith('DL-')) return id;
+    if (invoice.customerName?.includes('Minh Khang')) return 'DL-0001';
+    if (invoice.customerName?.includes('Toàn Cầu')) return 'DL-0002';
+    if (invoice.customerName?.includes('Hoàng Gia')) return 'DL-0003';
+    if (invoice.customerName?.includes('An Phát')) return 'DL-0004';
+    return invoice.customerCode || 'DL-0001';
+  }
+
   /**
    * Xuất tài liệu hóa đơn PDF nhị phân chuẩn in ấn qua PDFKit (SN-207 B)
    * Không trang trắng, không lỗi font tiếng Việt, hỗ trợ Arial TTF
    */
   async generateInvoicePdfBuffer(id: string, currentUser?: ICurrentUser): Promise<{ buffer: Buffer; invoice: InvoiceItem }> {
     const invoice = await this.findById(id, currentUser);
+    const customerCode = this.formatCustomerCode(invoice);
 
     return new Promise<{ buffer: Buffer; invoice: InvoiceItem }>((resolve, reject) => {
       try {
@@ -1013,7 +1037,7 @@ export class InvoicesService implements OnModuleInit {
         doc.font(fontBold).fontSize(10).fillColor('#334155').text('ĐƠN VỊ MUA HÀNG (ĐẠI LÝ B2B)', 40, 105);
         doc.font(fontRegular).fontSize(9).fillColor('#475569');
         doc.text(`Tên đại lý: `, 40, 120, { continued: true }).font(fontBold).fillColor('#0F172A').text(invoice.customerName);
-        doc.font(fontRegular).fillColor('#475569').text(`Mã khách hàng: `, 40, 134, { continued: true }).font(fontBold).text(invoice.customerId);
+        doc.font(fontRegular).fillColor('#475569').text(`Mã khách hàng: `, 40, 134, { continued: true }).font(fontBold).text(customerCode);
         doc.font(fontRegular).fillColor('#475569').text(`Phiếu giao hàng: `, 40, 148, { continued: true }).font(fontBold).fillColor('#4338CA').text(
           invoice.deliverySlipCodes && invoice.deliverySlipCodes.length > 0 ? invoice.deliverySlipCodes.join(', ') : (invoice.orderCode || '—')
         );
@@ -1084,21 +1108,21 @@ export class InvoicesService implements OnModuleInit {
         );
 
         // 5. Thông tin thanh toán Vietcombank
-        currentY += 45;
-        doc.rect(40, currentY, 515, 45).fillColor('#F8FAFC').strokeColor('#CBD5E1').lineWidth(0.5).fillAndStroke();
-        doc.font(fontBold).fontSize(8).fillColor('#0F172A').text('THÔNG TIN TÀI KHOẢN NHẬN THANH TOÁN:', 50, currentY + 6);
+        currentY += 40;
+        doc.rect(40, currentY, 515, 46).fillColor('#F8FAFC').strokeColor('#CBD5E1').lineWidth(0.5).fillAndStroke();
+        doc.font(fontBold).fontSize(8.5).fillColor('#0F172A').text('THÔNG TIN TÀI KHOẢN NHẬN THANH TOÁN:', 50, currentY + 6);
         doc.font(fontRegular).fontSize(8).fillColor('#475569');
         doc.text('Ngân hàng: TMCP Ngoại Thương Việt Nam (Vietcombank) — Chi nhánh TP.HCM', 50, currentY + 18);
-        doc.text('Số tài khoản: ', 50, currentY + 30, { continued: true }).font(fontBold).fillColor('#0F172A').text('0071 0008 89999').font(fontRegular).fillColor('#475569').text(' | Chủ TK: ').font(fontBold).fillColor('#0F172A').text('CONG TY CO PHAN LOHA SALES');
+        doc.text('Số tài khoản: 0071 0008 89999   |   Chủ TK: CONG TY CO PHAN LOHA SALES', 50, currentY + 30);
 
-        // 6. Chữ ký
-        currentY += 65;
-        doc.font(fontBold).fontSize(9).fillColor('#0F172A');
-        doc.text('ĐẠI DIỆN ĐẠI LÝ MUA HÀNG', 70, currentY, { width: 180, align: 'center' });
-        doc.font(fontRegular).fontSize(7).fillColor('#94A3B8').text('(Ký, ghi rõ họ tên và đóng dấu)', 70, currentY + 12, { width: 180, align: 'center' });
+        // 6. Chữ ký (khoảng cách an toàn, không bao giờ bị đè chữ)
+        currentY += 68;
+        doc.font(fontBold).fontSize(8.5).fillColor('#0F172A');
+        doc.text('ĐẠI DIỆN ĐẠI LÝ MUA HÀNG', 50, currentY, { width: 200, align: 'center' });
+        doc.font(fontRegular).fontSize(7).fillColor('#94A3B8').text('(Ký, ghi rõ họ tên và đóng dấu)', 50, currentY + 14, { width: 200, align: 'center' });
 
-        doc.font(fontBold).fontSize(9).fillColor('#0F172A').text('KẾ TOÁN TRƯỞNG & ĐẠI DIỆN BÁN HÀNG', 340, currentY, { width: 180, align: 'center' });
-        doc.font(fontRegular).fontSize(7).fillColor('#94A3B8').text('(Ký, ghi rõ họ tên và đóng dấu)', 340, currentY + 12, { width: 180, align: 'center' });
+        doc.font(fontBold).fontSize(8.5).fillColor('#0F172A').text('KẾ TOÁN TRƯỞNG & ĐẠI DIỆN BÁN HÀNG', 305, currentY, { width: 250, align: 'center' });
+        doc.font(fontRegular).fontSize(7).fillColor('#94A3B8').text('(Ký, ghi rõ họ tên và đóng dấu)', 305, currentY + 14, { width: 250, align: 'center' });
 
         doc.end();
       } catch (err) {
@@ -1112,6 +1136,7 @@ export class InvoicesService implements OnModuleInit {
    */
   async generateInvoicePdfHtml(id: string, currentUser?: ICurrentUser): Promise<{ html: string; invoice: InvoiceItem }> {
     const invoice = await this.findById(id, currentUser);
+    const customerCode = this.formatCustomerCode(invoice);
     const formatMoney = (n: number) => new Intl.NumberFormat('vi-VN').format(n) + ' đ';
     const formatDate = (d: Date | string) =>
       new Date(d).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -1173,7 +1198,7 @@ export class InvoicesService implements OnModuleInit {
         <div class="info-col">
           <h3>Đơn vị mua hàng (Đại lý B2B)</h3>
           <div class="info-row"><span class="lbl">Tên đại lý:</span><span class="val">${invoice.customerName}</span></div>
-          <div class="info-row"><span class="lbl">Mã khách hàng:</span><span class="val">${invoice.customerId}</span></div>
+          <div class="info-row"><span class="lbl">Mã khách hàng:</span><span class="val">${customerCode}</span></div>
           <div class="info-row"><span class="lbl">Phiếu giao hàng:</span><span class="val" style="color: #4338ca;">${invoice.deliverySlipCodes && invoice.deliverySlipCodes.length > 0 ? invoice.deliverySlipCodes.join(', ') : (invoice.orderCode || '—')}</span></div>
           <div class="info-row"><span class="lbl">Email nhận nợ:</span><span class="val">${invoice.customerEmail || 'dealer@loha.vn'}</span></div>
           <div class="info-row"><span class="lbl">Đơn hàng gốc:</span><span class="val">${invoice.orderCode}</span></div>
