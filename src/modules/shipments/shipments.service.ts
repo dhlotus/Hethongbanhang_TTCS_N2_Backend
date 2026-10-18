@@ -65,6 +65,8 @@ export interface ShipmentItem {
   tripId?: string;
   tripCode?: string;
   items?: ShipmentBatchItem[];
+  invoiceId?: string;
+  invoiceCode?: string;
   shippedAt?: Date;
   deliveredAt?: Date;
   createdAt: Date;
@@ -116,11 +118,17 @@ export class ShipmentsService implements OnModuleInit {
           trip_id VARCHAR(100),
           trip_code VARCHAR(100),
           created_by VARCHAR(100),
+          invoice_id VARCHAR(100),
+          invoice_code VARCHAR(100),
           shipped_at TIMESTAMPTZ,
           delivered_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Đảm bảo cột invoice_id và invoice_code tồn tại nếu bảng đã được tạo trước đó
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS invoice_id VARCHAR(100);
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS invoice_code VARCHAR(100);
 
         CREATE TABLE IF NOT EXISTS shipment_items (
           id BIGSERIAL PRIMARY KEY,
@@ -317,6 +325,8 @@ export class ShipmentsService implements OnModuleInit {
             failureReason: r.failure_reason,
             tripId: r.trip_id,
             tripCode: r.trip_code,
+            invoiceId: r.invoice_id,
+            invoiceCode: r.invoice_code,
             shippedAt: r.shipped_at ? new Date(r.shipped_at) : undefined,
             deliveredAt: r.delivered_at ? new Date(r.delivered_at) : undefined,
             createdAt: new Date(r.created_at),
