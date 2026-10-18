@@ -229,9 +229,16 @@ export class ShipmentsService implements OnModuleInit {
    * - Sales Rep: R* (Chỉ thấy phiếu xuất của tuyến mình)
    */
   async findAll(
-    query?: { orderId?: string; orderCode?: string; status?: ShipmentItem['status'] },
+    query?: {
+      orderId?: string;
+      orderCode?: string;
+      status?: ShipmentItem['status'] | string;
+      search?: string;
+      page?: string | number;
+      limit?: string | number;
+    },
     currentUser?: ICurrentUser,
-  ): Promise<ShipmentItem[]> {
+  ): Promise<any> {
     let list = Array.from(this.shipments.values());
 
     if (currentUser?.roles) {
@@ -269,8 +276,46 @@ export class ShipmentsService implements OnModuleInit {
       const qCode = String(query.orderCode).toLowerCase().trim();
       list = list.filter((s) => s.orderCode?.toLowerCase().trim() === qCode);
     }
-    if (query?.status) {
+    if (query?.status && query.status !== 'ALL') {
       list = list.filter((s) => s.status === query.status);
+    }
+
+    // Backend Search Filter
+    if (query?.search && String(query.search).trim()) {
+      const q = String(query.search).toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.id?.toLowerCase().includes(q) ||
+          s.orderCode?.toLowerCase().includes(q) ||
+          s.customerName?.toLowerCase().includes(q) ||
+          s.receiverName?.toLowerCase().includes(q) ||
+          s.phone?.includes(q) ||
+          s.carrierName?.toLowerCase().includes(q) ||
+          s.trackingNumber?.toLowerCase().includes(q) ||
+          s.tripCode?.toLowerCase().includes(q) ||
+          s.deliveryAddress?.toLowerCase().includes(q),
+      );
+    }
+
+    // Sắp xếp mới nhất lên đầu
+    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Nếu có tham số page hoặc limit thì trả về phân trang
+    if (query?.page !== undefined || query?.limit !== undefined) {
+      const total = list.length;
+      const page = Math.max(1, parseInt(String(query.page || 1), 10) || 1);
+      const limit = Math.max(1, parseInt(String(query.limit || 10), 10) || 10);
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const startIndex = (page - 1) * limit;
+      const data = list.slice(startIndex, startIndex + limit);
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+      };
     }
 
     return list;
