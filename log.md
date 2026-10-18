@@ -1012,3 +1012,32 @@ est build -> 0 lỗi.
     - Hỗ trợ lọc chính xác theo param `query.warehouseId`.
 - **Trạng thái kiểm thử:**
   - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 6/7] - [SN-200]: Phát Hành Hoá Đơn Bán Hàng Từ Phiếu Thực Giao & Khóa Sửa Xóa (Kế Toán Công Nợ)
+- **Thời gian hoàn thành:** 2026-10-18
+- **Mã Jira / Task:** SN-200 (Parent Story: SN-201 / Phân hệ Hóa đơn & Công nợ)
+- **Tiêu đề:** "Là Kế toán công nợ, tôi muốn phát hành hoá đơn bán hàng từ phiếu đã giao, để xuất hoá đơn đúng số hàng thực giao thay vì số hàng đặt."
+- **Danh sách file thay đổi & tạo mới:**
+  - `src/modules/invoices/dto/issue-invoice.dto.ts` (Tạo mới: DTO `IssueInvoiceDto` với `deliverySlipIds`, `dueDate`, `note`).
+  - `src/modules/invoices/entities/invoice.entity.ts` (Tạo mới: Entity và Interface `InvoiceEntity`, `InvoiceStatus`, `InvoiceLineItem`, `UnbilledDeliverySlip`, `UnbilledDeliverySlipItem`).
+  - `src/modules/invoices/invoices.service.ts` (Cập nhật: Bổ sung bảng `invoice_sequences`, thuật toán sinh sequence không nhảy cóc `getNextInvoiceSequence`, API `getUnbilledDeliveries`, API `issueInvoiceFromDeliveries`, xuất HTML in ấn & PDFKit, chặn sửa xóa qua `MethodNotAllowedException`).
+  - `src/modules/invoices/invoices.controller.ts` (Cập nhật: Endpoint `GET /api/invoices/unbilled-deliveries`, `GET /api/invoices/:id/print`, `POST /api/invoices`, chặn `PUT`, `PATCH`, `DELETE` ném `MethodNotAllowedException`).
+  - `src/modules/invoices/invoices.module.ts` (Cập nhật: Import `ShipmentsModule`, `OrdersModule`, `DatabaseModule`).
+  - `src/modules/shipments/shipments.service.ts` (Cập nhật: Bổ sung trường `invoiceId` và `invoiceCode` vào `ShipmentItem`, schema DB `shipments` và hàm cập nhật phiếu sau khi xuất hóa đơn).
+  - `test/invoices-sn200.spec.ts` (Tạo mới: 8 unit test cases kiểm thử tự động toàn diện 5 ràng buộc cốt lõi).
+- **Chi tiết kỹ thuật 5 ràng buộc cốt lõi:**
+  1. **Tính tiền theo số lượng thực giao:** Trích xuất `deliveredQuantity` từ chi tiết phiếu giao (hoặc `order.lines[].deliveredQuantity`) thay vì `quantity` đặt ban đầu để tính `lineTotal` và `amount` hóa đơn.
+  2. **Cơ chế chống trùng lặp và không nhảy cóc dãy số hóa đơn:**
+     - **Môi trường Database PostgreSQL:** Khởi tạo bảng `invoice_sequences (prefix VARCHAR(32) PRIMARY KEY, current_number INT NOT NULL, updated_at TIMESTAMPTZ)`. Sử dụng kỹ thuật Atomic Upsert kết hợp `RETURNING current_number`:
+       `INSERT INTO invoice_sequences (prefix, current_number, updated_at) VALUES ($1, 1, CURRENT_TIMESTAMP) ON CONFLICT (prefix) DO UPDATE SET current_number = invoice_sequences.current_number + 1, updated_at = CURRENT_TIMESTAMP RETURNING current_number;`
+       Nhờ tính năng Row-level lock nguyên tử của câu lệnh, không có hai transaction nào nhận cùng một số thứ tự, và nếu transaction thất bại hoặc retry, số thứ tự không bị nhảy cóc hay đứt đoạn.
+     - **Môi trường In-Memory Fallback:** Sử dụng Mutex Promise queue tuần tự hóa (`this.sequenceMutex = this.sequenceMutex.then(...)`), kết hợp khởi tạo giá trị từ `MAX(invoice_number)` của các hóa đơn đã tồn tại, đảm bảo an toàn tuyệt đối khi có nhiều request đồng thời.
+     - Dạng số hóa đơn: `HD{YY}{MM}-XXXX` (ví dụ: `HD2610-0001`, `HD2610-0002`...).
+  3. **Gộp nhiều phiếu giao cùng một đại lý:** Kiểm tra tất cả phiếu giao trong mảng `deliverySlipIds` phải có trạng thái `DELIVERED`, chưa từng được lập hóa đơn (`!invoiceId`), và phải thuộc cùng một `customerId`. Nếu khác đại lý lập tức văng `BadRequestException`.
+  4. **Khóa sửa/xóa bất biến:** Chặn hoàn toàn các phương thức `PUT`, `PATCH`, `DELETE /api/invoices/:id` văng `MethodNotAllowedException` kèm thông báo: *"Hoá đơn đã phát hành không thể sửa xóa. Mọi thay đổi bắt buộc phải lập chứng từ điều chỉnh theo quy định."*
+  5. **In hoặc xuất PDF:** Hỗ trợ `GET /api/invoices/:id/pdf` (trả về PDFKit nhị phân chuẩn định dạng A4 kèm số tiền viết bằng chữ Tiếng Việt) và `GET /api/invoices/:id/print` (HTML template in ấn tự động `window.print()`).
+- **Trạng thái kiểm thử:**
+  - Unit Test: `npx jest test/invoices-sn200.spec.ts` -> 8/8 test cases PASSED (100%).
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
