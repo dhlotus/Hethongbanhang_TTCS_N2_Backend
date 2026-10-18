@@ -1270,7 +1270,7 @@ export class InvoicesService implements OnModuleInit {
         <strong>Thông tin tài khoản nhận thanh toán:</strong><br/>
         Ngân hàng: TMCP Ngoại Thương Việt Nam (Vietcombank) — Chi nhánh TP.HCM<br/>
         Số tài khoản: <strong>0071 0008 89999</strong> — Chủ tài khoản: <strong>CONG TY CO PHAN LOHA SALES</strong><br/>
-        Nội dung chuyển khoản: <strong>${invoice.invoiceCode} — ${invoice.customerId}</strong>
+        Nội dung chuyển khoản: <strong>${invoice.invoiceCode} — ${customerCode}</strong>
       </div>
 
       <div class="signatures">
