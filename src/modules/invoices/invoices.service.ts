@@ -1369,11 +1369,11 @@ export class InvoicesService implements OnModuleInit {
       ? await this.shipmentsService.findAll({ status: 'DELIVERED' }, currentUser)
       : [];
 
-    let unbilledShipments = allShipments.filter((s) => s.status === 'DELIVERED' && !s.invoiceId);
+    let unbilledShipments = allShipments.filter((s: any) => s.status === 'DELIVERED' && !s.invoiceId);
 
     if (customerId && customerId !== 'ALL') {
       unbilledShipments = unbilledShipments.filter(
-        (s) =>
+        (s: any) =>
           s.customerId === customerId ||
           (customerId === '55555555-0000-0000-0000-000000000001' && s.customerId === 'cust-001') ||
           (customerId === '55555555-0000-0000-0000-000000000002' && s.customerId === 'cust-002'),

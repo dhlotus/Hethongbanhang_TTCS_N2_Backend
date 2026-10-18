@@ -33,6 +33,10 @@ export class AuditLogsService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     if (this.dbService?.isConnected()) {
       try {
+        await this.dbService.query(
+          `DELETE FROM audit_logs WHERE entity_id = 'logout' OR entity_name = 'logout';`,
+        );
+
         const rows = await this.dbService.query<{
           id: string;
           user_id: string;
@@ -249,10 +253,20 @@ export class AuditLogsService implements OnModuleInit {
    * Ghi nhận một bản ghi Audit Log mới (Append-only, Bất biến)
    */
   async recordLog(dto: CreateAuditLogDto): Promise<AuditLogEntity> {
+    let finalAction = dto.action;
+    if (
+      finalAction === AuditAction.CREATE &&
+      ((dto.oldValues && Object.keys(dto.oldValues).length > 0) ||
+        dto.summary?.toLowerCase().includes('cập nhật') ||
+        dto.summary?.toLowerCase().includes('sửa'))
+    ) {
+      finalAction = AuditAction.UPDATE;
+    }
+
     const logItem = new AuditLogEntity({
       id: randomUUID(),
       user_id: dto.userId,
-      action: dto.action,
+      action: finalAction,
       entity_name: dto.entityName,
       entity_id: dto.entityId,
       old_values: dto.oldValues ?? null,
@@ -358,6 +372,97 @@ export class AuditLogsService implements OnModuleInit {
       }
     };
 
+    // Chuẩn hóa bộ lọc Đối tượng (hỗ trợ số ít, số nhiều, tiếng Anh, tiếng Việt, slug)
+    const resolveEntityFilterValues = (raw?: string): string[] | null => {
+      if (!raw || raw === 'ALL') return null;
+      const upper = raw.toUpperCase().trim();
+
+      if (
+        upper === 'INVENTORY' ||
+        upper === 'STOCK' ||
+        upper === 'WAREHOUSE' ||
+        upper === 'BATCH' ||
+        upper.includes('KHO') ||
+        upper.includes('TỒN')
+      ) {
+        return ['INVENTORY', 'STOCK', 'WAREHOUSE'];
+      }
+
+      if (
+        upper === 'PRICING' ||
+        upper === 'PRICE' ||
+        upper === 'PRODUCT' ||
+        upper === 'PRODUCTS' ||
+        upper === 'PRICE_BOOK' ||
+        upper === 'PRICE-BOOK' ||
+        upper.includes('GIÁ') ||
+        upper.includes('SẢN PHẨM')
+      ) {
+        return ['PRICING', 'PRICE', 'PRODUCT', 'PRODUCTS'];
+      }
+
+      if (
+        upper === 'ORDER' ||
+        upper === 'ORDERS' ||
+        upper.includes('ĐƠN HÀNG')
+      ) {
+        return ['ORDER', 'ORDERS'];
+      }
+
+      if (
+        upper === 'INVOICE' ||
+        upper === 'INVOICES' ||
+        upper.includes('HÓA ĐƠN')
+      ) {
+        return ['INVOICE', 'INVOICES'];
+      }
+
+      if (
+        upper === 'DEBT' ||
+        upper === 'CREDIT' ||
+        upper.includes('CÔNG NỢ') ||
+        upper.includes('HẠN MỨC')
+      ) {
+        return ['DEBT', 'CREDIT'];
+      }
+
+      if (
+        upper === 'CUSTOMER' ||
+        upper === 'CUSTOMERS' ||
+        upper === 'AGENCY' ||
+        upper.includes('KHÁCH HÀNG') ||
+        upper.includes('ĐẠI LÝ')
+      ) {
+        return ['CUSTOMER', 'CUSTOMERS'];
+      }
+
+      if (
+        upper === 'USER' ||
+        upper === 'USERS' ||
+        upper === 'ACCOUNT' ||
+        upper === 'ACCOUNTS' ||
+        upper.includes('TÀI KHOẢN') ||
+        upper.includes('NGƯỜI DÙNG')
+      ) {
+        return ['USER', 'USERS', 'ACCOUNT', 'ACCOUNTS'];
+      }
+
+      return [upper];
+    };
+
+    // Chuẩn hóa bộ lọc Hành động (Action)
+    const normalizeActionFilter = (raw?: string): string | null => {
+      if (!raw || raw === 'ALL') return null;
+      const upper = raw.toUpperCase().trim();
+      if (upper === 'STOCK_ADJUST' || upper === 'ADJUST') return 'STOCK_ADJUST';
+      if (upper === 'CREATE') return 'CREATE';
+      if (upper === 'UPDATE') return 'UPDATE';
+      if (upper === 'DELETE') return 'DELETE';
+      if (upper === 'APPROVE') return 'APPROVE';
+      if (upper === 'CANCEL') return 'CANCEL';
+      return upper;
+    };
+
     // 1. TRUY VẤN TRỰC TIẾP TỪ CƠ SỞ DỮ LIỆU POSTGRESQL (NẾU KẾT NỐI SẴN SÀNG)
     if (this.dbService?.isConnected()) {
       try {
@@ -389,20 +494,41 @@ export class AuditLogsService implements OnModuleInit {
           paramIdx++;
         }
 
-        // Lọc theo phân hệ nghiệp vụ tác động
+        // Lọc theo phân hệ nghiệp vụ tác động (Đối tượng)
         const targetEntity = query.entityName || query.entity || query.module;
-        if (targetEntity && targetEntity !== 'ALL') {
-          whereClauses.push(`UPPER(a.entity_name) = UPPER($${paramIdx++})`);
-          params.push(targetEntity);
+        const resolvedEntities = resolveEntityFilterValues(targetEntity);
+        if (resolvedEntities && resolvedEntities.length > 0) {
+          whereClauses.push(`UPPER(a.entity_name) = ANY($${paramIdx++})`);
+          params.push(resolvedEntities);
         }
 
         // Lọc theo loại hành động
-        if (query.action && query.action !== 'ALL') {
-          whereClauses.push(`UPPER(a.action) = UPPER($${paramIdx++})`);
-          params.push(query.action);
+        const resolvedAction = normalizeActionFilter(query.action);
+        if (resolvedAction) {
+          if (resolvedAction === 'CREATE') {
+            whereClauses.push(`(
+              UPPER(a.action) = 'CREATE' AND
+              (a.old_values IS NULL OR a.old_values::text = '{}' OR a.old_values::text = 'null') AND
+              (a.summary IS NULL OR (a.summary NOT ILIKE '%cập nhật%' AND a.summary NOT ILIKE '%sửa%'))
+            )`);
+          } else if (resolvedAction === 'UPDATE') {
+            whereClauses.push(`(
+              UPPER(a.action) = 'UPDATE' OR
+              (UPPER(a.action) = 'CREATE' AND (
+                (a.old_values IS NOT NULL AND a.old_values::text <> '{}' AND a.old_values::text <> 'null') OR
+                a.summary ILIKE '%cập nhật%' OR
+                a.summary ILIKE '%sửa%'
+              ))
+            )`);
+          } else if (resolvedAction === 'STOCK_ADJUST') {
+            whereClauses.push(`UPPER(a.action) IN ('STOCK_ADJUST', 'ADJUST')`);
+          } else {
+            whereClauses.push(`UPPER(a.action) = $${paramIdx++}`);
+            params.push(resolvedAction);
+          }
         }
 
-        // Tìm kiếm tự do theo tên người thực hiện (fullName), username, email, IP hoặc nội dung
+        // Tìm kiếm tự do theo tên người thực hiện (fullName), username, email, IP, tên đối tượng, mã đối tượng hoặc tóm tắt
         const searchKeyword = (query.searchUser || query.search || query.q)?.trim();
         if (searchKeyword) {
           const searchPattern = `%${searchKeyword}%`;
@@ -411,7 +537,9 @@ export class AuditLogsService implements OnModuleInit {
             u.username ILIKE $${paramIdx} OR
             u.email ILIKE $${paramIdx} OR
             a.user_id::text ILIKE $${paramIdx} OR
+            a.entity_name ILIKE $${paramIdx} OR
             a.entity_id ILIKE $${paramIdx} OR
+            a.summary ILIKE $${paramIdx} OR
             a.ip_address ILIKE $${paramIdx} OR
             a.old_values::text ILIKE $${paramIdx} OR
             a.new_values::text ILIKE $${paramIdx}
@@ -475,10 +603,20 @@ export class AuditLogsService implements OnModuleInit {
         );
 
         const data = dataRows.map((r) => {
+          let resolvedRowAction = r.action;
+          if (
+            resolvedRowAction === AuditAction.CREATE &&
+            ((r.old_values && Object.keys(r.old_values).length > 0) ||
+              r.summary?.toLowerCase().includes('cập nhật') ||
+              r.summary?.toLowerCase().includes('sửa'))
+          ) {
+            resolvedRowAction = AuditAction.UPDATE;
+          }
+
           return new AuditLogEntity({
             id: r.id,
             user_id: r.user_id,
-            action: r.action,
+            action: resolvedRowAction,
             entity_name: r.entity_name,
             entity_id: r.entity_id,
             old_values: r.old_values,
@@ -544,17 +682,40 @@ export class AuditLogsService implements OnModuleInit {
 
     // 3. Lọc theo phân hệ tác động (entityName hoặc entity hoặc module)
     const targetEntityFallback = query.entityName || query.entity || query.module;
-    if (targetEntityFallback && targetEntityFallback !== 'ALL') {
-      filtered = filtered.filter(
-        (log) => log.entity_name.toUpperCase() === targetEntityFallback.toUpperCase(),
+    const resolvedEntitiesFallback = resolveEntityFilterValues(targetEntityFallback);
+    if (resolvedEntitiesFallback && resolvedEntitiesFallback.length > 0) {
+      filtered = filtered.filter((log) =>
+        resolvedEntitiesFallback.includes(log.entity_name?.toUpperCase()),
       );
     }
 
     // 4. Lọc theo loại hành động (action)
-    if (query.action && query.action !== 'ALL') {
-      filtered = filtered.filter(
-        (log) => log.action.toUpperCase() === query.action?.toUpperCase(),
-      );
+    const resolvedActionFallback = normalizeActionFilter(query.action);
+    if (resolvedActionFallback) {
+      if (resolvedActionFallback === 'CREATE') {
+        filtered = filtered.filter(
+          (log) =>
+            log.action?.toUpperCase() === 'CREATE' &&
+            (!log.old_values || Object.keys(log.old_values).length === 0) &&
+            (!log.summary || (!log.summary.toLowerCase().includes('cập nhật') && !log.summary.toLowerCase().includes('sửa'))),
+        );
+      } else if (resolvedActionFallback === 'UPDATE') {
+        filtered = filtered.filter(
+          (log) =>
+            log.action?.toUpperCase() === 'UPDATE' ||
+            (log.action?.toUpperCase() === 'CREATE' &&
+              ((log.old_values && Object.keys(log.old_values).length > 0) ||
+                Boolean(log.summary && (log.summary.toLowerCase().includes('cập nhật') || log.summary.toLowerCase().includes('sửa'))))),
+        );
+      } else if (resolvedActionFallback === 'STOCK_ADJUST') {
+        filtered = filtered.filter(
+          (log) => log.action?.toUpperCase() === 'STOCK_ADJUST' || log.action?.toUpperCase() === 'ADJUST',
+        );
+      } else {
+        filtered = filtered.filter(
+          (log) => log.action?.toUpperCase() === resolvedActionFallback,
+        );
+      }
     }
 
     // 5. Tìm kiếm tự do theo tên người thực hiện (fullName), username, email, mã đối tượng hoặc nội dung JSON
