@@ -986,16 +986,10 @@ export class InvoicesService implements OnModuleInit {
 
         // 1. Header LOHA SALES
         doc.font(fontBold).fontSize(18).fillColor('#4338CA').text('LOHA SALES', 40, 40);
-        doc
-          .font(fontRegular)
-          .fontSize(9)
-          .fillColor('#64748B')
-          .text('HỆ THỐNG PHÂN PHỐI & BÁN HÀNG DOANH NGHIỆP B2B', 40, 62);
-        doc.text('Số 123 Đường Công Nghệ, Quận 1, TP. Hồ Chí Minh | Hotline: 1900 8899', 40, 74);
+        doc.font(fontBold).fontSize(15).fillColor('#0F172A').text('HÓA ĐƠN BÁN HÀNG', 40, 64);
 
         // Tiêu đề Hóa Đơn & Mã
-        doc.font(fontBold).fontSize(16).fillColor('#0F172A').text('HÓA ĐƠN BÁN HÀNG', 340, 40, { align: 'right' });
-        doc.font(fontBold).fontSize(11).fillColor('#4F46E5').text(`Số HĐ: ${invoice.invoiceCode}`, 340, 60, { align: 'right' });
+        doc.font(fontBold).fontSize(11).fillColor('#4F46E5').text(`Số HĐ: ${invoice.invoiceCode}`, 340, 44, { align: 'right' });
         doc
           .font(fontRegular)
           .fontSize(9)
@@ -1009,11 +1003,11 @@ export class InvoicesService implements OnModuleInit {
                   ? '[ THANH TOÁN MỘT PHẦN ]'
                   : '[ CHƯA THANH TOÁN ]',
             340,
-            74,
+            62,
             { align: 'right' },
           );
 
-        doc.moveTo(40, 95).lineTo(555, 95).strokeColor('#E2E8F0').lineWidth(1).stroke();
+        doc.moveTo(40, 92).lineTo(555, 92).strokeColor('#E2E8F0').lineWidth(1).stroke();
 
         // 2. Thông tin đối tác mua hàng & Kỳ hạn
         doc.font(fontBold).fontSize(10).fillColor('#334155').text('ĐƠN VỊ MUA HÀNG (ĐẠI LÝ B2B)', 40, 105);
@@ -1064,27 +1058,30 @@ export class InvoicesService implements OnModuleInit {
           currentY += 20;
         });
 
-        // 4. Tổng kết tiền hàng & Số tiền bằng chữ
+        // 4. Bảng tổng tiền (độ rộng 515px bằng bảng dòng hàng phía trên)
         currentY += 10;
-        doc.font(fontRegular).fontSize(8).fillColor('#64748B').text(
+        doc.rect(40, currentY, 515, 20).strokeColor('#E2E8F0').lineWidth(0.5).stroke();
+        doc.font(fontRegular).fontSize(9).fillColor('#475569').text('Tổng tiền hàng:', 50, currentY + 5);
+        doc.font(fontBold).fillColor('#0F172A').text(formatMoney(invoice.amount), 340, currentY + 5, { width: 205, align: 'right' });
+
+        currentY += 20;
+        doc.rect(40, currentY, 515, 20).strokeColor('#E2E8F0').lineWidth(0.5).stroke();
+        doc.font(fontRegular).fillColor('#475569').text('Số tiền đã thanh toán:', 50, currentY + 5);
+        doc.font(fontBold).fillColor('#16A34A').text(`-${formatMoney(invoice.paidAmount)}`, 340, currentY + 5, { width: 205, align: 'right' });
+
+        currentY += 20;
+        doc.rect(40, currentY, 515, 24).fillColor('#EFF6FF').strokeColor('#CBD5E1').lineWidth(0.5).fillAndStroke();
+        doc.font(fontBold).fontSize(10).fillColor('#1E40AF').text('CÒN NỢ CẦN THANH TOÁN:', 50, currentY + 6);
+        doc.font(fontBold).fontSize(11).fillColor('#1E40AF').text(formatMoney(invoice.remainingAmount), 340, currentY + 5, { width: 205, align: 'right' });
+
+        // Số tiền viết bằng chữ dưới bảng tổng tiền
+        currentY += 32;
+        doc.font(fontRegular).fontSize(8.5).fillColor('#475569').text(
           `Số tiền viết bằng chữ: ${numberToVietnameseWords(invoice.amount)}`,
-          42,
+          40,
           currentY,
-          { width: 280 },
+          { width: 515 },
         );
-
-        const totalsX = 350;
-        doc.font(fontRegular).fontSize(9).fillColor('#475569').text('Tổng tiền hàng:', totalsX, currentY);
-        doc.font(fontBold).fillColor('#0F172A').text(formatMoney(invoice.amount), 450, currentY, { width: 100, align: 'right' });
-
-        currentY += 16;
-        doc.font(fontRegular).fillColor('#475569').text('Đã thanh toán:', totalsX, currentY);
-        doc.font(fontBold).fillColor('#16A34A').text(`-${formatMoney(invoice.paidAmount)}`, 450, currentY, { width: 100, align: 'right' });
-
-        currentY += 18;
-        doc.rect(totalsX - 10, currentY - 4, 215, 26).fillColor('#EFF6FF').fill();
-        doc.font(fontBold).fontSize(10).fillColor('#1E40AF').text('CÒN NỢ CẦN TRẢ:', totalsX, currentY + 3);
-        doc.font(fontBold).fontSize(11).fillColor('#1E40AF').text(formatMoney(invoice.remainingAmount), 450, currentY + 2, { width: 100, align: 'right' });
 
         // 5. Thông tin thanh toán Vietcombank
         currentY += 45;
@@ -1124,29 +1121,25 @@ export class InvoicesService implements OnModuleInit {
     <html lang="vi">
     <head>
       <meta charset="UTF-8">
-      <title>HÓA ĐƠN BÁN HÀNG — ${invoice.invoiceCode}</title>
+      <title></title>
       <style>
-        @page { size: A4; margin: 15mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; font-size: 13px; line-height: 1.5; background: #fff; }
-        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4f46e5; padding-bottom: 16px; margin-bottom: 20px; }
+        @page { size: A4; margin: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 15mm 18mm; font-size: 13px; line-height: 1.5; background: #fff; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4f46e5; padding-bottom: 14px; margin-bottom: 20px; }
         .brand-title { font-size: 22px; font-weight: 800; color: #4f46e5; margin: 0; }
-        .brand-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+        .invoice-title { font-size: 17px; font-weight: 700; color: #0f172a; margin: 4px 0 0 0; text-transform: uppercase; }
         .invoice-title-box { text-align: right; }
-        .invoice-title { font-size: 20px; font-weight: 700; color: #0f172a; margin: 0; text-transform: uppercase; }
         .invoice-code { font-size: 14px; font-weight: 600; color: #4f46e5; margin-top: 4px; font-family: monospace; }
         .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
         .info-col h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #475569; margin: 0 0 8px 0; border-bottom: 1px dashed #cbd5e1; padding-bottom: 4px; }
         .info-row { display: flex; margin-bottom: 4px; font-size: 12px; }
         .info-row .lbl { width: 110px; color: #64748b; flex-shrink: 0; }
         .info-row .val { font-weight: 600; color: #0f172a; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
         th { background: #f1f5f9; color: #334155; font-weight: 700; text-align: left; padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; text-transform: uppercase; }
         td { padding: 8px 10px; border: 1px solid #e2e8f0; font-size: 12px; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
-        .totals-box { margin-left: auto; width: 320px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
-        .totals-row { display: flex; justify-content: space-between; padding: 8px 14px; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
-        .totals-row.grand { background: #eff6ff; font-weight: 700; font-size: 14px; color: #1e40af; border-bottom: none; }
         .signatures { display: grid; grid-template-columns: 1fr 1fr; text-align: center; margin-top: 40px; }
         .sig-box p { margin: 4px 0; }
         .sig-space { height: 70px; }
@@ -1160,13 +1153,9 @@ export class InvoicesService implements OnModuleInit {
       <div class="header">
         <div>
           <h1 class="brand-title">LOHA SALES</h1>
-          <div class="brand-sub">HỆ THỐNG PHÂN PHỐI & BÁN HÀNG DOANH NGHIỆP B2B</div>
-          <div style="font-size: 11px; color: #475569; margin-top: 6px;">
-            Số 123 Đường Công Nghệ, Quận 1, TP. Hồ Chí Minh | Hotline: 1900 8899 | Email: billing@loha.vn
-          </div>
+          <h2 class="invoice-title">HÓA ĐƠN BÁN HÀNG</h2>
         </div>
         <div class="invoice-title-box">
-          <h2 class="invoice-title">HÓA ĐƠN BÁN HÀNG</h2>
           <div class="invoice-code">Số HĐ: ${invoice.invoiceCode}</div>
           <div style="margin-top: 6px;">
             ${
@@ -1231,23 +1220,25 @@ export class InvoicesService implements OnModuleInit {
         </tbody>
       </table>
 
-      <div style="font-size: 12px; color: #475569; font-style: italic; margin-bottom: 12px;">
-        Số tiền viết bằng chữ: <strong>${numberToVietnameseWords(invoice.amount)}</strong>
-      </div>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 8px; margin-bottom: 12px; border: 1px solid #cbd5e1;">
+        <tbody>
+          <tr>
+            <td style="padding: 9px 12px; font-size: 12px; color: #475569; border: 1px solid #e2e8f0; font-weight: 600;">Tổng tiền hàng:</td>
+            <td style="padding: 9px 12px; font-size: 13px; text-align: right; border: 1px solid #e2e8f0; font-weight: 700; color: #0f172a; width: 220px;">${formatMoney(invoice.amount)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 9px 12px; font-size: 12px; color: #475569; border: 1px solid #e2e8f0; font-weight: 600;">Số tiền đã thanh toán:</td>
+            <td style="padding: 9px 12px; font-size: 13px; text-align: right; border: 1px solid #e2e8f0; font-weight: 700; color: #16a34a; width: 220px;">-${formatMoney(invoice.paidAmount)}</td>
+          </tr>
+          <tr style="background: #eff6ff;">
+            <td style="padding: 10px 12px; font-size: 13px; font-weight: 700; color: #1e40af; border: 1px solid #cbd5e1; text-transform: uppercase;">CÒN NỢ CẦN THANH TOÁN:</td>
+            <td style="padding: 10px 12px; font-size: 14px; text-align: right; font-weight: 800; color: #1e40af; border: 1px solid #cbd5e1; width: 220px;">${formatMoney(invoice.remainingAmount)}</td>
+          </tr>
+        </tbody>
+      </table>
 
-      <div class="totals-box">
-        <div class="totals-row">
-          <span>Tổng tiền hàng:</span>
-          <span>${formatMoney(invoice.amount)}</span>
-        </div>
-        <div class="totals-row">
-          <span>Số tiền đã thanh toán:</span>
-          <span style="color: #16a34a;">-${formatMoney(invoice.paidAmount)}</span>
-        </div>
-        <div class="totals-row grand">
-          <span>CÒN NỢ CẦN THANH TOÁN:</span>
-          <span>${formatMoney(invoice.remainingAmount)}</span>
-        </div>
+      <div style="font-size: 12.5px; color: #334155; font-style: italic; margin-bottom: 22px; padding: 2px 0;">
+        Số tiền viết bằng chữ: <strong style="color: #0f172a; font-style: normal;">${numberToVietnameseWords(invoice.amount)}</strong>
       </div>
 
       <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px; font-size: 12px; margin-bottom: 24px;">
