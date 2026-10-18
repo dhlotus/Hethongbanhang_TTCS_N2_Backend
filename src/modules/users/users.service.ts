@@ -865,6 +865,7 @@ export class UsersService implements OnModuleInit {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (username) DO UPDATE
          SET email = EXCLUDED.email,
+             password_hash = EXCLUDED.password_hash,
              full_name = EXCLUDED.full_name,
              phone = EXCLUDED.phone,
              role_id = EXCLUDED.role_id,
@@ -1731,6 +1732,23 @@ export class UsersService implements OnModuleInit {
     this.users.set(user.id, user);
     this.saveUsersToDisk();
 
+    // Đồng bộ trực tiếp vào cơ sở dữ liệu PostgreSQL nếu đang kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE users 
+           SET password_hash = $1, 
+               failed_attempts = 0, 
+               locked_until = NULL, 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $2::uuid OR id::text = $2 OR username = $3;`,
+          [user.passwordHash, user.id, user.username],
+        );
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi cập nhật mật khẩu reset vào CSDL:', err);
+      }
+    }
+
     // Thu hồi toàn bộ phiên đăng nhập cũ
     this.revokeSessions(user.id);
 
@@ -1775,6 +1793,27 @@ export class UsersService implements OnModuleInit {
     user.failedAttempts = 0;
     user.lockedUntil = null;
     user.updatedAt = new Date();
+    this.users.set(user.id, user);
+
+    // 1. Lưu ngay lập tức ra đĩa (uploads/data/users.json) để đảm bảo không bị mất khi restart server
+    this.saveUsersToDisk();
+
+    // 2. Cập nhật trực tiếp vào cơ sở dữ liệu PostgreSQL nếu đang kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE users 
+           SET password_hash = $1, 
+               failed_attempts = 0, 
+               locked_until = NULL, 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $2::uuid OR id::text = $2 OR username = $3;`,
+          [newPasswordHash, user.id, user.username],
+        );
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi cập nhật mật khẩu mới vào CSDL PostgreSQL:', err);
+      }
+    }
   }
 
   /**
