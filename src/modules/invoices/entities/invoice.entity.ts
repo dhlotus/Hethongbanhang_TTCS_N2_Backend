@@ -70,6 +70,7 @@ export interface UnbilledDeliverySlipItem {
 export interface UnbilledDeliverySlip {
   id: string;
   deliveryCode: string;
+  trackingNumber?: string;
   orderId: string;
   orderCode: string;
   customerId: string;
@@ -80,4 +81,5 @@ export interface UnbilledDeliverySlip {
   receiverName?: string;
   items: UnbilledDeliverySlipItem[];
   totalDeliveredAmount: number;
+  totalAmount?: number;
 }

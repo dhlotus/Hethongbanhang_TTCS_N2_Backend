@@ -17,6 +17,7 @@ import { CustomersService } from '../customers/customers.service';
 import { CreditLimitService } from '../credit-limit/credit-limit.service';
 import { ShipmentsService } from '../shipments/shipments.service';
 import { OrdersService } from '../orders/orders.service';
+import { ReceiptsService } from '../receipts/receipts.service';
 import { numberToVietnameseWords } from '../../common/utils/number-to-vietnamese-words.util';
 import { IssueInvoiceDto } from './dto/issue-invoice.dto';
 import { OrderEntity } from '../orders/entities/order.entity';
@@ -125,11 +126,37 @@ export class InvoicesService implements OnModuleInit {
     @Optional()
     @Inject(forwardRef(() => OrdersService))
     private readonly ordersService?: OrdersService,
+    @Optional()
+    @Inject(forwardRef(() => ReceiptsService))
+    private readonly receiptsService?: ReceiptsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
     await this.ensureInvoiceTables();
     await this.syncFromDatabase();
+    this.syncReceiptsForExistingInvoices();
+  }
+
+  /**
+   * Tự động kiểm tra và đồng bộ phiếu thu cho các hóa đơn có thanh toán công nợ (SN-200, SN-207, SN-209)
+   */
+  private syncReceiptsForExistingInvoices(): void {
+    if (!this.receiptsService) return;
+    for (const inv of this.invoices.values()) {
+      if (inv.paidAmount > 0 && !this.receiptsService.hasReceiptForReference(inv.invoiceCode)) {
+        void this.receiptsService.createReceiptFromInvoicePayment({
+          invoiceId: inv.id,
+          invoiceCode: inv.invoiceCode,
+          customerId: inv.customerId,
+          customerName: inv.customerName,
+          amount: inv.paidAmount,
+          paymentMethod: 'BANK_TRANSFER',
+          note: `Thu tiền thanh toán cho hóa đơn ${inv.invoiceCode}`,
+          collectorName: 'Kế toán công nợ',
+          collectorUsername: 'accountant',
+        });
+      }
+    }
   }
 
   /**
@@ -880,6 +907,46 @@ export class InvoicesService implements OnModuleInit {
       currentUser || ({ userId: invoice.customerId, roles: [UserRole.CUSTOMER] } as any),
     );
 
+    // 4. Tự động sinh Phiếu thu tiền và Đối trừ (SN-200 / SN-207 / SN-209)
+    if (this.receiptsService) {
+      try {
+        let customerCode = invoice.customerId;
+        let customerPhone = '0988 123 456';
+        let customerAddress = 'Việt Nam';
+
+        if (this.customersService) {
+          try {
+            const cust = await this.customersService.findById(invoice.customerId);
+            if (cust) {
+              customerCode = cust.code || customerCode;
+              customerPhone = cust.phone || customerPhone;
+              customerAddress = cust.address || customerAddress;
+            }
+          } catch {
+            // bỏ qua lỗi nếu không tìm thấy thông tin customer
+          }
+        }
+
+        await this.receiptsService.createReceiptFromInvoicePayment({
+          invoiceId: invoice.id,
+          invoiceCode: invoice.invoiceCode,
+          customerId: invoice.customerId,
+          customerCode,
+          customerName: invoice.customerName,
+          customerPhone,
+          customerAddress,
+          amount: payAmount,
+          paymentMethod: dto.paymentMethod || 'BANK_TRANSFER',
+          note: dto.note || `Thanh toán hóa đơn ${invoice.invoiceCode}`,
+          collectorId: currentUser?.userId,
+          collectorName: currentUser?.username || 'Kế toán công nợ',
+          collectorUsername: currentUser?.username,
+        });
+      } catch (receiptErr: unknown) {
+        this.logger.warn(`[InvoicesService] Lỗi khi tạo phiếu thu: ${(receiptErr as Error).message}`);
+      }
+    }
+
     return {
       invoice,
       summary,
@@ -1377,6 +1444,7 @@ export class InvoicesService implements OnModuleInit {
       result.push({
         id: shp.id,
         deliveryCode: shp.trackingNumber || shp.id,
+        trackingNumber: shp.trackingNumber || shp.id,
         orderId: shp.orderId,
         orderCode: shp.orderCode,
         customerId: shp.customerId,
@@ -1386,6 +1454,7 @@ export class InvoicesService implements OnModuleInit {
         receiverName: shp.receiverName,
         items,
         totalDeliveredAmount: totalSlipAmount,
+        totalAmount: totalSlipAmount,
       });
     }
 

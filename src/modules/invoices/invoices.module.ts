@@ -7,6 +7,7 @@ import { CustomersModule } from '../customers/customers.module';
 import { CreditLimitModule } from '../credit-limit/credit-limit.module';
 import { ShipmentsModule } from '../shipments/shipments.module';
 import { OrdersModule } from '../orders/orders.module';
+import { ReceiptsModule } from '../receipts/receipts.module';
 import { DatabaseModule } from '../../database/database.module';
 
 @Module({
@@ -17,6 +18,7 @@ import { DatabaseModule } from '../../database/database.module';
     forwardRef(() => CreditLimitModule),
     forwardRef(() => ShipmentsModule),
     forwardRef(() => OrdersModule),
+    forwardRef(() => ReceiptsModule),
   ],
   controllers: [InvoicesController],
   providers: [InvoicesService, DebtReminderSchedulerService],

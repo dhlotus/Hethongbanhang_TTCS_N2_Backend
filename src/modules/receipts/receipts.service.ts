@@ -242,6 +242,95 @@ export class ReceiptsService {
   }
 
   /**
+   * Kiểm tra xem phiếu thu cho mã chứng từ tham chiếu (hóa đơn) đã tồn tại hay chưa
+   */
+  hasReceiptForReference(referenceCode: string): boolean {
+    if (!referenceCode) return false;
+    for (const r of this.receipts.values()) {
+      if (r.referenceCode && r.referenceCode.toLowerCase() === referenceCode.toLowerCase()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Tự động sinh phiếu thu tiền & đối trừ khi ghi nhận thanh toán hóa đơn (SN-200, SN-207, SN-209)
+   */
+  async createReceiptFromInvoicePayment(params: {
+    invoiceId: string;
+    invoiceCode: string;
+    customerId: string;
+    customerCode?: string;
+    customerName: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    amount: number;
+    paymentMethod?: string;
+    note?: string;
+    collectorId?: string;
+    collectorName?: string;
+    collectorUsername?: string;
+  }): Promise<Receipt> {
+    const now = new Date();
+    const yy = now.getFullYear().toString().slice(-2);
+    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+    const prefix = `PT${yy}${mm}-`;
+
+    let maxNum = 0;
+    for (const r of this.receipts.values()) {
+      if (r.code && r.code.startsWith(prefix)) {
+        const suffix = r.code.slice(prefix.length);
+        const parsed = parseInt(suffix, 10);
+        if (!isNaN(parsed) && parsed > maxNum) {
+          maxNum = parsed;
+        }
+      }
+    }
+
+    const nextCode = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+    const id = `rcpt-${Date.now()}`;
+
+    let method = PaymentMethod.BANK_TRANSFER;
+    const rawMethod = (params.paymentMethod || '').toUpperCase().trim();
+    if (rawMethod.includes('CASH') || rawMethod.includes('TIỀN MẶT')) {
+      method = PaymentMethod.CASH;
+    } else if (rawMethod.includes('CARD') || rawMethod.includes('THẺ')) {
+      method = PaymentMethod.CREDIT_CARD;
+    } else if (rawMethod.includes('CHECK') || rawMethod.includes('SÉC')) {
+      method = PaymentMethod.CHECK;
+    }
+
+    const receipt = new Receipt({
+      id,
+      code: nextCode,
+      customerId: params.customerId,
+      customerCode: params.customerCode || params.customerId,
+      customerName: params.customerName,
+      customerPhone: params.customerPhone || '0988 123 456',
+      customerAddress: params.customerAddress || 'Số 123 Phố Vọng, P. Đồng Tâm, Q. Hai Bà Trưng, Hà Nội',
+      amount: params.amount,
+      amountInWords: numberToVietnameseWords(params.amount),
+      paymentMethod: method,
+      paymentDate: now,
+      referenceCode: params.invoiceCode,
+      notes: params.note || `Thu tiền thanh toán cho hóa đơn ${params.invoiceCode}`,
+      status: ReceiptStatus.CONFIRMED,
+      collectorId: params.collectorId || 'usr-acc-01',
+      collectorName: params.collectorName || 'Kế toán công nợ',
+      collectorUsername: params.collectorUsername || 'accountant',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    this.receipts.set(receipt.id, receipt);
+    this.receipts.set(receipt.code, receipt);
+
+    this.logger.log(`[ReceiptsService] Đã tự động tạo phiếu thu ${receipt.code} cho hóa đơn ${params.invoiceCode} số tiền ${params.amount} đ`);
+    return receipt;
+  }
+
+  /**
    * Lấy dữ liệu chuẩn hóa phục vụ In ấn (Endpoint: GET /api/receipts/:id/print)
    * Đảm bảo đủ 5 thông tin: Mã, Đại lý, Số tiền, Hình thức, Người thu (SN-209)
    */
