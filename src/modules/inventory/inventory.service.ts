@@ -2564,6 +2564,48 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
+   * Tự sinh số lô hàng kết nối hệ thống ngẫu nhiên, không trùng lặp theo chuẩn LOT-YYMMDD-XXXX (SN-178 / SN-184)
+   */
+  async generateBatchNumber(
+    productId?: string,
+    sku?: string,
+    dateStr?: string,
+  ): Promise<{ batchNumber: string; success: boolean }> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    const now = dateStr ? new Date(dateStr) : new Date();
+    const targetDate = isNaN(now.getTime()) ? new Date() : now;
+    const yy = String(targetDate.getFullYear()).slice(-2);
+    const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(targetDate.getDate()).padStart(2, '0');
+    const datePart = `${yy}${mm}${dd}`;
+
+    // Bảng ký tự Crockford Base32: 32 ký tự tránh nhầm lẫn (không có I, L, O, U)
+    const charset = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    const existingBatches = new Set(
+      Array.from(this.batches.values()).map((b) => b.batchNumber),
+    );
+
+    let batchNumber = '';
+    let attempts = 0;
+    do {
+      let randPart = '';
+      for (let i = 0; i < 4; i++) {
+        const randIndex = Math.floor(Math.random() * charset.length);
+        randPart += charset[randIndex];
+      }
+      batchNumber = `LOT-${datePart}-${randPart}`;
+      attempts++;
+    } while (existingBatches.has(batchNumber) && attempts < 100);
+
+    return {
+      batchNumber,
+      success: true,
+    };
+  }
+
+  /**
    * Kiểm tra điều kiện xuất kho của lô hàng và cơ chế Ghi Đè Quản Lý Kho (SN-184 AC-4)
    * Không cho xuất lô đã quá hạn, trừ khi Quản lý kho xác nhận ghi đè kèm lý do
    */

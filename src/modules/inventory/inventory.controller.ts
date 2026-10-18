@@ -458,6 +458,28 @@ export class InventoryController {
   }
 
   /**
+   * Tự sinh số lô hàng kết nối API hệ thống (SN-178 / SN-184)
+   * GET /inventory/batches/generate-number
+   */
+  @Get('batches/generate-number')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async generateBatchNumber(
+    @Query('productId') productId?: string,
+    @Query('sku') sku?: string,
+    @Query('date') date?: string,
+  ) {
+    return this.inventoryService.generateBatchNumber(productId, sku, date);
+  }
+
+  /**
    * Kiểm tra điều kiện xuất kho của lô hàng và ghi đè của Quản lý kho (SN-184 AC-4)
    * POST /inventory/batches/check-dispatch
    * Chặn xuất lô đã quá hạn trừ khi Quản lý kho xác nhận ghi đè kèm lý do
