@@ -1097,6 +1097,35 @@ export class CustomersService implements OnModuleInit {
   }
 
   /**
+   * Đồng bộ trực tiếp Dư nợ hiện tại theo số Dư nợ cuối kỳ thực tế từ Đối chiếu công nợ (SN-206)
+   */
+  async syncCustomerDebtExact(customerId: string, exactDebt: number): Promise<CustomerEntity | null> {
+    try {
+      const customer = await this.getCustomerById(customerId);
+      const debtVal = Math.max(0, Math.round(Number(exactDebt) || 0));
+      customer.currentDebt = debtVal;
+      customer.updatedAt = new Date();
+      this.saveCustomersToDisk();
+
+      if (this.dbService?.isConnected()) {
+        try {
+          await this.dbService.query(
+            `UPDATE customers 
+             SET current_debt = $1, updated_at = NOW() 
+             WHERE id::text = $2 OR code = $2;`,
+            [debtVal, customerId],
+          );
+        } catch (err) {
+          console.warn(`Lỗi cập nhật current_debt DB cho đại lý ${customerId}:`, err);
+        }
+      }
+      return customer;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Mở khóa giao dịch với đại lý (SN-36)
    */
   async unlockCustomer(id: string): Promise<CustomerEntity> {
