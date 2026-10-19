@@ -425,7 +425,7 @@ export class InvoicesService implements OnModuleInit {
         amount: 8500000,
         paidAmount: 0,
         remainingAmount: 8500000,
-        status: 'ISSUED',
+        status: 'UNPAID',
         issueDate: new Date(now - 27 * 86400000),
         dueDate: new Date(now + 3 * 86400000),
         note: 'Hóa đơn lô nước yến dinh dưỡng - Còn đúng 3 ngày đến hạn',
@@ -447,7 +447,7 @@ export class InvoicesService implements OnModuleInit {
         amount: 6000000,
         paidAmount: 0,
         remainingAmount: 6000000,
-        status: 'ISSUED',
+        status: 'OVERDUE',
         issueDate: new Date(now - 35 * 86400000),
         dueDate: new Date(now - 5 * 86400000),
         note: 'Hóa đơn bánh kẹo nhập khẩu - Đã quá hạn thanh toán 5 ngày',
@@ -492,24 +492,37 @@ export class InvoicesService implements OnModuleInit {
   resolveTargetCustomerId(currentUser?: ICurrentUser): string {
     if (!currentUser) return '55555555-0000-0000-0000-000000000001';
 
-    // 1. Nếu Token có sẵn customerId hoặc agencyId thì dùng ngay
-    if (currentUser.customerId) return currentUser.customerId;
-    if (currentUser.agencyId) return currentUser.agencyId;
-
-    // 2. Tra cứu email / username đặc trưng của đại lý
     const email = (currentUser.email || '').toLowerCase().trim();
     const uname = (currentUser.username || '').toLowerCase().trim();
+    const cId = currentUser.customerId || currentUser.agencyId || '';
 
-    if (uname === 'dealer' || email === 'dealer@loha.vn') {
+    // 1. Nhận diện đại lý Minh Khang
+    if (
+      uname === 'dealer' ||
+      email === 'dealer@loha.vn' ||
+      cId === 'cust-dl-0001' ||
+      cId === 'cust-001' ||
+      cId === '55555555-0000-0000-0000-000000000001'
+    ) {
       return '55555555-0000-0000-0000-000000000001';
     }
-    if (uname === 'daily' || email === 'daily@loha.vn') {
+
+    // 2. Nhận diện đại lý An Bình
+    if (
+      uname === 'daily' ||
+      email === 'daily@loha.vn' ||
+      cId === 'cust-dl-0002' ||
+      cId === 'cust-002' ||
+      cId === '55555555-0000-0000-0000-000000000002'
+    ) {
       return '55555555-0000-0000-0000-000000000002';
     }
+
     if (email === 'bahung@gmail.com') {
       return '0c4a39c5-0b00-4205-9fa8-2853d85ef0dc';
     }
 
+    if (cId) return cId;
     return currentUser.userId;
   }
 
@@ -573,28 +586,37 @@ export class InvoicesService implements OnModuleInit {
       list = list.filter((inv) => inv.customerId === query.customerId);
     }
 
+    // Chuẩn hóa trạng thái nợ (PAID, PARTIALLY_PAID, UNPAID, OVERDUE)
+    const now = new Date();
+    list = list.map((inv) => {
+      if (inv.status !== 'CANCELLED') {
+        if (inv.remainingAmount === 0 || inv.status === 'PAID') {
+          return { ...inv, status: 'PAID' as const };
+        }
+        if (inv.remainingAmount > 0 && new Date(inv.dueDate) < now) {
+          return { ...inv, status: 'OVERDUE' as const };
+        }
+        if (inv.paidAmount > 0 && inv.remainingAmount > 0) {
+          return { ...inv, status: 'PARTIALLY_PAID' as const };
+        }
+        if (inv.paidAmount === 0 && (inv.status === 'ISSUED' || inv.status === 'UNPAID')) {
+          return { ...inv, status: 'UNPAID' as const };
+        }
+      }
+      return inv;
+    });
+
     // Lọc theo trạng thái nợ
     if (query?.status) {
-      const now = new Date();
       const statusParam = String(query.status).toUpperCase().trim();
       if (statusParam === 'OVERDUE') {
-        list = list.filter((inv) => inv.remainingAmount > 0 && new Date(inv.dueDate) < now);
+        list = list.filter((inv) => inv.status === 'OVERDUE');
       } else if (statusParam === 'UNPAID') {
-        list = list.filter(
-          (inv) =>
-            (inv.status === 'UNPAID' || inv.status === 'ISSUED' || inv.paidAmount === 0) &&
-            inv.status !== 'PAID' &&
-            !(inv.remainingAmount > 0 && new Date(inv.dueDate) < now),
-        );
+        list = list.filter((inv) => inv.status === 'UNPAID');
       } else if (statusParam === 'PARTIAL' || statusParam === 'PARTIALLY_PAID') {
-        list = list.filter(
-          (inv) =>
-            (inv.status === 'PARTIALLY_PAID' || (inv.paidAmount > 0 && inv.remainingAmount > 0)) &&
-            inv.status !== 'PAID' &&
-            !(inv.remainingAmount > 0 && new Date(inv.dueDate) < now),
-        );
+        list = list.filter((inv) => inv.status === 'PARTIALLY_PAID');
       } else if (statusParam === 'PAID') {
-        list = list.filter((inv) => inv.status === 'PAID' || inv.remainingAmount === 0);
+        list = list.filter((inv) => inv.status === 'PAID');
       } else {
         list = list.filter((inv) => inv.status === statusParam);
       }

@@ -681,8 +681,8 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
       if (customerId === 'ALL') return true;
       return (
         n.customerId === customerId ||
-        (customerId === '55555555-0000-0000-0000-000000000001' && n.customerId === 'cust-001') ||
-        (customerId === '55555555-0000-0000-0000-000000000002' && n.customerId === 'cust-002')
+        (customerId === '55555555-0000-0000-0000-000000000001' && (n.customerId === 'cust-001' || n.customerId === 'cust-dl-0001')) ||
+        (customerId === '55555555-0000-0000-0000-000000000002' && (n.customerId === 'cust-002' || n.customerId === 'cust-dl-0002'))
       );
     });
   }
