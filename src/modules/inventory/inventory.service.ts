@@ -106,6 +106,7 @@ export class InventoryService implements OnModuleInit {
 
   private memoryStockReservations = new Map<string, StockReservationEntity>();
   private stockReservationSchemaPromise: Promise<void> | null = null;
+  private stockTransactionsSchemaPromise: Promise<void> | null = null;
 
   constructor(
     @Inject(forwardRef(() => ProductsService))
@@ -129,10 +130,89 @@ export class InventoryService implements OnModuleInit {
     if (this.databaseService?.isConnected()) {
       await this.ensureStockBalanceTable();
       await this.ensureStockReservationsTable();
+      await this.ensureStockTransactionsTable();
       await this.seedStockBalances();
       await this.ensureAllWarehousesInventory();
       await this.syncBatchesFromDatabase();
     }
+  }
+
+  async ensureStockTransactionsTable(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    if (!this.stockTransactionsSchemaPromise) {
+      this.stockTransactionsSchemaPromise = (async () => {
+        await this.databaseService.query(`
+          CREATE TABLE IF NOT EXISTS app_inventory_transactions (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            sku TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            transaction_type TEXT NOT NULL,
+            input_quantity NUMERIC(15, 2) NOT NULL,
+            input_unit TEXT NOT NULL,
+            conversion_rate NUMERIC(15, 2) NOT NULL DEFAULT 1,
+            base_quantity_change NUMERIC(15, 2) NOT NULL,
+            base_unit TEXT NOT NULL,
+            previous_stock NUMERIC(15, 2) NOT NULL,
+            new_stock NUMERIC(15, 2) NOT NULL,
+            reason TEXT,
+            reference_code TEXT,
+            warehouse TEXT,
+            performed_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_stock_tx_sku ON app_inventory_transactions(sku);
+          CREATE INDEX IF NOT EXISTS idx_stock_tx_created_at ON app_inventory_transactions(created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_stock_tx_ref ON app_inventory_transactions(reference_code);
+        `);
+
+        try {
+          const countRes = await this.databaseService.query<{ count: string }>(
+            `SELECT count(*)::text as count FROM app_inventory_transactions`,
+          );
+          const count = Number(countRes[0]?.count ?? 0);
+          if (count === 0) {
+            for (const bucket of this.ledger.values()) {
+              for (const tx of bucket) {
+                await this.databaseService.query(
+                  `INSERT INTO app_inventory_transactions (
+                    id, product_id, sku, product_name, transaction_type,
+                    input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+                    previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                  ON CONFLICT (id) DO NOTHING`,
+                  [
+                    tx.id,
+                    tx.productId,
+                    tx.sku,
+                    tx.productName,
+                    tx.transactionType,
+                    tx.inputQuantity,
+                    tx.inputUnit,
+                    tx.conversionRate,
+                    tx.baseQuantityChange,
+                    tx.baseUnit,
+                    tx.previousStock,
+                    tx.newStock,
+                    tx.reason,
+                    tx.referenceCode,
+                    tx.warehouse,
+                    tx.performedBy,
+                    tx.createdAt,
+                  ],
+                );
+              }
+            }
+          }
+        } catch (seedErr: any) {
+          console.warn('[INVENTORY_SERVICE] Không thể nạp khởi tạo app_inventory_transactions:', seedErr?.message);
+        }
+      })().catch((error: unknown) => {
+        this.stockTransactionsSchemaPromise = null;
+        console.warn('[INVENTORY_SERVICE] Lỗi tạo bảng app_inventory_transactions:', (error as any)?.message);
+      });
+    }
+    await this.stockTransactionsSchemaPromise;
   }
 
   async ensureStockReservationsTable(): Promise<void> {
@@ -355,12 +435,53 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Helper: ghi một giao dịch vào sổ ledger (theo productId bucket)
+   * Helper: ghi một giao dịch vào sổ ledger (cả in-memory và bảng app_inventory_transactions trong PostgreSQL)
    */
   private writeLedger(tx: InventoryTransactionEntity): void {
     const bucket = this.ledger.get(tx.productId) ?? [];
     bucket.unshift(tx); // mới nhất lên đầu
     this.ledger.set(tx.productId, bucket);
+
+    if (this.databaseService?.isConnected()) {
+      this.saveTransactionToDb(tx).catch((err) => {
+        console.warn('[INVENTORY_SERVICE] Lỗi lưu giao dịch thẻ kho vào PostgreSQL:', err?.message);
+      });
+    }
+  }
+
+  private async saveTransactionToDb(tx: InventoryTransactionEntity): Promise<void> {
+    try {
+      await this.ensureStockTransactionsTable();
+      await this.databaseService.query(
+        `INSERT INTO app_inventory_transactions (
+          id, product_id, sku, product_name, transaction_type,
+          input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+          previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          tx.id,
+          tx.productId,
+          tx.sku,
+          tx.productName,
+          tx.transactionType,
+          tx.inputQuantity,
+          tx.inputUnit,
+          tx.conversionRate,
+          tx.baseQuantityChange,
+          tx.baseUnit,
+          tx.previousStock,
+          tx.newStock,
+          tx.reason,
+          tx.referenceCode,
+          tx.warehouse,
+          tx.performedBy,
+          tx.createdAt,
+        ],
+      );
+    } catch (err: any) {
+      console.warn('[INVENTORY_SERVICE] Không thể ghi thẻ kho vào PostgreSQL:', err?.message);
+    }
   }
 
   /**
@@ -386,6 +507,8 @@ export class InventoryService implements OnModuleInit {
   private seedInitialTransactions(): void {
     const now = Date.now();
     const day = 86400000;
+    const hour = 3600000;
+    const minute = 60000;
 
     const transactions: InventoryTransactionEntity[] = [
       // 1. LH-MILK-900G (Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g)
@@ -406,7 +529,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PNK-2026-0891',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Thủ kho Nguyễn Văn Kho',
-        createdAt: new Date(now - day * 6),
+        createdAt: new Date(now - day * 6 - hour * 2 - minute * 15),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-milk-02',
@@ -425,7 +548,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'DH-2026-1002',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Nhân viên kho Trần Văn Kho',
-        createdAt: new Date(now - day * 4.5),
+        createdAt: new Date(now - day * 4 - hour * 5 - minute * 40),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-milk-03',
@@ -444,7 +567,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PCK-2026-0045',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Quản lý kho Đỗ Quốc Bảo',
-        createdAt: new Date(now - day * 3),
+        createdAt: new Date(now - day * 3 - hour * 1 - minute * 10),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-milk-04',
@@ -463,7 +586,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PKK-20261008-001',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Quản lý kho Đỗ Quốc Bảo',
-        createdAt: new Date(now - day * 2),
+        createdAt: new Date(now - day * 2 - hour * 3 - minute * 25),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-milk-05',
@@ -482,7 +605,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PNK-2026-0905',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Thủ kho Nguyễn Văn Kho',
-        createdAt: new Date(now - day * 1),
+        createdAt: new Date(now - day * 1 - hour * 4 - minute * 5),
       }),
 
       // 2. LH-NUT-180ML (Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml)
@@ -503,7 +626,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PNK-2026-0892',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Thủ kho Nguyễn Văn Kho',
-        createdAt: new Date(now - day * 5),
+        createdAt: new Date(now - day * 5 - hour * 2 - minute * 20),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-nut-02',
@@ -522,7 +645,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'DH-2026-1008',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Nhân viên kho Trần Văn Kho',
-        createdAt: new Date(now - day * 3),
+        createdAt: new Date(now - day * 3 - hour * 4 - minute * 45),
       }),
 
       // 3. LH-BIRD-NEST (Yến Sào & Thực Phẩm Bổ Dưỡng)
@@ -543,7 +666,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PNK-2026-0895',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Thủ kho Nguyễn Văn Kho',
-        createdAt: new Date(now - day * 4),
+        createdAt: new Date(now - day * 4 - hour * 1 - minute * 30),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-bird-02',
@@ -562,7 +685,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'DH-2026-1015',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Nhân viên kho Trần Văn Kho',
-        createdAt: new Date(now - day * 2),
+        createdAt: new Date(now - day * 2 - hour * 5 - minute * 15),
       }),
 
       // 4. LH-COFFEE-250G (Cà Phê Rang Xay)
@@ -583,7 +706,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PNK-2026-0898',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Thủ kho Nguyễn Văn Kho',
-        createdAt: new Date(now - day * 5),
+        createdAt: new Date(now - day * 5 - hour * 3 - minute * 10),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-coffee-02',
@@ -602,7 +725,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PCK-2026-0048',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Quản lý kho Đỗ Quốc Bảo',
-        createdAt: new Date(now - day * 2.5),
+        createdAt: new Date(now - day * 2 - hour * 2 - minute * 50),
       }),
 
       // 5. LH-TEA-350ML (Trà Thảo Mộc)
@@ -623,7 +746,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PNK-2026-0901',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Thủ kho Nguyễn Văn Kho',
-        createdAt: new Date(now - day * 4),
+        createdAt: new Date(now - day * 4 - hour * 1 - minute * 35),
       }),
       new InventoryTransactionEntity({
         id: 'tx-seed-tea-02',
@@ -642,7 +765,7 @@ export class InventoryService implements OnModuleInit {
         referenceCode: 'PXK-2026-0015',
         warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
         performedBy: 'Nhân viên kho Trần Văn Kho',
-        createdAt: new Date(now - day * 1.5),
+        createdAt: new Date(now - day * 1 - hour * 5 - minute * 20),
       }),
     ];
 
@@ -1748,7 +1871,123 @@ export class InventoryService implements OnModuleInit {
     const search = q.search;
     const limit = q.limit;
 
-    // Gom toàn bộ giao dịch từ tất cả bucket, sắp xếp mới nhất lên đầu
+    // Ưu tiên 1: Đọc dữ liệu thật từ bảng app_inventory_transactions trong PostgreSQL nếu DB kết nối
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.ensureStockTransactionsTable();
+        const conditions: string[] = [];
+        const params: any[] = [];
+        let paramIdx = 1;
+
+        if (sku && sku.trim() !== '') {
+          const cleanSku = sku.trim().toUpperCase();
+          if (cleanSku === 'LH-MILK-900G') {
+            conditions.push(`(UPPER(sku) = $${paramIdx} OR UPPER(sku) = 'LH-MILK-POWDER-900G')`);
+          } else if (cleanSku === 'LH-TEA-240ML') {
+            conditions.push(`(UPPER(sku) = $${paramIdx} OR UPPER(sku) = 'LH-TEA-350ML')`);
+          } else {
+            conditions.push(`UPPER(sku) = $${paramIdx}`);
+          }
+          params.push(cleanSku);
+          paramIdx++;
+        }
+
+        if (warehouse && warehouse.trim() !== '' && warehouse.toUpperCase() !== 'ALL') {
+          const cleanWh = warehouse.trim().toLowerCase();
+          if (cleanWh.includes('nam') || cleanWh.includes('mn') || cleanWh.includes('wh01') || cleanWh.includes('hồ chí minh')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%nam%' OR LOWER(warehouse) LIKE '%wh01%' OR LOWER(warehouse) LIKE '%hồ chí minh%')`);
+          } else if (cleanWh.includes('bắc') || cleanWh.includes('bac') || cleanWh.includes('mb') || cleanWh.includes('wh02') || cleanWh.includes('hà nội')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%bắc%' OR LOWER(warehouse) LIKE '%wh02%' OR LOWER(warehouse) LIKE '%hà nội%')`);
+          } else if (cleanWh.includes('trung') || cleanWh.includes('mt') || cleanWh.includes('wh03') || cleanWh.includes('đà nẵng')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%trung%' OR LOWER(warehouse) LIKE '%wh03%' OR LOWER(warehouse) LIKE '%đà nẵng%')`);
+          } else if (cleanWh.includes('tây') || cleanWh.includes('tay') || cleanWh.includes('west') || cleanWh.includes('cần thơ')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%tây%' OR LOWER(warehouse) LIKE '%west%' OR LOWER(warehouse) LIKE '%cần thơ%')`);
+          } else {
+            conditions.push(`LOWER(warehouse) LIKE $${paramIdx}`);
+            params.push(`%${cleanWh}%`);
+            paramIdx++;
+          }
+        }
+
+        if (type && type.trim() !== '' && type.toUpperCase() !== 'ALL') {
+          conditions.push(`UPPER(transaction_type) = $${paramIdx}`);
+          params.push(type.trim().toUpperCase());
+          paramIdx++;
+        }
+
+        if (startDate && startDate.trim() !== '') {
+          const start = new Date(startDate);
+          if (!isNaN(start.getTime())) {
+            start.setHours(0, 0, 0, 0);
+            conditions.push(`created_at >= $${paramIdx}`);
+            params.push(start);
+            paramIdx++;
+          }
+        }
+
+        if (endDate && endDate.trim() !== '') {
+          const end = new Date(endDate);
+          if (!isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            conditions.push(`created_at <= $${paramIdx}`);
+            params.push(end);
+            paramIdx++;
+          }
+        }
+
+        if (search && search.trim() !== '') {
+          const s = `%${search.trim().toLowerCase()}%`;
+          conditions.push(`(
+            LOWER(reference_code) LIKE $${paramIdx} OR
+            LOWER(product_name) LIKE $${paramIdx} OR
+            LOWER(sku) LIKE $${paramIdx} OR
+            LOWER(reason) LIKE $${paramIdx} OR
+            LOWER(performed_by) LIKE $${paramIdx}
+          )`);
+          params.push(s);
+          paramIdx++;
+        }
+
+        const max = limit && limit > 0 ? Number(limit) : 500;
+        const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+        const sql = `
+          SELECT id, product_id, sku, product_name, transaction_type,
+                 input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+                 previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+          FROM app_inventory_transactions
+          ${whereClause}
+          ORDER BY created_at DESC
+          LIMIT ${max}
+        `;
+
+        const rows = await this.databaseService.query<any>(sql, params);
+        if (rows && rows.length > 0) {
+          return rows.map((r) => new InventoryTransactionEntity({
+            id: r.id,
+            productId: r.product_id,
+            sku: r.sku,
+            productName: r.product_name,
+            transactionType: r.transaction_type,
+            inputQuantity: Number(r.input_quantity),
+            inputUnit: r.input_unit,
+            conversionRate: Number(r.conversion_rate),
+            baseQuantityChange: Number(r.base_quantity_change),
+            baseUnit: r.base_unit,
+            previousStock: Number(r.previous_stock),
+            newStock: Number(r.new_stock),
+            reason: r.reason,
+            referenceCode: r.reference_code,
+            warehouse: r.warehouse,
+            performedBy: r.performed_by,
+            createdAt: new Date(r.created_at),
+          }));
+        }
+      } catch (err: any) {
+        console.warn(`[INVENTORY_SERVICE] Query app_inventory_transactions thất bại, fallback in-memory: ${err?.message}`);
+      }
+    }
+
+    // Ưu tiên 2: Fallback in-memory an toàn khi DB chưa có hoặc đang khởi động
     let list: InventoryTransactionEntity[] = [];
     for (const bucket of this.ledger.values()) {
       list = list.concat(bucket);
