@@ -835,8 +835,12 @@ export class InternalTransfersService implements OnModuleInit {
     toWarehouse: { id: string; name: string };
   }> {
     const warehouses = await this.warehousesService.findAll();
-    const fromWarehouse = warehouses.find((w) => w.id === fromId || w.code === fromId);
-    const toWarehouse = warehouses.find((w) => w.id === toId || w.code === toId);
+    const fromWarehouse = warehouses.find(
+      (w: { id?: string; code?: string }) => w.id === fromId || w.code === fromId,
+    );
+    const toWarehouse = warehouses.find(
+      (w: { id?: string; code?: string }) => w.id === toId || w.code === toId,
+    );
 
     if (!fromWarehouse) {
       throw new NotFoundException(`Kho xuất hàng với ID "${fromId}" không tồn tại.`);

@@ -30,11 +30,10 @@ export class AuditLogInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    // Bỏ qua chính endpoint audit-logs hoặc auth login/refresh
+    // Bỏ qua chính endpoint audit-logs hoặc toàn bộ phân hệ auth (login, logout, refresh, v.v.)
     if (
       url.includes('/audit-logs') ||
-      url.includes('/auth/login') ||
-      url.includes('/auth/refresh')
+      url.includes('/auth/')
     ) {
       return next.handle();
     }

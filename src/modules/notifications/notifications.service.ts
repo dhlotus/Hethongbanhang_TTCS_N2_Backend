@@ -426,7 +426,21 @@ export class NotificationsService implements OnModuleInit {
         `;
         rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
       }
-      // 5. Nếu là Nhân viên kinh doanh
+      // 5. Nếu là Kế toán công nợ (ACCOUNTANT)
+      else if (explicitRole.includes('ACCOUNT')) {
+        const querySql = `
+          SELECT * FROM app_system_notifications
+          WHERE (
+            ($1::text IS NOT NULL AND user_id = $1) OR
+            recipient_role ILIKE '%kế toán%' OR
+            recipient_role ILIKE '%công nợ%' OR
+            type = 'COLLECTION'
+          )
+          ORDER BY created_at DESC LIMIT $2;
+        `;
+        rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
+      }
+      // 6. Nếu là Nhân viên kinh doanh
       else if (explicitRole.includes('SALES_REP') || explicitRole.includes('REP')) {
         const querySql = `
           SELECT * FROM app_system_notifications
@@ -438,7 +452,7 @@ export class NotificationsService implements OnModuleInit {
         `;
         rows = await this.databaseService.query<any>(querySql, [explicitUserId || null, limit]);
       }
-      // 6. Nếu có userId cụ thể
+      // 7. Nếu có userId cụ thể
       else if (explicitUserId) {
         const querySql = `
           SELECT * FROM app_system_notifications
@@ -517,7 +531,479 @@ export class NotificationsService implements OnModuleInit {
       }
       return true;
     }
-    this.memoryNotifications.forEach((n) => (n.isRead = true));
     return true;
   }
+
+  /**
+   * SN-188: Sự kiện 1: Phát thông báo khi tạo phiếu xuất chuẩn FEFO
+   * Đối tượng nhận: Nhân viên kho phụ trách & Quản lý kho.
+   * Nội dung: "Phiếu xuất mới [ma_phieu] đã được tạo theo chuẩn FEFO cho lô [batch_no]."
+   */
+  async notifyShipmentFefoCreated(data: {
+    shipmentId: string;
+    orderCode: string;
+    batchNumbers: string[];
+    warehouseId?: string;
+    creatorId?: string;
+    creatorName?: string;
+    creatorUsername?: string;
+  }): Promise<void> {
+    const recipientsMap = new Map<string, TargetUser>();
+    const batchText = data.batchNumbers.length > 0 ? data.batchNumbers.join(', ') : 'mặc định';
+    const title = `Phiếu xuất kho mới theo chuẩn FEFO`;
+    const message = `Phiếu xuất mới ${data.shipmentId} đã được tạo theo chuẩn FEFO cho lô ${batchText}.`;
+    const link = `/inventory/shipments/${data.shipmentId}`;
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Quản lý kho (role_id = 4 hoặc tên chứa quản lý kho)
+        const whManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 4 OR r.name ILIKE '%quản lý kho%' OR r.code ILIKE '%warehouse_manager%';`,
+        );
+        for (const wm of whManagers) {
+          recipientsMap.set(String(wm.id), {
+            id: String(wm.id),
+            username: wm.username,
+            fullName: wm.full_name,
+            roleName: 'Quản lý kho',
+          });
+        }
+
+        // 2. Nhân viên kho / Thủ kho (role_id = 5 hoặc phụ trách kho)
+        if (data.warehouseId) {
+          const keepers = await this.databaseService.query<any>(
+            `SELECT u.id, u.username, u.full_name, r.name as role_name
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE (u.warehouse_id = $1 OR u.role_id = 5 OR r.name ILIKE '%thủ kho%')
+             LIMIT 5;`,
+            [data.warehouseId],
+          );
+          for (const k of keepers) {
+            recipientsMap.set(String(k.id), {
+              id: String(k.id),
+              username: k.username,
+              fullName: k.full_name,
+              roleName: 'Thủ kho phụ trách',
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm người nhận thông báo FEFO: ${err}`);
+      }
+    }
+
+    // Gửi thông báo đến danh sách người nhận (Quản lý kho & Thủ kho phụ trách)
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title,
+        message,
+        link,
+        priority: 'normal',
+      });
+    }
+
+    // 3. THÔNG BÁO CÁ NHÂN: Gửi thông báo trực tiếp cho chính Thủ kho vừa tạo phiếu để xem lại
+    if (data.creatorId || data.creatorUsername) {
+      const creatorKey = String(data.creatorId || data.creatorUsername);
+      await this.createNotification({
+        userId: creatorKey,
+        recipientName: data.creatorName || 'Bạn',
+        recipientRole: 'Thủ kho tạo phiếu',
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title: 'Tạo phiếu xuất kho thành công',
+        message: `Bạn đã tạo thành công phiếu xuất kho [${data.shipmentId}] cho đơn hàng [${data.orderCode}]. Hàng hóa đã được phân bổ lô xuất kho chuẩn FEFO.`,
+        link,
+        priority: 'high',
+      });
+    }
+  }
+
+  /**
+   * SN-188: Sự kiện 2: Phát thông báo Cảnh báo ghi đè lô xuất kho (FEFO Override)
+   * Đối tượng nhận: Quản lý kho & Admin (Quản trị hệ thống).
+   * Nội dung: "⚠️ Cảnh báo ghi đè lô xuất kho: Thủ kho [ten_thu_kho] vừa đổi lô sản phẩm [sku] từ [lo_goi_y] sang [lo_thuc_te]. Lý do: [override_reason]."
+   */
+  async notifyShipmentBatchOverridden(data: {
+    shipmentId: string;
+    orderCode: string;
+    keeperName: string;
+    sku: string;
+    suggestedBatch: string;
+    actualBatch: string;
+    reason: string;
+    creatorId?: string;
+    creatorUsername?: string;
+  }): Promise<void> {
+    const recipientsMap = new Map<string, TargetUser>();
+    const title = `⚠️ Cảnh báo ghi đè lô xuất kho`;
+    const message = `⚠️ Cảnh báo ghi đè lô xuất kho: Thủ kho ${data.keeperName || 'Thủ kho'} vừa đổi lô sản phẩm ${data.sku} từ ${data.suggestedBatch || 'FEFO'} sang ${data.actualBatch}. Lý do: ${data.reason}.`;
+    const link = `/inventory/shipments/${data.shipmentId}`;
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Quản trị hệ thống (Admin)
+        const admins = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 1 OR r.name ILIKE '%quản trị hệ thống%' OR r.code ILIKE '%admin%';`,
+        );
+        for (const a of admins) {
+          recipientsMap.set(String(a.id), {
+            id: String(a.id),
+            username: a.username,
+            fullName: a.full_name,
+            roleName: 'Quản trị hệ thống',
+          });
+        }
+
+        // 2. Quản lý kho
+        const whManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 4 OR r.name ILIKE '%quản lý kho%' OR r.code ILIKE '%warehouse_manager%';`,
+        );
+        for (const wm of whManagers) {
+          recipientsMap.set(String(wm.id), {
+            id: String(wm.id),
+            username: wm.username,
+            fullName: wm.full_name,
+            roleName: 'Quản lý kho',
+          });
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm người nhận cảnh báo ghi đè lô: ${err}`);
+      }
+    }
+
+    // Gửi thông báo đến danh sách người nhận
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title,
+        message,
+        link,
+        priority: 'high',
+      });
+    }
+
+    // THÔNG BÁO CÁ NHÂN: Gửi cho chính người tạo phiếu
+    if (data.creatorId || data.creatorUsername) {
+      const creatorKey = String(data.creatorId || data.creatorUsername);
+      await this.createNotification({
+        userId: creatorKey,
+        recipientName: data.keeperName || 'Bạn',
+        recipientRole: 'Thủ kho tạo phiếu',
+        orderCode: data.orderCode,
+        type: 'STOCK_ALERT',
+        title: 'Tạo phiếu xuất kho (Ghi đè FEFO)',
+        message: `Bạn đã tạo thành công phiếu xuất kho [${data.shipmentId}] cho đơn hàng [${data.orderCode}] với yêu cầu ghi đè lô xuất kho cho sản phẩm ${data.sku}.`,
+        link,
+        priority: 'high',
+      });
+    }
+  }
+
+  /**
+   * SN-205: Phát thông báo khi có phiếu thu tiền tuyến mới tới các bên liên quan:
+   * 1. Tất cả tài khoản Admin hệ thống (role_id = 1)
+   * 2. Tất cả tài khoản Kế toán công nợ (role_id = 6) để đối chiếu và duyệt gạch nợ
+   * 3. Tất cả tài khoản Quản lý kinh doanh (role_id = 2) để giám sát dòng tiền
+   * 4. Nhân viên kinh doanh thu tiền / phụ trách
+   * 5. Đại lý B2B nhận tiền
+   */
+  async notifyCollectionCreated(collection: {
+    id: string;
+    code: string;
+    agencyId: string;
+    agencyName: string;
+    salesRepId: string;
+    salesRepName: string;
+    amount: number;
+    paymentMethod: string;
+    status?: string;
+  }): Promise<{ notifiedCount: number; recipients: string[] }> {
+    const recipientsMap = new Map<string, TargetUser>();
+
+    const amountFormatted = new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND',
+    }).format(collection.amount || 0);
+
+    const methodText = collection.paymentMethod === 'BANK_TRANSFER' ? 'Chuyển khoản' : 'Tiền mặt';
+
+    const title = `Phiếu thu tiền tuyến mới [${collection.code}]`;
+    const message = `Nhân viên ${collection.salesRepName} vừa lập phiếu thu ${amountFormatted} (${methodText}) từ đại lý "${collection.agencyName}". Cần Kế toán đối chiếu và duyệt gạch nợ.`;
+    const link = `/route-collections`;
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Tất cả Admin hệ thống (role_id = 1 hoặc role_name chứa admin/quản trị hệ thống)
+        const admins = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 1 OR r.name ILIKE '%quản trị hệ thống%' OR r.code ILIKE '%admin%';`,
+        );
+        for (const a of admins) {
+          recipientsMap.set(String(a.id), {
+            id: String(a.id),
+            username: a.username,
+            fullName: a.full_name,
+            roleName: 'Quản trị hệ thống',
+          });
+        }
+
+        // 2. Tất cả Kế toán công nợ (role_id = 6 hoặc role_name/code chứa kế toán/accountant)
+        const accountants = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 6 OR r.name ILIKE '%kế toán%' OR r.code ILIKE '%accountant%';`,
+        );
+        for (const acc of accountants) {
+          recipientsMap.set(String(acc.id), {
+            id: String(acc.id),
+            username: acc.username,
+            fullName: acc.full_name,
+            roleName: 'Kế toán công nợ',
+          });
+        }
+
+        // 3. Tất cả Quản lý kinh doanh (role_id = 2 hoặc role_name/code chứa sales_manager/quản lý kinh doanh)
+        const salesManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 2 OR r.name ILIKE '%quản lý kinh doanh%' OR r.code ILIKE '%sales_manager%';`,
+        );
+        for (const sm of salesManagers) {
+          recipientsMap.set(String(sm.id), {
+            id: String(sm.id),
+            username: sm.username,
+            fullName: sm.full_name,
+            roleName: 'Quản lý kinh doanh',
+          });
+        }
+
+        // 4. Nhân viên kinh doanh thu tiền
+        if (collection.salesRepId) {
+          const repRows = await this.databaseService.query<any>(
+            `SELECT u.id, u.username, u.full_name, r.name as role_name
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE u.id::text = $1 OR u.username = $1 LIMIT 1;`,
+            [collection.salesRepId],
+          );
+          if (repRows[0]) {
+            recipientsMap.set(String(repRows[0].id), {
+              id: String(repRows[0].id),
+              username: repRows[0].username,
+              fullName: repRows[0].full_name,
+              roleName: 'Nhân viên thu tiền',
+            });
+          }
+        }
+
+        // 5. Gửi thông báo cho Đại lý B2B
+        const agencyUserIds = new Set<string>();
+        if (collection.agencyId) {
+          agencyUserIds.add(String(collection.agencyId));
+          const custUserRows = await this.databaseService.query<any>(
+            `SELECT user_id FROM customers WHERE id::text = $1 OR code = $1 LIMIT 1;`,
+            [collection.agencyId],
+          );
+          if (custUserRows[0]?.user_id) {
+            agencyUserIds.add(String(custUserRows[0].user_id));
+          }
+          const userRows = await this.databaseService.query<any>(
+            `SELECT id FROM users WHERE id::text = $1 OR username = $1 LIMIT 1;`,
+            [collection.agencyId],
+          );
+          if (userRows[0]?.id) {
+            agencyUserIds.add(String(userRows[0].id));
+          }
+        }
+
+        const agencyTitle = `Xác nhận nộp tiền [${collection.code}]`;
+        const agencyMessage = `Nhân viên kinh doanh đã tiếp nhận số tiền ${amountFormatted} (${methodText}) của đại lý và gửi phiếu thu lên hệ thống. Đang chờ Kế toán duyệt gạch nợ.`;
+        for (const agId of agencyUserIds) {
+          await this.createNotification({
+            userId: agId,
+            recipientName: collection.agencyName,
+            recipientRole: 'Đại lý / Khách hàng B2B',
+            orderCode: collection.code,
+            customerName: collection.agencyName,
+            type: 'COLLECTION',
+            title: agencyTitle,
+            message: agencyMessage,
+            amount: collection.amount,
+            link: `/portal/debt`,
+            priority: 'high',
+          });
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm người nhận thông báo phiếu thu: ${err}`);
+      }
+    }
+
+    if (recipientsMap.size === 0) {
+      recipientsMap.set('admin-default', {
+        id: 'admin-default',
+        username: 'admin',
+        fullName: 'Quản trị hệ thống',
+        roleName: 'Quản trị hệ thống',
+      });
+    }
+
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderCode: collection.code,
+        customerName: collection.agencyName,
+        type: 'COLLECTION',
+        title,
+        message,
+        amount: collection.amount,
+        link,
+        priority: 'high',
+      });
+    }
+
+    this.logger.log(
+      `Đã phát thông báo phiếu thu [${collection.code}] tới ${recipientsMap.size} tài khoản quản trị/kế toán/kinh doanh và Đại lý ${collection.agencyName}`,
+    );
+
+    return {
+      notifiedCount: recipientsMap.size,
+      recipients: Array.from(recipientsMap.values()).map(
+        (t) => `${t.fullName} (${t.username} - ${t.roleName})`,
+      ),
+    };
+  }
+
+  /**
+   * SN-205: Phát thông báo khi Kế toán Duyệt hoặc Từ chối phiếu thu tiền
+   */
+  async notifyCollectionStatusUpdated(data: {
+    id: string;
+    code: string;
+    agencyId: string;
+    agencyName: string;
+    salesRepId: string;
+    salesRepName: string;
+    amount: number;
+    paymentMethod: string;
+    status: 'APPROVED' | 'REJECTED';
+    approverName?: string;
+    rejectionReason?: string;
+  }): Promise<void> {
+    const isApproved = data.status === 'APPROVED';
+    const amountFormatted = new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND',
+    }).format(data.amount || 0);
+
+    const title = isApproved
+      ? `Phiếu thu [${data.code}] đã được duyệt gạch nợ`
+      : `Phiếu thu [${data.code}] bị từ chối`;
+
+    const message = isApproved
+      ? `Kế toán ${data.approverName || ''} đã duyệt phiếu thu ${amountFormatted} của đại lý "${data.agencyName}". Hệ thống đã tự động gạch nợ.`
+      : `Kế toán ${data.approverName || ''} đã từ chối phiếu thu ${amountFormatted} của đại lý "${data.agencyName}". Lý do: ${data.rejectionReason || 'Không hợp lệ'}.`;
+
+    const recipientsMap = new Map<string, TargetUser>();
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 1. Admin
+        const admins = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 1 OR r.name ILIKE '%quản trị hệ thống%' OR r.code ILIKE '%admin%';`,
+        );
+        for (const a of admins) {
+          recipientsMap.set(String(a.id), {
+            id: String(a.id),
+            username: a.username,
+            fullName: a.full_name,
+            roleName: 'Quản trị hệ thống',
+          });
+        }
+
+        // 2. Quản lý kinh doanh
+        const salesManagers = await this.databaseService.query<any>(
+          `SELECT u.id, u.username, u.full_name, r.name as role_name
+           FROM users u
+           LEFT JOIN roles r ON r.id = u.role_id
+           WHERE u.role_id = 2 OR r.name ILIKE '%quản lý kinh doanh%' OR r.code ILIKE '%sales_manager%';`,
+        );
+        for (const sm of salesManagers) {
+          recipientsMap.set(String(sm.id), {
+            id: String(sm.id),
+            username: sm.username,
+            fullName: sm.full_name,
+            roleName: 'Quản lý kinh doanh',
+          });
+        }
+
+        // 3. Nhân viên thu tiền
+        if (data.salesRepId) {
+          const repRows = await this.databaseService.query<any>(
+            `SELECT u.id, u.username, u.full_name, r.name as role_name
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE u.id::text = $1 OR u.username = $1 LIMIT 1;`,
+            [data.salesRepId],
+          );
+          if (repRows[0]) {
+            recipientsMap.set(String(repRows[0].id), {
+              id: String(repRows[0].id),
+              username: repRows[0].username,
+              fullName: repRows[0].full_name,
+              roleName: 'Nhân viên thu tiền',
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.error(`Lỗi tìm người nhận thông báo cập nhật phiếu thu: ${err}`);
+      }
+    }
+
+    for (const [, target] of recipientsMap) {
+      await this.createNotification({
+        userId: target.id,
+        recipientName: target.fullName,
+        recipientRole: target.roleName,
+        orderCode: data.code,
+        customerName: data.agencyName,
+        type: 'COLLECTION',
+        title,
+        message,
+        amount: data.amount,
+        link: `/route-collections`,
+        priority: isApproved ? 'normal' : 'high',
+      });
+    }
+  }
 }
+
+
