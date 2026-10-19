@@ -40,6 +40,7 @@ export interface DeliveryTripEntity {
   vehicleNumber?: string;        // Biển số xe (VD: 29C-889.92)
   vehicleType?: string;          // Loại phương tiện (Xe tải 2.5T, Xe van 1.25T...)
   departureDate: Date;           // Thời điểm xuất phát dự kiến
+  estimatedCompletionTime?: Date | string; // Thời điểm hoàn tất dự kiến
   completedAt?: Date;            // Thời điểm hoàn tất
   status: DeliveryTripStatus;    // Trạng thái chuyến
   stops: DeliveryTripStopEntity[];

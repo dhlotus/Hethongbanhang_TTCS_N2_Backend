@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { ShipmentsController } from './shipments.controller';
+import { DeliveryTripsController } from './delivery-trips.controller';
 import { ShipmentsService } from './shipments.service';
 import { OrdersModule } from '../orders/orders.module';
 import { DatabaseModule } from '../../database/database.module';
@@ -13,7 +14,7 @@ import { InventoryModule } from '../inventory/inventory.module';
     forwardRef(() => OrdersModule),
     forwardRef(() => InventoryModule),
   ],
-  controllers: [ShipmentsController],
+  controllers: [ShipmentsController, DeliveryTripsController],
   providers: [ShipmentsService],
   exports: [ShipmentsService],
 })
