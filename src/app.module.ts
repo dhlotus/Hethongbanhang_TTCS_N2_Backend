@@ -29,6 +29,7 @@ import { ReceiptsModule } from './modules/receipts/receipts.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CollectionsModule } from './modules/collections/collections.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { DebtReconciliationModule } from './modules/debt-reconciliation/debt-reconciliation.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
     NotificationsModule,
     CollectionsModule,
     PaymentsModule,
+    DebtReconciliationModule,
   ],
 })
 export class AppModule { }
