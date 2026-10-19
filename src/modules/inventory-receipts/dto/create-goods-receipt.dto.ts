@@ -83,9 +83,17 @@ export class CreateGoodsReceiptDto {
   @IsNotEmpty({ message: 'warehouseId không được để trống' })
   warehouseId: string;
 
+  @IsString()
+  @IsOptional()
+  warehouseName?: string;
+
   @IsValidUuid({ message: 'supplierId phải là định dạng UUID hợp lệ' })
   @IsOptional()
   supplierId?: string;
+
+  @IsString()
+  @IsOptional()
+  supplierName?: string;
 
   @IsString()
   @IsOptional()
