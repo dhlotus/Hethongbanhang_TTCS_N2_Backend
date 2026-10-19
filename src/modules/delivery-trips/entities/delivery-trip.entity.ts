@@ -95,13 +95,21 @@ export class DeliveryTripEntity {
       .filter((s) => s.status === StopDeliveryStatus.DELIVERED)
       .reduce((sum, s) => sum + (Number(s.orderAmount) || 0), 0);
 
-    // Hàng chưa giao được vẫn giữ trên xe
-    this.retainedGoodsValue = this.stops
-      .filter((s) => s.status === StopDeliveryStatus.FAILED)
-      .reduce((sum, s) => sum + (Number(s.orderAmount) || 0), 0);
+    if (this.returnedToWarehouse || this.status === DeliveryTripStatus.COMPLETED) {
+      this.retainedGoodsValue = 0;
+      this.inTransitGoodsValue = 0;
+      this.remainingStops = 0;
+      this.isOverdue = false;
+      this.overdueMinutes = 0;
+    } else {
+      // Hàng chưa giao được vẫn giữ trên xe
+      this.retainedGoodsValue = this.stops
+        .filter((s) => s.status === StopDeliveryStatus.FAILED)
+        .reduce((sum, s) => sum + (Number(s.orderAmount) || 0), 0);
 
-    // Tiền hàng đang nằm trên đường = Tổng hàng xuất - Hàng đã giao xong
-    // (Bao gồm cả hàng PENDING và hàng FAILED đang giữ trên xe)
-    this.inTransitGoodsValue = Math.max(0, this.totalGoodsValue - this.deliveredGoodsValue);
+      // Tiền hàng đang nằm trên đường = Tổng hàng xuất - Hàng đã giao xong
+      // (Bao gồm cả hàng PENDING và hàng FAILED đang giữ trên xe)
+      this.inTransitGoodsValue = Math.max(0, this.totalGoodsValue - this.deliveredGoodsValue);
+    }
   }
 }

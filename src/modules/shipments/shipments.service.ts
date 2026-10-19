@@ -955,7 +955,9 @@ export class ShipmentsService implements OnModuleInit {
             totalGoodsValueInTransit += amount;
           }
         } else if (stop.status === 'FAILED') {
-          totalRetainedUndeliveredValue += amount;
+          if (trip.status === DeliveryTripStatus.IN_TRANSIT && !(trip as any).returnedToWarehouse) {
+            totalRetainedUndeliveredValue += amount;
+          }
         }
       }
     }
@@ -1010,6 +1012,12 @@ export class ShipmentsService implements OnModuleInit {
   async checkinTripReturn(id: string, payload: any): Promise<DeliveryTripEntity> {
     const trip = await this.findTripById(id);
     trip.status = DeliveryTripStatus.COMPLETED;
+    (trip as any).returnedToWarehouse = true;
+    (trip as any).returnedAt = new Date();
+    (trip as any).returnedNotes = payload?.returnedNotes;
+    (trip as any).retainedGoodsValue = 0;
+    (trip as any).inTransitGoodsValue = 0;
+    (trip as any).remainingStops = 0;
     trip.completedAt = new Date();
     trip.updatedAt = new Date();
     this.trips.set(trip.id, trip);
