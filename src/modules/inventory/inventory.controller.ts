@@ -15,7 +15,9 @@ import {
   forwardRef,
   Optional,
   BadRequestException,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -78,6 +80,75 @@ export class InventoryController {
       },
       currentUser,
     );
+  }
+
+  /**
+   * Xuất báo cáo tồn kho ra tệp Excel (.xlsx) chuẩn gửi kế toán (SN-229 / SN-220)
+   * Giữ nguyên ba cột tồn: Tồn Thực Tế, Tồn Tạm Giữ, Tồn Khả Dụng
+   * GET /inventory/stock/export-excel
+   */
+  @Get('stock/export-excel')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.ACCOUNTANT,
+    UserRole.SALES_MANAGER,
+  )
+  async exportStockExcel(
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+    @Query('warehouse') warehouse?: string,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ): Promise<void> {
+    const { buffer, fileName } = await this.inventoryService.exportStockExcel(
+      {
+        warehouse: warehouse || warehouseId,
+        warehouseId: warehouseId || warehouse,
+        category,
+        status,
+        search,
+      },
+      currentUser,
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.end(buffer);
+  }
+
+  /**
+   * Alias: GET /inventory/export-excel
+   */
+  @Get('export-excel')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.ACCOUNTANT,
+    UserRole.SALES_MANAGER,
+  )
+  async exportExcelAlias(
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+    @Query('warehouse') warehouse?: string,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ): Promise<void> {
+    return this.exportStockExcel(currentUser, res, warehouse, warehouseId, category, status, search);
   }
 
   /**
