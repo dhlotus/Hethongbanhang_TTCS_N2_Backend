@@ -39,6 +39,7 @@ export interface ReturnReceiptEntity {
   approvalNote?: string | null;
   createdAt: Date;
   updatedAt: Date;
+  debtAdjustmentCode?: string;
   items?: ReturnReceiptItemEntity[];
 }
 
