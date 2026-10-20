@@ -87,6 +87,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
         CREATE INDEX IF NOT EXISTS idx_product_price_histories_changed_at
           ON product_price_histories(changed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS app_picking_sheets (
+          id TEXT PRIMARY KEY,
+          sheet_code TEXT NOT NULL UNIQUE,
+          warehouse_id TEXT NOT NULL,
+          warehouse_code TEXT,
+          warehouse_name TEXT,
+          status VARCHAR(30) NOT NULL DEFAULT 'IN_PROGRESS',
+          picker_name TEXT,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_picking_sheets_wh ON app_picking_sheets(warehouse_id);
+        CREATE INDEX IF NOT EXISTS idx_picking_sheets_status ON app_picking_sheets(status);
       `);
       this.logger.log('[PostgreSQL] Đã khởi tạo / đồng bộ các bảng cấu trúc kho và lịch sử giá thành công.');
     } catch (err: unknown) {

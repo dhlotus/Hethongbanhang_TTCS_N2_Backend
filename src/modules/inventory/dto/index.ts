@@ -5,3 +5,4 @@ export * from './complete-audit.dto';
 export * from './query-audits.dto';
 export * from './query-batches.dto';
 export * from './check-batch-dispatch.dto';
+export * from './create-stock-adjustment.dto';

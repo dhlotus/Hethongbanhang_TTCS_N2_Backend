@@ -15,7 +15,9 @@ import {
   forwardRef,
   Optional,
   BadRequestException,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -42,7 +44,11 @@ import {
   QueryAuditsDto,
   QueryBatchesDto,
   CheckBatchDispatchDto,
+  CreateStockAdjustmentDto,
+  RejectStockAdjustmentDto,
+  QueryStockAdjustmentsDto,
 } from './dto';
+import { StockAdjustmentEntity } from './entities/stock-adjustment.entity';
 import { ShipmentsService } from '../shipments/shipments.service';
 
 /**
@@ -88,6 +94,75 @@ export class InventoryController {
       },
       currentUser,
     );
+  }
+
+  /**
+   * Xuất báo cáo tồn kho ra tệp Excel (.xlsx) chuẩn gửi kế toán (SN-229 / SN-220)
+   * Giữ nguyên ba cột tồn: Tồn Thực Tế, Tồn Tạm Giữ, Tồn Khả Dụng
+   * GET /inventory/stock/export-excel
+   */
+  @Get('stock/export-excel')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.ACCOUNTANT,
+    UserRole.SALES_MANAGER,
+  )
+  async exportStockExcel(
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+    @Query('warehouse') warehouse?: string,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ): Promise<void> {
+    const { buffer, fileName } = await this.inventoryService.exportStockExcel(
+      {
+        warehouse: warehouse || warehouseId,
+        warehouseId: warehouseId || warehouse,
+        category,
+        status,
+        search,
+      },
+      currentUser,
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.end(buffer);
+  }
+
+  /**
+   * Alias: GET /inventory/export-excel
+   */
+  @Get('export-excel')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.ACCOUNTANT,
+    UserRole.SALES_MANAGER,
+  )
+  async exportExcelAlias(
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+    @Query('warehouse') warehouse?: string,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ): Promise<void> {
+    return this.exportStockExcel(currentUser, res, warehouse, warehouseId, category, status, search);
   }
 
   /**
@@ -652,5 +727,78 @@ export class InventoryController {
       throw new BadRequestException('Dịch vụ xuất kho chưa sẵn sàng');
     }
     return this.shipmentsService.findById(id, currentUser);
+  }
+  /**
+   * SN-214: Tạo phiếu điều chỉnh tồn kho (Chờ duyệt)
+   * POST /inventory/stock-adjustments
+   * Quyền: ADMIN, WAREHOUSE_MANAGER, WH_MANAGER, WAREHOUSE_KEEPER, WAREHOUSE
+   */
+  @Post('stock-adjustments')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  @HttpCode(HttpStatus.CREATED)
+  async createStockAdjustment(
+    @Body() dto: CreateStockAdjustmentDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.createStockAdjustment(dto, currentUser);
+  }
+
+  /**
+   * SN-214: Danh sách phiếu điều chỉnh tồn kho
+   * GET /inventory/stock-adjustments
+   */
+  @Get('stock-adjustments')
+  async getStockAdjustments(
+    @Query() query: QueryStockAdjustmentsDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity[]> {
+    return this.inventoryService.getStockAdjustments(query, currentUser);
+  }
+
+  /**
+   * SN-214: Chi tiết phiếu điều chỉnh tồn kho
+   * GET /inventory/stock-adjustments/:id
+   */
+  @Get('stock-adjustments/:id')
+  async getStockAdjustmentById(
+    @Param('id') id: string,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.getStockAdjustmentById(id);
+  }
+
+  /**
+   * SN-214: Phê duyệt phiếu điều chỉnh tồn kho
+   * PATCH /inventory/stock-adjustments/:id/approve
+   * Quyền: Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN)
+   * Ràng buộc: Người lập và người duyệt KHÔNG ĐƯỢC là một (creatorId !== approverId)
+   */
+  @Patch('stock-adjustments/:id/approve')
+  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
+  async approveStockAdjustment(
+    @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.approveStockAdjustment(id, currentUser);
+  }
+
+  /**
+   * SN-214: Từ chối phiếu điều chỉnh tồn kho
+   * PATCH /inventory/stock-adjustments/:id/reject
+   * Quyền: Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN)
+   */
+  @Patch('stock-adjustments/:id/reject')
+  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
+  async rejectStockAdjustment(
+    @Param('id') id: string,
+    @Body() dto: RejectStockAdjustmentDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.rejectStockAdjustment(id, dto, currentUser);
   }
 }

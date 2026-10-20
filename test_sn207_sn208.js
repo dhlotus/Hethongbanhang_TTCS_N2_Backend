@@ -4,26 +4,18 @@ async function testAll() {
   console.log('=== BẮT ĐẦU KIỂM THỬ TOÀN DIỆN SN-207 & SN-208 ===\n');
 
   // 1. Đăng nhập với tài khoản Đại lý Minh Khang (dealer)
-  console.log('1. Đăng nhập tài khoản Đại lý: dealer@loha.vn...');
+  console.log('1. Đăng nhập tài khoản Đại lý: dealer...');
   let loginRes = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'dealer@loha.vn', password: 'Password@123' }),
+    body: JSON.stringify({ username: 'dealer', password: '123456' }),
   });
-
-  if (!loginRes.ok) {
-    loginRes = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'dealer@loha.vn', password: 'huong123' }),
-    });
-  }
 
   const loginData = await loginRes.json();
   const token = loginData.access_token || loginData.accessToken;
   const user = loginData.user;
-  console.log(`-> Đăng nhập thành công! User: ${user.username} (${user.fullName || user.email}), Roles:`, user.roles);
-  console.log(`-> CustomerId gắn liền với tài khoản: ${user.customerId || user.id}\n`);
+  console.log(`-> Đăng nhập thành công! User: ${user?.username} (${user?.fullName || user?.email}), Roles:`, user?.roles);
+  console.log(`-> CustomerId gắn liền với tài khoản: ${user?.customerId || user?.id}\n`);
 
   const authHeaders = {
     Authorization: `Bearer ${token}`,

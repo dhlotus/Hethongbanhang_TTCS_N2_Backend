@@ -35,6 +35,7 @@ export async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: true,
     credentials: true,
+    exposedHeaders: ['Content-Disposition'],
   });
 
   app.useGlobalPipes(
