@@ -96,6 +96,7 @@ export interface DealerDebtSummary {
   maxDebtDays: number;
   paymentTerms: string;
   creditStatus: string;
+  isCreditLimitConfigured: boolean;
 }
 
 export interface PaginatedInvoicesResult {
@@ -202,6 +203,26 @@ export class InvoicesService implements OnModuleInit {
   }
 
   /**
+   * Kiểm tra ngày hóa đơn có thực sự quá hạn theo lịch Việt Nam (Asia/Ho_Chi_Minh)
+   * Chỉ quá hạn khi ngày đến hạn trước ngày hôm nay (không tính quá hạn trong chính ngày đến hạn)
+   */
+  isDateOverdue(dueDate: Date | string): boolean {
+    try {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      const todayStr = formatter.format(new Date());
+      const dueStr = formatter.format(new Date(dueDate));
+      return dueStr < todayStr;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Đồng bộ danh sách hóa đơn trực tiếp từ PostgreSQL và nạp vào bộ nhớ
    */
   async syncFromDatabase(): Promise<void> {
@@ -232,14 +253,19 @@ export class InvoicesService implements OnModuleInit {
         `);
 
         if (rows && rows.length > 0) {
+          const freshMap = new Map<string, InvoiceItem>();
           for (const row of rows) {
             const rawStatus = String(row.payment_status || 'ISSUED').toUpperCase();
             const paid = Number(row.paid_amount || 0);
             const remaining = Number(row.remaining_amount || 0);
-            const isDueOver = remaining > 0 && new Date(row.due_date).getTime() < Date.now();
+            const isDueOver = remaining > 0 && this.isDateOverdue(row.due_date);
 
             let status: InvoiceItem['status'] = 'ISSUED';
-            if (rawStatus === 'PAID' || remaining === 0) {
+            if (rawStatus === 'CANCELLED') {
+              status = 'CANCELLED';
+            } else if (rawStatus === 'DRAFT') {
+              status = 'DRAFT';
+            } else if (rawStatus === 'PAID' || remaining === 0) {
               status = 'PAID';
             } else if (rawStatus === 'OVERDUE' || isDueOver) {
               status = 'OVERDUE';
@@ -247,10 +273,6 @@ export class InvoicesService implements OnModuleInit {
               status = 'PARTIALLY_PAID';
             } else if (rawStatus === 'UNPAID' || paid === 0) {
               status = 'UNPAID';
-            } else if (rawStatus === 'CANCELLED') {
-              status = 'CANCELLED';
-            } else if (rawStatus === 'DRAFT') {
-              status = 'DRAFT';
             }
 
             const inv: InvoiceItem = {
@@ -287,9 +309,12 @@ export class InvoicesService implements OnModuleInit {
               updatedAt: new Date(row.updated_at),
             };
 
-            this.invoices.set(inv.id, inv);
-            // Cũng map theo invoiceCode để tìm kiếm linh hoạt
-            this.invoices.set(inv.invoiceCode, inv);
+            freshMap.set(inv.id, inv);
+            freshMap.set(inv.invoiceCode, inv);
+          }
+          this.invoices.clear();
+          for (const [k, v] of freshMap.entries()) {
+            this.invoices.set(k, v);
           }
           this.logger.log(`[InvoicesService] Đã đồng bộ ${rows.length} hóa đơn từ PostgreSQL.`);
           return;
@@ -587,19 +612,18 @@ export class InvoicesService implements OnModuleInit {
     }
 
     // Chuẩn hóa trạng thái nợ (PAID, PARTIALLY_PAID, UNPAID, OVERDUE)
-    const now = new Date();
     list = list.map((inv) => {
-      if (inv.status !== 'CANCELLED') {
+      if (inv.status !== 'CANCELLED' && inv.status !== 'DRAFT') {
         if (inv.remainingAmount === 0 || inv.status === 'PAID') {
           return { ...inv, status: 'PAID' as const };
         }
-        if (inv.remainingAmount > 0 && new Date(inv.dueDate) < now) {
+        if (inv.remainingAmount > 0 && this.isDateOverdue(inv.dueDate)) {
           return { ...inv, status: 'OVERDUE' as const };
         }
         if (inv.paidAmount > 0 && inv.remainingAmount > 0) {
           return { ...inv, status: 'PARTIALLY_PAID' as const };
         }
-        if (inv.paidAmount === 0 && (inv.status === 'ISSUED' || inv.status === 'UNPAID')) {
+        if (inv.paidAmount === 0) {
           return { ...inv, status: 'UNPAID' as const };
         }
       }
@@ -744,29 +768,29 @@ export class InvoicesService implements OnModuleInit {
         inv.status !== 'CANCELLED',
     );
 
-    const now = new Date();
     let currentDebt = 0;
     let overdueDebt = 0;
     let overdueInvoicesCount = 0;
     let unpaidInvoicesCount = 0;
 
     for (const inv of invoices) {
-      if (inv.remainingAmount > 0) {
+      if (inv.status !== 'CANCELLED' && inv.status !== 'DRAFT' && inv.remainingAmount > 0) {
         currentDebt += inv.remainingAmount;
         unpaidInvoicesCount++;
-        if (new Date(inv.dueDate) < now) {
+        if (this.isDateOverdue(inv.dueDate)) {
           overdueDebt += inv.remainingAmount;
           overdueInvoicesCount++;
         }
       }
     }
 
-    let creditLimit = 150000000;
+    let creditLimit = 0;
     let temporaryCreditLimit = 0;
     let maxDebtDays = 30;
     let paymentTerms = 'NET_30';
-    let customerCode = 'DL-MK-001';
-    let customerName = 'Đại Lý Cửa Hàng Minh Khang';
+    let customerCode = '';
+    let customerName = '';
+    let isCreditLimitConfigured = false;
 
     // 1. Thử lấy từ PostgreSQL Database
     if (this.databaseService?.isConnected()) {
@@ -779,7 +803,10 @@ export class InvoicesService implements OnModuleInit {
           const row = custRes[0];
           customerCode = row.code || customerCode;
           customerName = row.name || customerName;
-          creditLimit = Number(row.credit_limit || creditLimit);
+          if (row.credit_limit !== null && row.credit_limit !== undefined) {
+            creditLimit = Number(row.credit_limit);
+            isCreditLimitConfigured = true;
+          }
         }
       } catch {}
     }
@@ -789,7 +816,10 @@ export class InvoicesService implements OnModuleInit {
       try {
         const cl = await this.creditLimitService.getAgencyCreditLimitById(targetCustId);
         if (cl) {
-          creditLimit = cl.creditLimit || creditLimit;
+          if (cl.creditLimit !== undefined && cl.creditLimit !== null) {
+            creditLimit = Number(cl.creditLimit);
+            isCreditLimitConfigured = true;
+          }
           temporaryCreditLimit = cl.temporaryCreditLimit || 0;
           maxDebtDays = cl.maxDebtDays || maxDebtDays;
           paymentTerms = cl.paymentTerms || paymentTerms;
@@ -797,6 +827,16 @@ export class InvoicesService implements OnModuleInit {
           customerName = cl.agencyName || customerName;
         }
       } catch {}
+    }
+
+    // Fallback cho đại lý mẫu Minh Khang nếu chưa có cấu hình trong DB
+    if (targetCustId === '55555555-0000-0000-0000-000000000001') {
+      customerCode = customerCode || 'DL-MK-001';
+      customerName = customerName || 'Đại Lý Cửa Hàng Minh Khang';
+      if (!isCreditLimitConfigured) {
+        creditLimit = 150000000;
+        isCreditLimitConfigured = true;
+      }
     }
 
     const effectiveLimit = creditLimit + temporaryCreditLimit;
@@ -830,6 +870,7 @@ export class InvoicesService implements OnModuleInit {
       maxDebtDays,
       paymentTerms,
       creditStatus,
+      isCreditLimitConfigured,
     };
   }
 
@@ -843,6 +884,9 @@ export class InvoicesService implements OnModuleInit {
     currentUser?: ICurrentUser,
   ): Promise<{ invoice: InvoiceItem; summary: DealerDebtSummary; message: string }> {
     const invoice = await this.findById(invoiceId, currentUser);
+    if (invoice.status === 'CANCELLED') {
+      throw new BadRequestException('Hóa đơn đã bị hủy, không thể thực hiện thanh toán.');
+    }
     const payAmount = Math.max(0, Number(dto.amount || 0));
 
     if (payAmount <= 0) {
@@ -1168,10 +1212,76 @@ export class InvoicesService implements OnModuleInit {
     <html lang="vi">
     <head>
       <meta charset="UTF-8">
-      <title></title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+      <title>Hóa đơn ${invoice.invoiceCode} — LOHA SALES</title>
       <style>
         @page { size: A4; margin: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 15mm 18mm; font-size: 13px; line-height: 1.5; background: #fff; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: #0f172a; margin: 0; padding: 15mm 18mm; font-size: 13px; line-height: 1.5; background: #fff; }
+        
+        /* ── THANH ĐIỀU HƯỚNG QUAY LẠI & THAO TÁC (ẨN HOÀN TOÀN KHI IN / XUẤT PDF) ── */
+        .invoice-navigation-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 22px;
+          padding: 10px 16px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        .btn-back {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 9px 18px;
+          background: #ffffff;
+          color: #1e293b;
+          border: 1.5px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 13.5px;
+          font-weight: 700;
+          cursor: pointer;
+          text-decoration: none;
+          transition: all 0.2s ease;
+          min-height: 42px;
+          touch-action: manipulation;
+          user-select: none;
+        }
+        .btn-back:hover {
+          background: #f1f5f9;
+          color: #4f46e5;
+          border-color: #6366f1;
+        }
+        .btn-back:active {
+          transform: scale(0.97);
+        }
+        .btn-action-print {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 9px 18px;
+          background: #4f46e5;
+          color: #ffffff;
+          border: 1px solid #4338ca;
+          border-radius: 8px;
+          font-size: 13.5px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          min-height: 42px;
+          touch-action: manipulation;
+          user-select: none;
+        }
+        .btn-action-print:hover {
+          background: #4338ca;
+        }
+        .btn-action-print:active {
+          transform: scale(0.97);
+        }
+
         .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4f46e5; padding-bottom: 14px; margin-bottom: 20px; }
         .brand-title { font-size: 22px; font-weight: 800; color: #4f46e5; margin: 0; }
         .invoice-title { font-size: 17px; font-weight: 700; color: #0f172a; margin: 4px 0 0 0; text-transform: uppercase; }
@@ -1181,7 +1291,7 @@ export class InvoicesService implements OnModuleInit {
         .info-col h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #475569; margin: 0 0 8px 0; border-bottom: 1px dashed #cbd5e1; padding-bottom: 4px; }
         .info-row { display: flex; margin-bottom: 4px; font-size: 12px; }
         .info-row .lbl { width: 110px; color: #64748b; flex-shrink: 0; }
-        .info-row .val { font-weight: 600; color: #0f172a; }
+        .info-row .val { font-weight: 600; color: #0f172a; word-break: break-word; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
         th { background: #f1f5f9; color: #334155; font-weight: 700; text-align: left; padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; text-transform: uppercase; }
         td { padding: 8px 10px; border: 1px solid #e2e8f0; font-size: 12px; }
@@ -1194,9 +1304,55 @@ export class InvoicesService implements OnModuleInit {
         .badge-paid { background: #dcfce7; color: #15803d; }
         .badge-partial { background: #fef9c3; color: #a16207; }
         .badge-unpaid { background: #fee2e2; color: #b91c1c; }
+
+        @media (max-width: 640px) {
+          body { padding: 12px 14px; font-size: 12px; }
+          .invoice-navigation-bar { padding: 8px 10px; margin-bottom: 16px; }
+          .btn-back, .btn-action-print { padding: 8px 12px; font-size: 13px; min-height: 40px; }
+          .info-grid { grid-template-columns: 1fr; gap: 14px; padding: 12px; }
+          .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 16px; }
+          .brand-title { font-size: 18px; }
+          .invoice-title { font-size: 14px; }
+          .header { flex-direction: column; gap: 10px; }
+          .invoice-title-box { text-align: left; }
+        }
+
+        /* ── QUY TẮC IN ẤN / XUẤT PDF: ẨN TOÀN BỘ NÚT ĐIỀU HƯỚNG ── */
+        @media print {
+          .no-print, .invoice-navigation-bar {
+            display: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          body {
+            padding: 8mm 12mm !important;
+            background: #fff !important;
+          }
+        }
       </style>
     </head>
     <body>
+      <!-- THANH ĐIỀU HƯỚNG QUAY LẠI (TỰ ĐỘNG ẨN KHI IN / XUẤT PDF) -->
+      <div class="no-print invoice-navigation-bar">
+        <button type="button" class="btn-back" onclick="handleGoBack()" title="Quay lại màn hình trước hoặc Sổ công nợ">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          <span>Quay lại</span>
+        </button>
+        <div>
+          <button type="button" class="btn-action-print" onclick="window.print()" title="In hóa đơn bán hàng">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9"></polyline>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+              <rect x="6" y="14" width="12" height="8"></rect>
+            </svg>
+            <span>In hóa đơn</span>
+          </button>
+        </div>
+      </div>
+
       <div class="header">
         <div>
           <h1 class="brand-title">LOHA SALES</h1>
@@ -1234,38 +1390,40 @@ export class InvoicesService implements OnModuleInit {
         </div>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th class="text-center" style="width: 40px;">STT</th>
-            <th>Mã SKU</th>
-            <th>Tên sản phẩm & Quy cách</th>
-            <th class="text-center">ĐVT</th>
-            <th class="text-right">SL Đặt</th>
-            <th class="text-right" style="color: #4338ca;">SL Thực Giao</th>
-            <th class="text-right">Đơn giá</th>
-            <th class="text-right">Thành tiền</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${(invoice.items || this.generateSampleLineItems(invoice.amount))
-            .map(
-              (it, idx) => `
+      <div class="table-container">
+        <table>
+          <thead>
             <tr>
-              <td class="text-center">${idx + 1}</td>
-              <td style="font-family: monospace;">${it.productSku}</td>
-              <td><strong>${it.productName}</strong></td>
-              <td class="text-center">${it.unit}</td>
-              <td class="text-right font-medium text-slate-500">${it.orderedQuantity !== undefined ? it.orderedQuantity : it.quantity}</td>
-              <td class="text-right" style="color: #4338ca; font-weight: 700;">${it.quantity.toLocaleString('vi-VN')}</td>
-              <td class="text-right">${formatMoney(it.unitPrice)}</td>
-              <td class="text-right font-semibold">${formatMoney(it.lineTotal)}</td>
+              <th class="text-center" style="width: 40px;">STT</th>
+              <th>Mã SKU</th>
+              <th>Tên sản phẩm & Quy cách</th>
+              <th class="text-center">ĐVT</th>
+              <th class="text-right">SL Đặt</th>
+              <th class="text-right" style="color: #4338ca;">SL Thực Giao</th>
+              <th class="text-right">Đơn giá</th>
+              <th class="text-right">Thành tiền</th>
             </tr>
-          `,
-            )
-            .join('')}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${(invoice.items || this.generateSampleLineItems(invoice.amount))
+              .map(
+                (it, idx) => `
+              <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td style="font-family: monospace;">${it.productSku}</td>
+                <td><strong>${it.productName}</strong></td>
+                <td class="text-center">${it.unit}</td>
+                <td class="text-right font-medium text-slate-500">${it.orderedQuantity !== undefined ? it.orderedQuantity : it.quantity}</td>
+                <td class="text-right" style="color: #4338ca; font-weight: 700;">${it.quantity.toLocaleString('vi-VN')}</td>
+                <td class="text-right">${formatMoney(it.unitPrice)}</td>
+                <td class="text-right font-semibold">${formatMoney(it.lineTotal)}</td>
+              </tr>
+            `,
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
 
       <table style="width: 100%; border-collapse: collapse; margin-top: 8px; margin-bottom: 12px; border: 1px solid #cbd5e1;">
         <tbody>
@@ -1307,10 +1465,43 @@ export class InvoicesService implements OnModuleInit {
           <div class="sig-space"></div>
         </div>
       </div>
+
       <script>
-        // Hỗ trợ in ấn tự động hoặc qua hàm window.print()
-        function printInvoice() {
-          window.print();
+        function handleGoBack() {
+          // 1. Kiểm tra nếu tab này được mở từ một cửa sổ trước đó (window.opener)
+          if (window.opener && !window.opener.closed) {
+            try {
+              window.opener.focus();
+              window.close();
+              return;
+            } catch (e) {
+              console.warn('Cannot close popup window directly', e);
+            }
+          }
+
+          // 2. Nếu có lịch sử duyệt trong cùng một tab (history.length > 1)
+          if (window.history.length > 1 && document.referrer && document.referrer !== window.location.href) {
+            window.history.back();
+            setTimeout(function() {
+              fallbackToDebtPage();
+            }, 350);
+            return;
+          }
+
+          // 3. Đường dẫn dự phòng tuyệt đối về /portal/debt
+          fallbackToDebtPage();
+        }
+
+        function fallbackToDebtPage() {
+          var origin = window.location.origin;
+          if (!origin || origin === 'null' || origin === 'about:blank') {
+            origin = 'http://localhost:5173';
+          }
+          // Nếu đang xem trực tiếp từ backend port 3000, trỏ về frontend port 5173
+          if (origin.indexOf(':3000') !== -1) {
+            origin = origin.replace(':3000', ':5173');
+          }
+          window.location.href = origin + '/portal/debt';
         }
       </script>
     </body>
@@ -1320,7 +1511,10 @@ export class InvoicesService implements OnModuleInit {
     return { html, invoice };
   }
 
-  getAllRawInvoices(): InvoiceItem[] {
+  async getAllRawInvoices(): Promise<InvoiceItem[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncFromDatabase();
+    }
     const uniqueMap = new Map<string, InvoiceItem>();
     for (const inv of this.invoices.values()) {
       uniqueMap.set(inv.id, inv);

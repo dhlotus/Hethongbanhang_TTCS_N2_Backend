@@ -351,7 +351,7 @@ export class MailService {
       dueDate: Date | string;
       viewUrl?: string;
     },
-  ): Promise<{ success: boolean; previewUrl?: string }> {
+  ): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
     const { to, customerName, invoiceCode, orderCode, remainingAmount, dueDate, viewUrl } = params;
     const finalUrl = viewUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoiceCode}`;
     const formattedAmount = new Intl.NumberFormat('vi-VN').format(remainingAmount) + ' đ';
@@ -474,8 +474,9 @@ export class MailService {
       }
       return { success: true, previewUrl };
     } catch (err) {
-      this.logger.warn(`⚠️ [DEBT REMINDER EMAIL LOGGED]: ${to} | HĐ: ${invoiceCode} | Nợ: ${formattedAmount}`);
-      return { success: true };
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`❌ [DEBT REMINDER EMAIL FAILED]: ${to} | HĐ: ${invoiceCode} | Lỗi: ${errorMsg}`);
+      return { success: false, error: errorMsg };
     }
   }
 
@@ -493,7 +494,7 @@ export class MailService {
       dueDate: Date | string;
       viewUrl?: string;
     },
-  ): Promise<{ success: boolean; previewUrl?: string }> {
+  ): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
     const { to, customerName, invoiceCode, orderCode, remainingAmount, overdueDays, dueDate, viewUrl } = params;
     const finalUrl = viewUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoiceCode}`;
     const formattedAmount = new Intl.NumberFormat('vi-VN').format(remainingAmount) + ' đ';
@@ -621,8 +622,9 @@ export class MailService {
       }
       return { success: true, previewUrl };
     } catch (err) {
-      this.logger.warn(`⚠️ [DEBT OVERDUE EMAIL LOGGED]: ${to} | HĐ: ${invoiceCode} | Quá hạn ${overdueDays} ngày | Nợ: ${formattedAmount}`);
-      return { success: true };
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`❌ [DEBT OVERDUE EMAIL FAILED]: ${to} | HĐ: ${invoiceCode} | Quá hạn ${overdueDays} ngày | Lỗi: ${errorMsg}`);
+      return { success: false, error: errorMsg };
     }
   }
 }

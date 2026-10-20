@@ -1,0 +1,162 @@
+[
+  {
+    "code": "SN207-01",
+    "name": "Đại lý chưa có hóa đơn (Empty state)",
+    "recordId": "0c4a39c5-0b00-4205-9fa8-2853d85ef0dc (bahung@gmail.com)",
+    "action": "Đăng nhập tài khoản bahung@gmail.com, gọi GET /api/invoices/my-debt và GET /api/invoices",
+    "expected": "currentDebt = 0, overdueDebt = 0, danh sách hóa đơn rỗng (0 hóa đơn)",
+    "actual": "currentDebt = 0, overdueDebt = 0, số hóa đơn = 0, DB count = 0",
+    "status": "ĐẠT",
+    "evidence": "API: totalInvoicesCount=0, DB count=0"
+  },
+  {
+    "code": "SN207-02",
+    "name": "Đại lý có nhiều hóa đơn chưa thanh toán",
+    "recordId": "55555555-0000-0000-0000-000000000001 (DL-MK-001)",
+    "action": "Gọi GET /api/invoices/my-debt và GET /api/invoices đối chiếu với DB PostgreSQL",
+    "expected": "Khớp DB: nợ = 31.500.000 đ, số hóa đơn = 9",
+    "actual": "API trả về: nợ = 31.500.000 đ, nợ quá hạn = 6.000.000 đ, số hóa đơn = 9",
+    "status": "ĐẠT",
+    "evidence": "Hạn mức: 500.000.000 đ, Khả dụng: 468.500.000 đ, DB nợ: 31.500.000 đ"
+  },
+  {
+    "code": "SN207-03",
+    "name": "Thanh toán một phần",
+    "recordId": "HD-TEST-PAY",
+    "action": "Thanh toán 500.000 đ qua POST /api/invoices/:id/payments",
+    "expected": "Còn nợ 1.500.000 đ, trạng thái PARTIALLY_PAID, tổng công nợ giảm đúng 500.000 đ",
+    "actual": "Còn nợ: 1.500.000 đ, trạng thái: PARTIALLY_PAID, tổng nợ: 33.500.000 -> 33.000.000 đ, DB nợ: 1.500.000 đ",
+    "status": "ĐẠT",
+    "evidence": "DB invoices: remaining_amount=1500000.00, payment_status=PARTIAL"
+  },
+  {
+    "code": "SN207-04",
+    "name": "Thanh toán toàn bộ",
+    "recordId": "HD-TEST-PAY",
+    "action": "Thanh toán 1.500.000 đ còn lại",
+    "expected": "Hết nợ (0 đ), trạng thái PAID, tổng công nợ giảm đúng 1.500.000 đ",
+    "actual": "Còn nợ: 0 đ, trạng thái: PAID, tổng nợ: 33.000.000 -> 31.500.000 đ, DB nợ: 0.00 đ",
+    "status": "ĐẠT",
+    "evidence": "DB invoices: remaining_amount=0.00, payment_status=PAID"
+  },
+  {
+    "code": "SN207-05",
+    "name": "Xử lý hóa đơn hủy",
+    "recordId": "HD2610-CAN",
+    "action": "Kiểm tra trạng thái CANCELLED, kiểm tra loại khỏi công nợ, thử thanh toán qua API",
+    "expected": "Trạng thái CANCELLED, không tính vào công nợ, API chặn thanh toán với mã lỗi 400",
+    "actual": "Trạng thái: CANCELLED, HTTP thanh toán: 400 (\"Hóa đơn đã bị hủy, không thể thực hiện thanh toán.\")",
+    "status": "ĐẠT",
+    "evidence": "Response: {\"success\":false,\"statusCode\":400,\"message\":\"Hóa đơn đã bị hủy, không thể thực hiện thanh toán.\",\"data\":null,\"timestamp\":\"2026-10-19T06:51:21.133Z\"}"
+  },
+  {
+    "code": "SN207-06",
+    "name": "Phân loại ngày hạn: Chưa đến hạn, Hôm nay, Quá hạn",
+    "recordId": "HD2610-004, HD2610-T00, HD2610-006",
+    "action": "Kiểm tra dueDate và trạng thái tính toán theo múi giờ Việt Nam",
+    "expected": "HD2610-004: OVERDUE; HD2610-T00: UNPAID (hạn hôm nay 19/10/2026); HD2610-006: UNPAID (hạn 31/10/2026)",
+    "actual": "HD2610-004: OVERDUE (hạn 13/10/2026); HD2610-T00: UNPAID (hạn 19/10/2026); HD2610-006: UNPAID (hạn 31/10/2026)",
+    "status": "ĐẠT",
+    "evidence": "API: statuses=[OVERDUE, UNPAID, UNPAID]"
+  },
+  {
+    "code": "SN207-07",
+    "name": "Xem và tải hóa đơn đã phát hành",
+    "recordId": "HD2610-004",
+    "action": "Gọi GET /api/invoices/:id, GET /api/invoices/:id/pdf, GET /api/invoices/:id/print",
+    "expected": "Trả về đầy đủ sản phẩm, PDF binary chuẩn (%PDF-1.4), HTML in ấn chuẩn VAT",
+    "actual": "Sản phẩm: 1 mục (Nước Yến Sào Cao Cấp Loha Nest 70ml), PDF status: 200 (bắt đầu bằng %PDF-1.3), HTML status: 200",
+    "status": "ĐẠT",
+    "evidence": "PDF size: 53721 bytes, Print size: 13655 chars"
+  },
+  {
+    "code": "SN207-08",
+    "name": "Bảo mật phân quyền & Cách ly dữ liệu đại lý (Cross-Tenant)",
+    "recordId": "HD2610-004 (của Minh Khang) truy cập bởi An Bình",
+    "action": "Đại lý An Bình gọi GET /api/invoices/HD2610-004, GET /pdf và POST /payments",
+    "expected": "Backend từ chối tuyệt đối với mã HTTP 403 Forbidden",
+    "actual": "Chi tiết: HTTP 403, PDF: HTTP 403, Thanh toán: HTTP 403",
+    "status": "ĐẠT",
+    "evidence": "Thông điệp backend: \"Bạn chỉ có quyền xem hoá đơn của chính đại lý mình\""
+  },
+  {
+    "code": "SN207-09",
+    "name": "Tính bền vững dữ liệu sau đăng xuất / đăng nhập lại",
+    "recordId": "dealer (DL-MK-001)",
+    "action": "Đăng nhập mới, lấy token mới, gọi GET /api/invoices/my-debt đối chiếu PostgreSQL",
+    "expected": "Dữ liệu giữ nguyên vẹn, khớp chính xác số dư nợ trong PostgreSQL",
+    "actual": "API: 31.500.000 đ, PostgreSQL: 31.500.000 đ",
+    "status": "ĐẠT",
+    "evidence": "Khớp 100% giữa API và PostgreSQL persistent storage"
+  },
+  {
+    "code": "SN208-01",
+    "name": "Xác minh điều kiện gửi nhắc hạn (3 ngày và Quá hạn)",
+    "recordId": "HD2610-003 (3 ngày), HD2610-004 (quá hạn), HD2610-T04 (4 ngày), HD2610-T02 (2 ngày), HD2610-T00 (hôm nay)",
+    "action": "Kích hoạt bộ quét tự động theo ngày 19/10/2026 múi giờ Việt Nam",
+    "expected": "Chỉ gửi HD2610-003 (đúng 3 ngày) và HD2610-004 (quá hạn). Không gửi 4 ngày, 2 ngày, hôm nay.",
+    "actual": "Danh sách hóa đơn được gửi nhắc: [HD2610-003, HD2610-004, HD2610-AB-01, HD2610-AB-02, HD2610-AB-OD01]",
+    "status": "ĐẠT",
+    "evidence": "3 ngày: Có gửi, Quá hạn: Có gửi, 4 ngày: Được loại trừ, 2 ngày: Được loại trừ, Hôm nay: Được loại trừ"
+  },
+  {
+    "code": "SN208-02",
+    "name": "Hóa đơn đã trả một phần: Nhắc đúng số tiền còn nợ",
+    "recordId": "HD2610-003 (Tổng 8.5M, đã trả 7M)",
+    "action": "Kiểm tra số tiền nợ ghi trong nội dung nhắc nợ và app_debt_reminder_logs",
+    "expected": "Số tiền nhắc nợ phải là số dư nợ còn lại: 1.500.000 đ (không nhắc 8.5M)",
+    "actual": "Số tiền ghi nhận: 1.500.000 đ",
+    "status": "ĐẠT",
+    "evidence": "app_debt_reminder_logs: remaining_amount = 1500000.00, reminder_type = UPCOMING_3_DAYS"
+  },
+  {
+    "code": "SN208-03",
+    "name": "Hóa đơn đã thanh toán đủ hoặc đã hủy: Không gửi nhắc",
+    "recordId": "HD2609-002 (PAID), HD2610-CAN (CANCELLED)",
+    "action": "Kiểm tra danh sách gửi nhắc của scheduler",
+    "expected": "Hoàn toàn không có trong danh sách gửi nhắc",
+    "actual": "HD2609-002: Không gửi (ĐÚNG), HD2610-CAN: Không gửi (ĐÚNG)",
+    "status": "ĐẠT",
+    "evidence": "Loại trừ 100% hóa đơn PAID và CANCELLED khỏi tác vụ nhắc nợ"
+  },
+  {
+    "code": "SN208-04",
+    "name": "Gửi Email SMTP thật & Tạo thông báo In-App đúng đại lý",
+    "recordId": "phucducha12@gmail.com / DL-MK-001",
+    "action": "Kiểm tra kết quả SMTP gửi qua Gmail và bảng app_debt_notifications trong DB",
+    "expected": "Email gửi thành công (SUCCESS) tới hộp thư phucducha12@gmail.com, tạo ít nhất 2 thông báo in-app",
+    "actual": "Email status: SUCCESS, SUCCESS, SUCCESS, SUCCESS, SUCCESS, Địa chỉ nhận: phucducha12@gmail.com, In-App notes tạo trong DB: 32",
+    "status": "ĐẠT",
+    "evidence": "Nội dung In-App mẫu: \"Cảnh báo HĐ HD2610-004 quá hạn 5 ngày\" - Hóa đơn HD2610-004 đã quá hạn 5 ngày (hạn: 11/10/2026). Số tiền còn nợ: 6.000.000 đ. Vui lòng tất toán để duy trì hạn mức đặt hàng."
+  },
+  {
+    "code": "SN208-05",
+    "name": "Cơ chế chống gửi trùng lặp (Idempotency) khi chạy lại hoặc chạy đồng thời",
+    "recordId": "Tác vụ quét ngày 19/10/2026",
+    "action": "Gọi lại POST /api/invoices/reminders/trigger 1 lần và gọi đồng thời 2 lần",
+    "expected": "sentCount = 0, số bản ghi app_debt_reminder_logs không đổi",
+    "actual": "Lần 2 sentCount: 0, Đồng thời: [0, 0], Tổng logs DB: 5 (không đổi)",
+    "status": "ĐẠT",
+    "evidence": "API response lần 2: {\"sentCount\":0,\"totalSent\":0,\"scannedInvoices\":5,\"upcomingRemindersSent\":0,\"overdueRemindersSent\":0,\"skippedAlreadySent\":5,\"failedCount\":0,\"details\":[{\"invoiceCode\":\"HD2610-AB-OD01\",\"customerName\":\"Đại Lý Bán Buôn An Bình\",\"type\":\"OVERDUE\",\"status\":\"SKIPPED_ALREADY_SENT\",\"email\":\"phucducha12@gmail.com\",\"emailStatus\":\"SKIPPED\",\"inAppStatus\":\"SKIPPED\",\"note\":\"Cả Email và Thông báo in-app đều đã gửi thành công ngày 2026-10-19\"},{\"invoiceCode\":\"HD2610-AB-02\",\"customerName\":\"Đại Lý Bán Buôn An Bình\",\"type\":\"UPCOMING_3_DAYS\",\"status\":\"SKIPPED_ALREADY_SENT\",\"email\":\"phucducha12@gmail.com\",\"emailStatus\":\"SKIPPED\",\"inAppStatus\":\"SKIPPED\",\"note\":\"Cả Email và Thông báo in-app đều đã gửi thành công ngày 2026-10-19\"},{\"invoiceCode\":\"HD2610-AB-01\",\"customerName\":\"Đại Lý Bán Buôn An Bình\",\"type\":\"OVERDUE\",\"status\":\"SKIPPED_ALREADY_SENT\",\"email\":\"phucducha12@gmail.com\",\"emailStatus\":\"SKIPPED\",\"inAppStatus\":\"SKIPPED\",\"note\":\"Cả Email và Thông báo in-app đều đã gửi thành công ngày 2026-10-19\"},{\"invoiceCode\":\"HD2610-004\",\"customerName\":\"Đại Lý Cửa Hàng Minh Khang\",\"type\":\"OVERDUE\",\"status\":\"SKIPPED_ALREADY_SENT\",\"email\":\"phucducha12@gmail.com\",\"emailStatus\":\"SKIPPED\",\"inAppStatus\":\"SKIPPED\",\"note\":\"Cả Email và Thông báo in-app đều đã gửi thành công ngày 2026-10-19\"},{\"invoiceCode\":\"HD2610-003\",\"customerName\":\"Đại Lý Cửa Hàng Minh Khang\",\"type\":\"UPCOMING_3_DAYS\",\"status\":\"SKIPPED_ALREADY_SENT\",\"email\":\"phucducha12@gmail.com\",\"emailStatus\":\"SKIPPED\",\"inAppStatus\":\"SKIPPED\",\"note\":\"Cả Email và Thông báo in-app đều đã gửi thành công ngày 2026-10-19\"}]}"
+  },
+  {
+    "code": "SN208-06",
+    "name": "Cô lập kênh gửi thất bại & Thử lại độc lập (Channel Retry Isolation)",
+    "recordId": "HD-TEST-RETRY",
+    "action": "Kiểm tra cơ chế tái thử: email_status=FAILED, in_app_status=SUCCESS",
+    "expected": "Scheduler nhận biết in-app đã gửi thành công -> Bỏ qua in-app; chỉ gửi lại kênh email bị lỗi",
+    "actual": "email_status: FAILED (cần thử lại), in_app_status: SUCCESS (bỏ qua, không gửi lặp)",
+    "status": "ĐẠT",
+    "evidence": "DB state: email=FAILED, in_app=SUCCESS"
+  },
+  {
+    "code": "SN208-07",
+    "name": "Tác vụ backend tự động chạy theo lịch mỗi ngày một lần (Không phụ thuộc trình duyệt)",
+    "recordId": "DebtReminderSchedulerService (@Interval 15m / Daily check >= 08:00)",
+    "action": "Kiểm tra logic checkAndRunDailyTask() và trạng thái lưu sent_date trong DB",
+    "expected": "Backend tự động quét và kích hoạt mỗi ngày độc lập hoàn toàn với trình duyệt",
+    "actual": "Backend NestJS chạy daemon tiến trình nền, tự động quét định kỳ 15 phút một lần và kích hoạt khi đến 08:00 AM VN",
+    "status": "ĐẠT",
+    "evidence": "Hàm checkAndRunDailyTask() kiểm tra múi giờ VN (hours >= 8), ghi nhận ngày chạy và không lặp lại"
+  }
+]

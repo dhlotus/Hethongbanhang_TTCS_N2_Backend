@@ -23,8 +23,12 @@ export interface DebtReminderLog {
   overdueDays?: number;
   remainingAmount: number;
   sentDate: string; // YYYY-MM-DD (Giờ VN)
-  status: 'SUCCESS' | 'FAILED';
+  status: 'SUCCESS' | 'FAILED' | 'PARTIAL_SUCCESS';
+  emailStatus: 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  inAppStatus: 'SUCCESS' | 'FAILED' | 'SKIPPED';
   errorMessage?: string;
+  emailError?: string;
+  inAppError?: string;
   previewUrl?: string;
   createdAt: Date;
 }
@@ -52,13 +56,14 @@ export interface InAppDebtNotification {
  * - Nhắc trước hạn 3 ngày & Nhắc khi quá hạn
  * - Chống gửi trùng thông báo trong cùng một ngày theo múi giờ Việt Nam (Asia/Ho_Chi_Minh)
  * - Lưu trữ lịch sử gửi và thông báo bền vững vào PostgreSQL
- * - Hỗ trợ retry an toàn khi gửi email thất bại
+ * - Cô lập trạng thái retry theo từng kênh (Email / In-app), không gửi lặp kênh đã thành công
  */
 @Injectable()
 export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DebtReminderSchedulerService.name);
   private timer: NodeJS.Timeout | null = null;
   private isRunning = false;
+  private lastDailyRunDate = '';
 
   // Lưu lịch sử gửi để chống trùng lặp trong ngày
   private readonly reminderLogs = new Map<string, DebtReminderLog>();
@@ -76,12 +81,31 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
   ) {}
 
   async onModuleInit(): Promise<void> {
+    await this.ensureTablesAndColumns();
     await this.loadPersistedDataFromDb();
     this.startDailyScheduler();
   }
 
   onModuleDestroy(): void {
     this.stopDailyScheduler();
+  }
+
+  /**
+   * Đảm bảo cấu trúc bảng và cột bổ sung cho kênh gửi (email_status, in_app_status)
+   */
+  private async ensureTablesAndColumns(): Promise<void> {
+    if (!this.dbService?.isConnected()) return;
+    try {
+      await this.dbService.query(`
+        ALTER TABLE app_debt_reminder_logs 
+        ADD COLUMN IF NOT EXISTS email_status VARCHAR(20) DEFAULT 'PENDING',
+        ADD COLUMN IF NOT EXISTS in_app_status VARCHAR(20) DEFAULT 'PENDING',
+        ADD COLUMN IF NOT EXISTS email_error TEXT,
+        ADD COLUMN IF NOT EXISTS in_app_error TEXT;
+      `);
+    } catch (err: any) {
+      this.logger.warn(`[DebtScheduler] Lỗi khởi tạo cột bảng app_debt_reminder_logs: ${err.message}`);
+    }
   }
 
   /**
@@ -98,6 +122,8 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
       if (logRows) {
         for (const r of logRows) {
           const dedupeKey = this.getDeduplicationKey(r.invoice_id, r.reminder_type, r.sent_date);
+          const emailStatus = r.email_status || (r.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED');
+          const inAppStatus = r.in_app_status || (r.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED');
           this.reminderLogs.set(dedupeKey, {
             id: r.id,
             invoiceId: r.invoice_id,
@@ -110,7 +136,11 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
             remainingAmount: Number(r.remaining_amount || 0),
             sentDate: r.sent_date,
             status: r.status,
+            emailStatus,
+            inAppStatus,
             errorMessage: r.error_message,
+            emailError: r.email_error,
+            inAppError: r.in_app_error,
             previewUrl: r.preview_url,
             createdAt: new Date(r.created_at),
           });
@@ -151,29 +181,51 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
   }
 
   /**
-   * Khởi chạy scheduler định kỳ (kiểm tra mỗi 30 phút để kích hoạt đúng 08:00 sáng VN mỗi ngày)
+   * Khởi chạy scheduler định kỳ chạy mỗi ngày một lần theo múi giờ Việt Nam
+   * Hoạt động bền vững ngay cả khi người dùng không mở trình duyệt website
    */
   startDailyScheduler(): void {
     if (this.timer) return;
     this.logger.log('[DebtScheduler] Khởi chạy worker nhắc hạn thanh toán hóa đơn công nợ (SN-208).');
 
-    // Chạy kiểm tra mỗi 30 phút
+    // Quét định kỳ mỗi 15 phút
     this.timer = setInterval(async () => {
-      const nowVN = this.getVietnamDate();
-      const currentHour = parseInt(
-        new Intl.DateTimeFormat('en-GB', {
-          timeZone: 'Asia/Ho_Chi_Minh',
-          hour: '2-digit',
-          hour12: false,
-        }).format(nowVN),
-        10,
-      );
+      await this.checkAndRunDailyTask();
+    }, 15 * 60 * 1000);
 
-      // Chạy chính thức vào khung giờ 08:00 sáng mỗi ngày
-      if (currentHour === 8) {
-        await this.processDebtReminders();
-      }
-    }, 30 * 60 * 1000);
+    // Kích hoạt kiểm tra sau khi khởi động backend
+    setTimeout(() => {
+      void this.checkAndRunDailyTask();
+    }, 5000);
+  }
+
+  /**
+   * Kiểm tra điều kiện chạy tác vụ ngày: Múi giờ Việt Nam, chạy một lần duy nhất trong ngày
+   */
+  async checkAndRunDailyTask(): Promise<void> {
+    const todayStr = this.getVietnamDateString();
+    if (this.lastDailyRunDate === todayStr) {
+      return;
+    }
+
+    const nowVN = this.getVietnamDate();
+    const currentHour = parseInt(
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour: '2-digit',
+        hour12: false,
+      }).format(nowVN),
+      10,
+    );
+
+    // Chạy khi đến hoặc sau 08:00 sáng
+    if (currentHour >= 8) {
+      this.lastDailyRunDate = todayStr;
+      this.logger.log(
+        `[DebtScheduler] Kích hoạt tác vụ định kỳ tự động ngày ${todayStr} lúc ${currentHour}h (Múi giờ Việt Nam)...`,
+      );
+      await this.processDebtReminders();
+    }
   }
 
   stopDailyScheduler(): void {
@@ -224,9 +276,13 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
 
   /**
    * Xử lý quét hóa đơn và gửi thông báo nhắc hạn (SN-208 A, B, C, D)
-   * Có Mutex chống chạy đồng thời, chống gửi trùng trong ngày, hỗ trợ retry an toàn
+   * - Có Mutex chống chạy đồng thời
+   * - Chống gửi trùng trong ngày bằng dữ liệu lưu bền vững
+   * - Cô lập trạng thái thử lại: Kênh nào đã gửi thành công thì KHÔNG gửi lặp lại
    */
   async processDebtReminders(options?: { forceRetry?: boolean }): Promise<{
+    sentCount?: number;
+    totalSent?: number;
     scannedInvoices: number;
     upcomingRemindersSent: number;
     overdueRemindersSent: number;
@@ -238,6 +294,8 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
       type: string;
       status: string;
       email: string;
+      emailStatus?: string;
+      inAppStatus?: string;
       note?: string;
     }>;
   }> {
@@ -267,11 +325,13 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
       type: string;
       status: string;
       email: string;
+      emailStatus?: string;
+      inAppStatus?: string;
       note?: string;
     }> = [];
 
     try {
-      // 1. Lấy toàn bộ hóa đơn từ InvoicesService
+      // 1. Lấy toàn bộ hóa đơn thực tế từ InvoicesService (loại trừ PAID, CANCELLED, DRAFT)
       const allInvoices = await this.invoicesService.getAllRawInvoices();
       const activeUnpaidInvoices = allInvoices.filter(
         (inv) =>
@@ -283,17 +343,26 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
 
       await Promise.allSettled(
         activeUnpaidInvoices.map(async (invoice) => {
-        const dayDiff = this.calculateDueDayDiff(invoice.dueDate);
-        const recipientEmail =
-          invoice.customerEmail ||
-          (await this.resolveCustomerEmail(invoice.customerId)) ||
-          'dealer@loha.vn';
+          const dayDiff = this.calculateDueDayDiff(invoice.dueDate);
+          const recipientEmail =
+            invoice.customerEmail ||
+            (await this.resolveCustomerEmail(invoice.customerId)) ||
+            'dealer@loha.vn';
 
-        // ────────────────────────────────────────────────────────────────────
-        // TRƯỜNG HỢP 1: Còn đúng 3 ngày đến hạn (dayDiff === 3) — SN-208 A
-        // ────────────────────────────────────────────────────────────────────
-        if (dayDiff === 3) {
-          const dedupeKey = this.getDeduplicationKey(invoice.id, 'UPCOMING_3_DAYS', todayStr);
+          let reminderType: 'UPCOMING_3_DAYS' | 'OVERDUE' | null = null;
+          let overdueDays = 0;
+
+          if (dayDiff === 3) {
+            reminderType = 'UPCOMING_3_DAYS';
+          } else if (dayDiff < 0) {
+            reminderType = 'OVERDUE';
+            overdueDays = Math.abs(dayDiff);
+          } else {
+            // Không phải đúng 3 ngày trước hạn và không quá hạn -> Bỏ qua
+            return;
+          }
+
+          const dedupeKey = this.getDeduplicationKey(invoice.id, reminderType, todayStr);
           let existingLog = this.reminderLogs.get(dedupeKey);
 
           // Kiểm tra thêm trong DB nếu bộ nhớ chưa có
@@ -301,286 +370,229 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
             try {
               const rows = await this.dbService.query<any>(
                 `SELECT * FROM app_debt_reminder_logs 
-                 WHERE invoice_id = $1 AND reminder_type = 'UPCOMING_3_DAYS' AND sent_date = $2 AND status = 'SUCCESS' LIMIT 1`,
-                [invoice.id, todayStr],
+                 WHERE invoice_id = $1 AND reminder_type = $2 AND sent_date = $3 LIMIT 1`,
+                [invoice.id, reminderType, todayStr],
               );
               if (rows && rows.length > 0) {
+                const r = rows[0];
                 existingLog = {
-                  id: rows[0].id,
-                  invoiceId: rows[0].invoice_id,
-                  invoiceCode: rows[0].invoice_code,
-                  customerId: rows[0].customer_id,
-                  customerName: rows[0].customer_name,
-                  recipientEmail: rows[0].recipient_email,
-                  type: 'UPCOMING_3_DAYS',
-                  remainingAmount: Number(rows[0].remaining_amount),
-                  sentDate: rows[0].sent_date,
-                  status: 'SUCCESS',
-                  createdAt: new Date(rows[0].created_at),
+                  id: r.id,
+                  invoiceId: r.invoice_id,
+                  invoiceCode: r.invoice_code,
+                  customerId: r.customer_id,
+                  customerName: r.customer_name,
+                  recipientEmail: r.recipient_email,
+                  type: r.reminder_type,
+                  overdueDays: r.overdue_days,
+                  remainingAmount: Number(r.remaining_amount),
+                  sentDate: r.sent_date,
+                  status: r.status,
+                  emailStatus: r.email_status || (r.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED'),
+                  inAppStatus: r.in_app_status || (r.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED'),
+                  errorMessage: r.error_message,
+                  emailError: r.email_error,
+                  inAppError: r.in_app_error,
+                  previewUrl: r.preview_url,
+                  createdAt: new Date(r.created_at),
                 };
                 this.reminderLogs.set(dedupeKey, existingLog);
               }
             } catch {}
           }
 
-          // Kiểm tra xem đã gửi thành công hôm nay chưa
-          if (existingLog && existingLog.status === 'SUCCESS' && !options?.forceRetry) {
+          const existingEmailSuccess = existingLog?.emailStatus === 'SUCCESS';
+          const existingInAppSuccess = existingLog?.inAppStatus === 'SUCCESS';
+
+          // Nếu cả hai kênh đều đã thành công hôm nay và không ép buộc thử lại
+          if (existingEmailSuccess && existingInAppSuccess && !options?.forceRetry) {
             skippedCount++;
             executionDetails.push({
               invoiceCode: invoice.invoiceCode,
               customerName: invoice.customerName,
-              type: 'UPCOMING_3_DAYS',
+              type: reminderType,
               status: 'SKIPPED_ALREADY_SENT',
               email: recipientEmail,
-              note: `Đã gửi thành công lúc ${existingLog.createdAt.toLocaleTimeString('vi-VN')}`,
+              emailStatus: 'SKIPPED',
+              inAppStatus: 'SKIPPED',
+              note: `Cả Email và Thông báo in-app đều đã gửi thành công ngày ${todayStr}`,
             });
             return;
           }
 
-          // Gửi Email nhắc trước hạn 3 ngày
-          try {
-            const emailRes = await this.mailService.sendDebtReminderEmail({
-              to: recipientEmail,
-              customerName: invoice.customerName,
-              invoiceCode: invoice.invoiceCode,
-              orderCode: invoice.orderCode,
-              remainingAmount: invoice.remainingAmount,
-              dueDate: invoice.dueDate,
-              viewUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoice.id}`,
-            });
+          // ────────────────────────────────────────────────────────────────────
+          // KÊNH 1: GỬI EMAIL (Chỉ gửi nếu chưa thành công hoặc forceRetry)
+          // ────────────────────────────────────────────────────────────────────
+          let emailStatus: 'SUCCESS' | 'FAILED' | 'SKIPPED' = 'SKIPPED';
+          let emailError: string | undefined;
+          let previewUrl: string | undefined;
 
-            // Tạo In-app notification
-            await this.createInAppNotification({
-              customerId: invoice.customerId,
-              invoiceId: invoice.id,
-              invoiceCode: invoice.invoiceCode,
-              type: 'DEBT_REMINDER_3_DAYS',
-              title: `Nhắc hạn thanh toán HĐ ${invoice.invoiceCode}`,
-              message: `Hóa đơn ${invoice.invoiceCode} còn nợ ${new Intl.NumberFormat('vi-VN').format(invoice.remainingAmount)} đ sẽ đến hạn trong 3 ngày tới (${new Date(invoice.dueDate).toLocaleDateString('vi-VN')}). Quý đại lý vui lòng thanh toán đúng hạn.`,
-              amount: invoice.remainingAmount,
-              dueDate: invoice.dueDate,
-              link: `/portal/debt?invoiceId=${invoice.id}`,
-              priority: 'normal',
-            });
-
-            // Lưu log
-            const logEntry: DebtReminderLog = {
-              id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              invoiceId: invoice.id,
-              invoiceCode: invoice.invoiceCode,
-              customerId: invoice.customerId,
-              customerName: invoice.customerName,
-              recipientEmail,
-              type: 'UPCOMING_3_DAYS',
-              remainingAmount: invoice.remainingAmount,
-              sentDate: todayStr,
-              status: emailRes.success ? 'SUCCESS' : 'FAILED',
-              previewUrl: emailRes.previewUrl,
-              createdAt: new Date(),
-            };
-
-            this.reminderLogs.set(dedupeKey, logEntry);
-            await this.persistLogToDb(logEntry);
-
-            if (emailRes.success) {
-              upcomingCount++;
-              executionDetails.push({
-                invoiceCode: invoice.invoiceCode,
-                customerName: invoice.customerName,
-                type: 'UPCOMING_3_DAYS',
-                status: 'SENT_SUCCESS',
-                email: recipientEmail,
-              });
-            } else {
-              failedCount++;
-              executionDetails.push({
-                invoiceCode: invoice.invoiceCode,
-                customerName: invoice.customerName,
-                type: 'UPCOMING_3_DAYS',
-                status: 'FAILED',
-                email: recipientEmail,
-                note: 'Gửi qua Ethereal/SMTP báo lỗi',
-              });
-            }
-          } catch (err: any) {
-            failedCount++;
-            const failedEntry: DebtReminderLog = {
-              id: `log-${Date.now()}`,
-              invoiceId: invoice.id,
-              invoiceCode: invoice.invoiceCode,
-              customerId: invoice.customerId,
-              customerName: invoice.customerName,
-              recipientEmail,
-              type: 'UPCOMING_3_DAYS',
-              remainingAmount: invoice.remainingAmount,
-              sentDate: todayStr,
-              status: 'FAILED',
-              errorMessage: err.message,
-              createdAt: new Date(),
-            };
-            this.reminderLogs.set(dedupeKey, failedEntry);
-            await this.persistLogToDb(failedEntry);
-
-            executionDetails.push({
-              invoiceCode: invoice.invoiceCode,
-              customerName: invoice.customerName,
-              type: 'UPCOMING_3_DAYS',
-              status: 'ERROR',
-              email: recipientEmail,
-              note: err.message,
-            });
-          }
-        }
-
-        // ────────────────────────────────────────────────────────────────────
-        // TRƯỜNG HỢP 2: Đã quá hạn thanh toán (dayDiff < 0) — SN-208 B
-        // ────────────────────────────────────────────────────────────────────
-        else if (dayDiff < 0) {
-          const overdueDays = Math.abs(dayDiff);
-          const dedupeKey = this.getDeduplicationKey(invoice.id, 'OVERDUE', todayStr);
-          let existingLog = this.reminderLogs.get(dedupeKey);
-
-          // Kiểm tra trong DB nếu bộ nhớ chưa có
-          if (!existingLog && this.dbService?.isConnected()) {
+          if (!existingEmailSuccess || options?.forceRetry) {
             try {
-              const rows = await this.dbService.query<any>(
-                `SELECT * FROM app_debt_reminder_logs 
-                 WHERE invoice_id = $1 AND reminder_type = 'OVERDUE' AND sent_date = $2 AND status = 'SUCCESS' LIMIT 1`,
-                [invoice.id, todayStr],
-              );
-              if (rows && rows.length > 0) {
-                existingLog = {
-                  id: rows[0].id,
-                  invoiceId: rows[0].invoice_id,
-                  invoiceCode: rows[0].invoice_code,
-                  customerId: rows[0].customer_id,
-                  customerName: rows[0].customer_name,
-                  recipientEmail: rows[0].recipient_email,
-                  type: 'OVERDUE',
-                  overdueDays: rows[0].overdue_days,
-                  remainingAmount: Number(rows[0].remaining_amount),
-                  sentDate: rows[0].sent_date,
-                  status: 'SUCCESS',
-                  createdAt: new Date(rows[0].created_at),
-                };
-                this.reminderLogs.set(dedupeKey, existingLog);
+              if (reminderType === 'UPCOMING_3_DAYS') {
+                const emailRes = await this.mailService.sendDebtReminderEmail({
+                  to: recipientEmail,
+                  customerName: invoice.customerName,
+                  invoiceCode: invoice.invoiceCode,
+                  orderCode: invoice.orderCode,
+                  remainingAmount: invoice.remainingAmount,
+                  dueDate: invoice.dueDate,
+                  viewUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoice.id}`,
+                });
+                if (emailRes.success) {
+                  emailStatus = 'SUCCESS';
+                  previewUrl = emailRes.previewUrl;
+                } else {
+                  emailStatus = 'FAILED';
+                  emailError = (emailRes as any).error || 'Lỗi gửi email qua mail service';
+                }
+              } else {
+                const emailRes = await this.mailService.sendDebtOverdueEmail({
+                  to: recipientEmail,
+                  customerName: invoice.customerName,
+                  invoiceCode: invoice.invoiceCode,
+                  orderCode: invoice.orderCode,
+                  remainingAmount: invoice.remainingAmount,
+                  overdueDays,
+                  dueDate: invoice.dueDate,
+                  viewUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoice.id}`,
+                });
+                if (emailRes.success) {
+                  emailStatus = 'SUCCESS';
+                  previewUrl = emailRes.previewUrl;
+                } else {
+                  emailStatus = 'FAILED';
+                  emailError = (emailRes as any).error || 'Lỗi gửi email qua mail service';
+                }
               }
-            } catch {}
-          }
-
-          // Chống gửi trùng trong ngày
-          if (existingLog && existingLog.status === 'SUCCESS' && !options?.forceRetry) {
-            skippedCount++;
-            executionDetails.push({
-              invoiceCode: invoice.invoiceCode,
-              customerName: invoice.customerName,
-              type: 'OVERDUE',
-              status: 'SKIPPED_ALREADY_SENT',
-              email: recipientEmail,
-              note: `Đã gửi cảnh báo hôm nay (${overdueDays} ngày quá hạn)`,
-            });
-            return;
-          }
-
-          // Gửi Email cảnh báo quá hạn
-          try {
-            const emailRes = await this.mailService.sendDebtOverdueEmail({
-              to: recipientEmail,
-              customerName: invoice.customerName,
-              invoiceCode: invoice.invoiceCode,
-              orderCode: invoice.orderCode,
-              remainingAmount: invoice.remainingAmount,
-              overdueDays,
-              dueDate: invoice.dueDate,
-              viewUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/debt?invoiceId=${invoice.id}`,
-            });
-
-            // Tạo In-app notification với priority high
-            await this.createInAppNotification({
-              customerId: invoice.customerId,
-              invoiceId: invoice.id,
-              invoiceCode: invoice.invoiceCode,
-              type: 'DEBT_OVERDUE',
-              title: `Cảnh báo HĐ ${invoice.invoiceCode} quá hạn ${overdueDays} ngày`,
-              message: `Hóa đơn ${invoice.invoiceCode} đã quá hạn ${overdueDays} ngày (hạn: ${new Date(invoice.dueDate).toLocaleDateString('vi-VN')}). Số tiền còn nợ: ${new Intl.NumberFormat('vi-VN').format(invoice.remainingAmount)} đ. Vui lòng tất toán để duy trì hạn mức đặt hàng.`,
-              amount: invoice.remainingAmount,
-              dueDate: invoice.dueDate,
-              overdueDays,
-              link: `/portal/debt?invoiceId=${invoice.id}`,
-              priority: 'high',
-            });
-
-            const logEntry: DebtReminderLog = {
-              id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              invoiceId: invoice.id,
-              invoiceCode: invoice.invoiceCode,
-              customerId: invoice.customerId,
-              customerName: invoice.customerName,
-              recipientEmail,
-              type: 'OVERDUE',
-              overdueDays,
-              remainingAmount: invoice.remainingAmount,
-              sentDate: todayStr,
-              status: emailRes.success ? 'SUCCESS' : 'FAILED',
-              previewUrl: emailRes.previewUrl,
-              createdAt: new Date(),
-            };
-
-            this.reminderLogs.set(dedupeKey, logEntry);
-            await this.persistLogToDb(logEntry);
-
-            if (emailRes.success) {
-              overdueCount++;
-              executionDetails.push({
-                invoiceCode: invoice.invoiceCode,
-                customerName: invoice.customerName,
-                type: 'OVERDUE',
-                status: 'SENT_SUCCESS',
-                email: recipientEmail,
-                note: `Quá hạn ${overdueDays} ngày`,
-              });
-            } else {
-              failedCount++;
-              executionDetails.push({
-                invoiceCode: invoice.invoiceCode,
-                customerName: invoice.customerName,
-                type: 'OVERDUE',
-                status: 'FAILED',
-                email: recipientEmail,
-              });
+            } catch (err: any) {
+              emailStatus = 'FAILED';
+              emailError = err.message || 'Lỗi ngoại lệ gửi email';
             }
-          } catch (err: any) {
-            failedCount++;
-            const failedEntry: DebtReminderLog = {
-              id: `log-${Date.now()}`,
-              invoiceId: invoice.id,
-              invoiceCode: invoice.invoiceCode,
-              customerId: invoice.customerId,
-              customerName: invoice.customerName,
-              recipientEmail,
-              type: 'OVERDUE',
-              overdueDays,
-              remainingAmount: invoice.remainingAmount,
-              sentDate: todayStr,
-              status: 'FAILED',
-              errorMessage: err.message,
-              createdAt: new Date(),
-            };
-            this.reminderLogs.set(dedupeKey, failedEntry);
-            await this.persistLogToDb(failedEntry);
+          } else {
+            // Đã gửi email thành công trước đó -> Không gửi lặp lại
+            emailStatus = 'SKIPPED';
+          }
+
+          // ────────────────────────────────────────────────────────────────────
+          // KÊNH 2: THÔNG BÁO IN-APP (Chỉ tạo nếu chưa thành công hoặc forceRetry)
+          // ────────────────────────────────────────────────────────────────────
+          let inAppStatus: 'SUCCESS' | 'FAILED' | 'SKIPPED' = 'SKIPPED';
+          let inAppError: string | undefined;
+
+          if (!existingInAppSuccess || options?.forceRetry) {
+            try {
+              if (reminderType === 'UPCOMING_3_DAYS') {
+                await this.createInAppNotification({
+                  customerId: invoice.customerId,
+                  invoiceId: invoice.id,
+                  invoiceCode: invoice.invoiceCode,
+                  type: 'DEBT_REMINDER_3_DAYS',
+                  title: `Nhắc hạn thanh toán HĐ ${invoice.invoiceCode}`,
+                  message: `Hóa đơn ${invoice.invoiceCode} còn nợ ${new Intl.NumberFormat('vi-VN').format(invoice.remainingAmount)} đ sẽ đến hạn trong 3 ngày tới (${new Date(invoice.dueDate).toLocaleDateString('vi-VN')}). Quý đại lý vui lòng thanh toán đúng hạn.`,
+                  amount: invoice.remainingAmount,
+                  dueDate: invoice.dueDate,
+                  link: `/portal/debt?invoiceId=${invoice.id}`,
+                  priority: 'normal',
+                });
+              } else {
+                await this.createInAppNotification({
+                  customerId: invoice.customerId,
+                  invoiceId: invoice.id,
+                  invoiceCode: invoice.invoiceCode,
+                  type: 'DEBT_OVERDUE',
+                  title: `Cảnh báo HĐ ${invoice.invoiceCode} quá hạn ${overdueDays} ngày`,
+                  message: `Hóa đơn ${invoice.invoiceCode} đã quá hạn ${overdueDays} ngày (hạn: ${new Date(invoice.dueDate).toLocaleDateString('vi-VN')}). Số tiền còn nợ: ${new Intl.NumberFormat('vi-VN').format(invoice.remainingAmount)} đ. Vui lòng tất toán để duy trì hạn mức đặt hàng.`,
+                  amount: invoice.remainingAmount,
+                  dueDate: invoice.dueDate,
+                  overdueDays,
+                  link: `/portal/debt?invoiceId=${invoice.id}`,
+                  priority: 'high',
+                });
+              }
+              inAppStatus = 'SUCCESS';
+            } catch (err: any) {
+              inAppStatus = 'FAILED';
+              inAppError = err.message || 'Lỗi tạo thông báo in-app';
+            }
+          } else {
+            // Đã tạo thông báo in-app thành công trước đó -> Không tạo lặp lại
+            inAppStatus = 'SKIPPED';
+          }
+
+          // Đánh giá trạng thái chung
+          const finalEmailSuccess = emailStatus === 'SUCCESS' || (existingEmailSuccess && emailStatus === 'SKIPPED');
+          const finalInAppSuccess = inAppStatus === 'SUCCESS' || (existingInAppSuccess && inAppStatus === 'SKIPPED');
+
+          let overallStatus: 'SUCCESS' | 'FAILED' | 'PARTIAL_SUCCESS' = 'FAILED';
+          if (finalEmailSuccess && finalInAppSuccess) {
+            overallStatus = 'SUCCESS';
+          } else if (finalEmailSuccess || finalInAppSuccess) {
+            overallStatus = 'PARTIAL_SUCCESS';
+          } else {
+            overallStatus = 'FAILED';
+          }
+
+          const combinedError = [
+            emailError ? `Email: ${emailError}` : null,
+            inAppError ? `In-App: ${inAppError}` : null,
+          ]
+            .filter(Boolean)
+            .join(' | ');
+
+          // Lưu Log bền vững
+          const logEntry: DebtReminderLog = {
+            id: existingLog?.id || `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            invoiceId: invoice.id,
+            invoiceCode: invoice.invoiceCode,
+            customerId: invoice.customerId,
+            customerName: invoice.customerName,
+            recipientEmail,
+            type: reminderType,
+            overdueDays,
+            remainingAmount: invoice.remainingAmount,
+            sentDate: todayStr,
+            status: overallStatus,
+            emailStatus: finalEmailSuccess ? 'SUCCESS' : 'FAILED',
+            inAppStatus: finalInAppSuccess ? 'SUCCESS' : 'FAILED',
+            errorMessage: combinedError || undefined,
+            emailError,
+            inAppError,
+            previewUrl: previewUrl || existingLog?.previewUrl,
+            createdAt: existingLog?.createdAt || new Date(),
+          };
+
+          this.reminderLogs.set(dedupeKey, logEntry);
+          await this.persistLogToDb(logEntry);
+
+          if (overallStatus === 'SUCCESS') {
+            if (reminderType === 'UPCOMING_3_DAYS') upcomingCount++;
+            else overdueCount++;
 
             executionDetails.push({
               invoiceCode: invoice.invoiceCode,
               customerName: invoice.customerName,
-              type: 'OVERDUE',
-              status: 'ERROR',
+              type: reminderType,
+              status: 'SENT_SUCCESS',
               email: recipientEmail,
-              note: err.message,
+              emailStatus: emailStatus,
+              inAppStatus: inAppStatus,
+              note: reminderType === 'OVERDUE' ? `Quá hạn ${overdueDays} ngày` : 'Còn 3 ngày đến hạn',
+            });
+          } else {
+            failedCount++;
+            executionDetails.push({
+              invoiceCode: invoice.invoiceCode,
+              customerName: invoice.customerName,
+              type: reminderType,
+              status: overallStatus,
+              email: recipientEmail,
+              emailStatus: emailStatus,
+              inAppStatus: inAppStatus,
+              note: combinedError,
             });
           }
-        }
-      }),
-    );
+        }),
+      );
     } finally {
       this.isRunning = false;
     }
@@ -590,6 +602,8 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
     );
 
     return {
+      sentCount: upcomingCount + overdueCount,
+      totalSent: upcomingCount + overdueCount,
       scannedInvoices: upcomingCount + overdueCount + skippedCount + failedCount,
       upcomingRemindersSent: upcomingCount,
       overdueRemindersSent: overdueCount,
@@ -603,9 +617,20 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
     if (!this.dbService?.isConnected()) return;
     try {
       await this.dbService.query(
-        `INSERT INTO app_debt_reminder_logs (id, invoice_id, invoice_code, customer_id, customer_name, recipient_email, reminder_type, overdue_days, remaining_amount, sent_date, status, error_message, preview_url, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-         ON CONFLICT (id) DO UPDATE SET status = $11, error_message = $12, preview_url = $13;`,
+        `INSERT INTO app_debt_reminder_logs (
+          id, invoice_id, invoice_code, customer_id, customer_name, recipient_email, 
+          reminder_type, overdue_days, remaining_amount, sent_date, status, 
+          email_status, in_app_status, email_error, in_app_error, error_message, preview_url, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        ON CONFLICT (id) DO UPDATE SET 
+          status = $11, 
+          email_status = $12, 
+          in_app_status = $13, 
+          email_error = $14, 
+          in_app_error = $15, 
+          error_message = $16, 
+          preview_url = $17;`,
         [
           log.id,
           log.invoiceId,
@@ -618,6 +643,10 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
           log.remainingAmount,
           log.sentDate,
           log.status,
+          log.emailStatus,
+          log.inAppStatus,
+          log.emailError || null,
+          log.inAppError || null,
           log.errorMessage || null,
           log.previewUrl || null,
           log.createdAt,
@@ -630,10 +659,87 @@ export class DebtReminderSchedulerService implements OnModuleInit, OnModuleDestr
 
   /**
    * Tạo thông báo trong ứng dụng (In-app notification)
+   * Chống tạo trùng cho cùng hóa đơn, loại thông báo và ngày
    */
   private async createInAppNotification(
     data: Omit<InAppDebtNotification, 'id' | 'isRead' | 'createdAt'>,
   ): Promise<InAppDebtNotification> {
+    const todayStr = this.getVietnamDateString();
+
+    // 1. Kiểm tra chống trùng trong bộ nhớ
+    const existingMemory = this.inAppNotifications.find(
+      (n) =>
+        n.invoiceId === data.invoiceId &&
+        n.type === data.type &&
+        this.getVietnamDateString(n.createdAt) === todayStr,
+    );
+    if (existingMemory) {
+      if (this.dbService?.isConnected()) {
+        try {
+          const dbCheck = await this.dbService.query<any>(
+            `SELECT id FROM app_debt_notifications WHERE id = $1 LIMIT 1;`,
+            [existingMemory.id],
+          );
+          if (!dbCheck || dbCheck.length === 0) {
+            await this.dbService.query(
+              `INSERT INTO app_debt_notifications (id, customer_id, invoice_id, invoice_code, type, title, message, amount, due_date, overdue_days, link, is_read, priority, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+               ON CONFLICT (id) DO NOTHING;`,
+              [
+                existingMemory.id,
+                existingMemory.customerId,
+                existingMemory.invoiceId,
+                existingMemory.invoiceCode,
+                existingMemory.type,
+                existingMemory.title,
+                existingMemory.message,
+                existingMemory.amount,
+                new Date(existingMemory.dueDate),
+                existingMemory.overdueDays || 0,
+                existingMemory.link,
+                existingMemory.isRead,
+                existingMemory.priority,
+                existingMemory.createdAt,
+              ],
+            );
+          }
+        } catch {}
+      }
+      return existingMemory;
+    }
+
+    // 2. Kiểm tra chống trùng trong PostgreSQL
+    if (this.dbService?.isConnected()) {
+      try {
+        const rows = await this.dbService.query<any>(
+          `SELECT * FROM app_debt_notifications 
+           WHERE invoice_id = $1 AND type = $2 AND DATE(created_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = $3 LIMIT 1;`,
+          [data.invoiceId, data.type, todayStr],
+        );
+        if (rows && rows.length > 0) {
+          const n = rows[0];
+          const found: InAppDebtNotification = {
+            id: n.id,
+            customerId: n.customer_id,
+            invoiceId: n.invoice_id,
+            invoiceCode: n.invoice_code,
+            type: n.type,
+            title: n.title,
+            message: n.message,
+            amount: Number(n.amount || 0),
+            dueDate: new Date(n.due_date),
+            overdueDays: n.overdue_days,
+            link: n.link,
+            isRead: Boolean(n.is_read),
+            priority: n.priority,
+            createdAt: new Date(n.created_at),
+          };
+          this.inAppNotifications.unshift(found);
+          return found;
+        }
+      } catch {}
+    }
+
     const notif: InAppDebtNotification = {
       id: `notif-debt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       isRead: false,
