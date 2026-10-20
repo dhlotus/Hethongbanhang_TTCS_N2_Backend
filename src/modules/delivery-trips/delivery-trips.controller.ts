@@ -20,6 +20,7 @@ import {
   QueryDeliveryTripsDto,
   TripCheckinReturnDto,
   UpdateStopStatusDto,
+  UpdateTripDriverDto,
 } from './dto';
 import { DeliveryTripEntity } from './entities/delivery-trip.entity';
 
@@ -160,5 +161,26 @@ export class DeliveryTripsController {
     @Req() req: { user: ICurrentUser },
   ): Promise<DeliveryTripEntity> {
     return this.deliveryTripsService.checkinTripReturn(id, dto, req.user);
+  }
+
+  /**
+   * Cập nhật thông tin tài xế và số điện thoại / phương tiện của chuyến đi
+   * PATCH /api/delivery-trips/:id/driver
+   */
+  @Patch(':id/driver')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.SALES_MANAGER,
+  )
+  updateDriver(
+    @Param('id') id: string,
+    @Body() dto: UpdateTripDriverDto,
+    @Req() req: { user: ICurrentUser },
+  ): Promise<DeliveryTripEntity> {
+    return this.deliveryTripsService.updateDriver(id, dto, req.user);
   }
 }

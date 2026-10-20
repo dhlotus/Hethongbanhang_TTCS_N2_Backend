@@ -18,6 +18,7 @@ import {
   QueryDeliveryTripsDto,
   TripCheckinReturnDto,
   UpdateStopStatusDto,
+  UpdateTripDriverDto,
 } from './dto';
 import { OrderStatus } from '../orders/entities/order-status.enum';
 
@@ -728,6 +729,36 @@ export class DeliveryTripsService implements OnModuleInit {
     for (const stop of trip.stops) {
       if (stop.status === StopDeliveryStatus.FAILED) {
         await this.syncSingleOrderStatus(stop.orderId, OrderStatus.RETURNED);
+      }
+    }
+
+    this.trips.set(id, trip);
+    return trip;
+  }
+
+  /**
+   * Cập nhật thông tin tài xế & phương tiện vận chuyển
+   */
+  async updateDriver(
+    id: string,
+    dto: UpdateTripDriverDto,
+    _currentUser: ICurrentUser,
+  ): Promise<DeliveryTripEntity> {
+    const trip = await this.getTripById(id);
+
+    if (dto.driverName) trip.driverName = dto.driverName.trim();
+    if (dto.driverPhone) trip.driverPhone = dto.driverPhone.trim();
+    if (dto.vehicleNumber) trip.vehicleNumber = dto.vehicleNumber.trim();
+    trip.updatedAt = new Date();
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE delivery_trips SET driver_name = $1, driver_phone = $2, vehicle_number = $3, updated_at = NOW() WHERE id = $4`,
+          [trip.driverName, trip.driverPhone, trip.vehicleNumber, trip.id],
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to update driver in PostgreSQL: ${(err as Error).message}`);
       }
     }
 
