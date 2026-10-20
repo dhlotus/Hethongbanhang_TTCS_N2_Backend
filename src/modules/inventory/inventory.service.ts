@@ -3940,7 +3940,7 @@ export class InventoryService implements OnModuleInit {
     // Hàng 2: Tiêu đề báo cáo
     ws.mergeCells('A2:K2');
     const row2 = ws.getCell('A2');
-    row2.value = 'BÁO CÁO TỒN KHO HÀNG HÓA (SN-229 / SN-220)';
+    row2.value = 'BÁO CÁO TỒN KHO HÀNG HÓA';
     row2.font = { name: 'Arial', size: 15, bold: true, color: { argb: 'FF0F172A' } };
     row2.alignment = { horizontal: 'center', vertical: 'middle' };
     ws.getRow(2).height = 28;
@@ -3963,7 +3963,7 @@ export class InventoryService implements OnModuleInit {
     else if (query?.status === 'OUT_OF_STOCK') statusText = 'Hết hàng (Tồn khả dụng = 0)';
     const filterCat = query?.category && query.category !== 'ALL' ? `Nhóm hàng: ${query.category}` : 'Tất cả nhóm hàng';
     const filterSearch = query?.search?.trim() ? `Từ khóa: "${query.search.trim()}"` : 'Tất cả sản phẩm';
-    row4.value = `Phạm vi bộ lọc: [ ${filterCat} ] • [ Trạng thái: ${statusText} ] • [ ${filterSearch} ] • [ Tổng cộng: ${items.length} mặt hàng ] • [ Ghi chú: Mẫu tồn kho chuẩn hệ thống - Chưa có mẫu đối chiếu riêng từ kế toán ]`;
+    row4.value = `Phạm vi bộ lọc: [ ${filterCat} ] • [ Trạng thái: ${statusText} ] • [ ${filterSearch} ] • [ Tổng cộng: ${items.length} mặt hàng ] • [ Mẫu tồn kho chuẩn hệ thống ]`;
     row4.font = { name: 'Arial', size: 9.5, italic: true, color: { argb: 'FF64748B' } };
     row4.alignment = { horizontal: 'center', vertical: 'middle' };
     ws.getRow(4).height = 20;
