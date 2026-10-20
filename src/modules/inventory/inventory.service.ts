@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
@@ -83,12 +83,19 @@ export interface StockOverviewItem extends StockBalance {
   physicalStock: number;
   reservedStock: number;
   availableStock: number;
-  status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'DAMAGED';
   imageUrl?: string;
+  damagedQuantity?: number;
+  damagedStock?: number;
+  batchNumber?: string;
+  expiryDate?: string;
+  mfgDate?: string;
+  warehouseCode?: string;
 }
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
+  private readonly logger = new Logger(InventoryService.name);
   /**
    * Fix #4: Sổ kho tập trung theo Map<productId, giao dịch[]>.
    * - Lookup O(1) theo productId thay vì O(n) full-scan mảng phẳng.
@@ -149,6 +156,9 @@ export class InventoryService implements OnModuleInit {
       await this.ensureAllWarehousesInventory();
       await this.syncBatchesFromDatabase();
       await this.syncAdjustmentsFromDatabase();
+      try {
+        await this.databaseService.query(`ALTER TABLE inventory_batches ALTER COLUMN expiry_date DROP NOT NULL;`);
+      } catch {}
     }
   }
 
@@ -1198,7 +1208,96 @@ export class InventoryService implements OnModuleInit {
     }
 
     if (q?.status && q.status !== 'ALL') {
-      if (q.status === 'BELOW_MIN_STOCK') {
+      if (q.status === 'DAMAGED' || q.status === 'DAMAGED_STOCK') {
+        // Chỉ hiển thị các sản phẩm lỗi tồn kho riêng (damaged_stock_balances)
+        let damagedRows: any[] = [];
+        if (this.databaseService?.isConnected()) {
+          try {
+            const sql = `
+              SELECT d.id, d.warehouse_id, d.product_id, d.product_sku, d.batch_number,
+                     d.quantity as damaged_quantity, d.updated_at,
+                     w.name as warehouse_name, w.code as warehouse_code,
+                     p.name as product_name, p.base_unit as unit, c.name as category, p.image_url,
+                     b.expiry_date, b.mfg_date
+              FROM damaged_stock_balances d
+              LEFT JOIN warehouses w ON (w.id::text = d.warehouse_id OR w.code = d.warehouse_id)
+              LEFT JOIN products p ON (p.id::text = d.product_id OR UPPER(p.sku) = UPPER(d.product_sku))
+              LEFT JOIN categories c ON c.id = p.category_id
+              LEFT JOIN LATERAL (
+                SELECT expiry_date, mfg_date
+                FROM inventory_batches ib
+                WHERE (ib.batch_number = d.batch_number OR ib.batch_no = d.batch_number)
+                  AND d.batch_number IS NOT NULL AND d.batch_number <> ''
+                ORDER BY ib.created_at DESC
+                LIMIT 1
+              ) b ON true
+              WHERE d.quantity > 0;
+            `;
+            damagedRows = await this.databaseService.query<any>(sql);
+          } catch (e: any) {
+            this.logger.warn(`Lỗi query damaged_stock_balances: ${e.message}`);
+          }
+        }
+
+        let damagedItems: StockOverviewItem[] = damagedRows.map((r) => {
+          const qty = Number(r.damaged_quantity || 0);
+          return {
+            id: `damaged-${r.id || r.product_sku}-${r.warehouse_id}`,
+            productId: r.product_id,
+            sku: r.product_sku,
+            name: r.product_name || r.product_sku,
+            productName: r.product_name || r.product_sku,
+            category: r.category || 'Hàng lỗi',
+            parentCategory: 'Hàng lỗi',
+            subCategory: '',
+            warehouse: r.warehouse_name || 'Kho hàng',
+            warehouseId: r.warehouse_id,
+            warehouseCode: r.warehouse_code,
+            physicalStock: qty,
+            physicalStockQuantity: qty,
+            physicalQuantity: qty,
+            stockQuantity: qty,
+            reservedStock: 0,
+            reservedQuantity: 0,
+            availableStock: 0,
+            availableQuantity: 0,
+            status: 'DAMAGED' as any,
+            damagedStock: qty,
+            damagedQuantity: qty,
+            batchNumber: r.batch_number || '',
+            expiryDate: r.expiry_date ? new Date(r.expiry_date).toISOString() : undefined,
+            mfgDate: r.mfg_date ? new Date(r.mfg_date).toISOString() : undefined,
+            baseUnit: r.unit || 'Chai',
+            unit: r.unit || 'Chai',
+            units: [{ unitName: r.unit || 'Chai', conversionRate: 1, isBaseUnit: true }],
+            activeReservations: [],
+            minStockLevel: 0,
+            updatedAt: r.updated_at ? new Date(r.updated_at) : new Date(),
+          };
+        });
+
+        // Lọc theo kho hàng nếu có
+        if (warehouseId !== 'ALL' || (q?.warehouse && q.warehouse !== 'ALL')) {
+          const targetWh = (warehouseId !== 'ALL' ? warehouseId : q?.warehouse || '').toLowerCase();
+          damagedItems = damagedItems.filter((i) => {
+            return (
+              i.warehouseId?.toLowerCase() === targetWh ||
+              i.warehouseCode?.toLowerCase() === targetWh ||
+              i.warehouse?.toLowerCase().includes(targetWh)
+            );
+          });
+        }
+
+        // Lọc theo tìm kiếm
+        if (q?.search && q.search.trim()) {
+          const s = q.search.trim().toLowerCase();
+          damagedItems = damagedItems.filter(
+            (i) => i.sku.toLowerCase().includes(s) || i.name.toLowerCase().includes(s),
+          );
+        }
+
+        return damagedItems;
+      } else if (q.status === 'BELOW_MIN_STOCK') {
         if (warehouseId === 'ALL') {
           // Khi cùng chọn bộ lọc "Tất cả kho hàng" và "Dưới tồn tối thiểu":
           // Hiển thị toàn bộ các sản phẩm đang bị cảnh báo được cộng dồn từ tất cả các kho khác đang có trên hệ thống!
@@ -4147,6 +4246,215 @@ export class InventoryService implements OnModuleInit {
       buffer,
       fileName,
       totalItems: items.length,
+    };
+  }
+
+  /**
+   * Xử lý sản phẩm lỗi (Đưa sang tồn kho bán hàng hoặc Tiêu hủy)
+   */
+  async processDamagedStock(
+    dto: {
+      warehouseId: string;
+      productId: string;
+      productSku: string;
+      batchNumber?: string;
+      expiryDate?: string;
+      action: 'TO_STOCK' | 'DESTROY';
+      quantity: number;
+      reason: string;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<{ success: boolean; message: string; remainingQuantity: number }> {
+    const qty = Number(dto.quantity);
+    if (isNaN(qty) || qty <= 0) {
+      throw new BadRequestException('Số lượng xử lý phải lớn hơn 0');
+    }
+    if (!dto.reason || !dto.reason.trim()) {
+      throw new BadRequestException('Vui lòng nhập lý do xử lý');
+    }
+
+    const batch = dto.batchNumber ? dto.batchNumber.trim() : '';
+    const sku = dto.productSku.toUpperCase().trim();
+    let remaining = 0;
+
+    if (this.databaseService?.isConnected()) {
+      const client = await this.databaseService.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // 1. Tìm bản ghi hàng lỗi trong damaged_stock_balances
+        const checkSql = `
+          SELECT id, quantity, warehouse_id, product_id, product_sku, batch_number
+          FROM damaged_stock_balances
+          WHERE (warehouse_id = $1 OR warehouse_id::text = $1)
+            AND (UPPER(product_sku) = $2 OR product_id = $3)
+            AND (batch_number = $4 OR ($4 = '' AND (batch_number IS NULL OR batch_number = '')))
+          LIMIT 1 FOR UPDATE;
+        `;
+        const checkRes = await client.query(checkSql, [dto.warehouseId, sku, dto.productId, batch]);
+
+        if (!checkRes.rows[0]) {
+          throw new NotFoundException('Không tìm thấy sản phẩm lỗi này tại kho đã chọn');
+        }
+
+        const currentDamaged = Number(checkRes.rows[0].quantity || 0);
+        if (qty > currentDamaged) {
+          throw new BadRequestException(
+            `Số lượng xử lý (${qty}) vượt quá số lượng lỗi hiện có (${currentDamaged})`,
+          );
+        }
+
+        remaining = Math.max(0, currentDamaged - qty);
+
+        // 2. Trừ số lượng khỏi damaged_stock_balances
+        await client.query(
+          `UPDATE damaged_stock_balances
+           SET quantity = $1, updated_at = NOW()
+           WHERE id = $2;`,
+          [remaining, checkRes.rows[0].id],
+        );
+
+        const performedBy = currentUser?.username || (currentUser as any)?.fullName || 'Quản lý kho';
+
+        // 3. Thực hiện nghiệp vụ được chọn
+        if (dto.action === 'TO_STOCK') {
+          // A. Cộng vào inventories (kho bán hàng)
+          const targetProdId = checkRes.rows[0].product_id || dto.productId;
+          await client.query(
+            `INSERT INTO inventories (warehouse_id, product_id, on_hand, created_at, updated_at)
+             VALUES ($1::uuid, $2::uuid, $3, NOW(), NOW())
+             ON CONFLICT (warehouse_id, product_id)
+             DO UPDATE SET on_hand = inventories.on_hand + $3, updated_at = NOW();`,
+            [dto.warehouseId, targetProdId, qty],
+          );
+
+          // B. Cộng vào app_inventory_stock_balances
+          await client.query(
+            `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity, updated_at)
+             VALUES ($1, $2::uuid, $3, NOW())
+             ON CONFLICT (product_sku, warehouse_id)
+             DO UPDATE SET physical_quantity = app_inventory_stock_balances.physical_quantity + $3, updated_at = NOW();`,
+            [sku, dto.warehouseId, qty],
+          );
+
+          // C. Nếu có số lô, cộng vào inventory_batches với đầy đủ expiry_date
+          if (batch) {
+            // Tìm thông tin hạn sử dụng và ngày sản xuất gốc của lô nếu có
+            let resolvedExpiryDate: any = dto.expiryDate || null;
+            let resolvedMfgDate: any = null;
+            let resolvedCost: number = 0;
+
+            const existingBatchRes = await client.query(
+              `SELECT expiry_date, mfg_date, cost_price
+               FROM inventory_batches
+               WHERE (batch_number = $1 OR batch_no = $1)
+               ORDER BY created_at DESC LIMIT 1;`,
+              [batch],
+            );
+            if (existingBatchRes.rows[0]) {
+              const fb = existingBatchRes.rows[0];
+              if (!resolvedExpiryDate && fb.expiry_date) {
+                resolvedExpiryDate = fb.expiry_date;
+              }
+              resolvedMfgDate = fb.mfg_date || null;
+              resolvedCost = Number(fb.cost_price || 0);
+            }
+
+            // Nếu vẫn chưa có expiry_date, gán mặc định 1 năm để FEFO luôn hoạt động chính xác
+            if (!resolvedExpiryDate) {
+              const d = new Date();
+              d.setFullYear(d.getFullYear() + 1);
+              resolvedExpiryDate = d.toISOString().split('T')[0];
+            }
+
+            await client.query(
+              `INSERT INTO inventory_batches (
+                 warehouse_id, product_id, batch_number, batch_no, sku_code,
+                 expiry_date, mfg_date, cost_price, quantity, status, created_at, updated_at
+               )
+               VALUES (
+                 $1::uuid, $2::uuid, $3, $3, $4,
+                 $5, $6, $7, $8, 'ACTIVE', NOW(), NOW()
+               )
+               ON CONFLICT (warehouse_id, product_id, batch_number)
+               DO UPDATE SET
+                 quantity = inventory_batches.quantity + $8,
+                 expiry_date = COALESCE(inventory_batches.expiry_date, EXCLUDED.expiry_date),
+                 updated_at = NOW();`,
+              [
+                dto.warehouseId,
+                targetProdId,
+                batch,
+                sku,
+                resolvedExpiryDate,
+                resolvedMfgDate,
+                resolvedCost,
+                qty,
+              ],
+            );
+          }
+
+          // D. Ghi thẻ kho giao dịch
+          await client.query(
+            `INSERT INTO app_inventory_transactions (
+               id, product_id, sku, product_name, transaction_type,
+               input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+               previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+             ) VALUES ($1, $2, $3, $4, 'IMPORT', $5, $6, 1, $5, $6, 0, $5, $7, $8, $9, $10, NOW());`,
+            [
+              `tx-dmg-restore-${Date.now()}`,
+              targetProdId,
+              sku,
+              sku,
+              qty,
+              'Cơ sở',
+              `Chuyển từ kho hàng lỗi sang tồn kho bán hàng: ${dto.reason.trim()}`,
+              `DAMAGED-RESTORE`,
+              dto.warehouseId,
+              performedBy,
+            ],
+          );
+        } else {
+          // B. Tiêu hủy (DESTROY): Ghi thẻ kho xuất hủy
+          const targetProdId = checkRes.rows[0].product_id || dto.productId;
+          await client.query(
+            `INSERT INTO app_inventory_transactions (
+               id, product_id, sku, product_name, transaction_type,
+               input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+               previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+             ) VALUES ($1, $2, $3, $4, 'DISCARD', $5, $6, 1, (-1 * $5::numeric), $6, $5, 0, $7, $8, $9, $10, NOW());`,
+            [
+              `tx-dmg-destroy-${Date.now()}`,
+              targetProdId,
+              sku,
+              sku,
+              qty,
+              'Cơ sở',
+              `Tiêu hủy hàng lỗi: ${dto.reason.trim()}`,
+              `DAMAGED-DESTROY`,
+              dto.warehouseId,
+              performedBy,
+            ],
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (err: any) {
+        await client.query('ROLLBACK');
+        this.logger.error(`Lỗi processDamagedStock: ${err.message}`);
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    return {
+      success: true,
+      message:
+        dto.action === 'TO_STOCK'
+          ? `Đã chuyển ${qty} sản phẩm sang tồn kho bán hàng thành công.`
+          : `Đã hoàn tất tiêu hủy ${qty} sản phẩm lỗi.`,
+      remainingQuantity: remaining,
     };
   }
 }
