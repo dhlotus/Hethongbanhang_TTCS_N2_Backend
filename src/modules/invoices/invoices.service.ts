@@ -2042,10 +2042,25 @@ export class InvoicesService implements OnModuleInit {
 
     if (customerId && customerId !== 'ALL') {
       unbilledShipments = unbilledShipments.filter(
-        (s: { customerId?: string }) =>
-          s.customerId === customerId ||
-          (customerId === '55555555-0000-0000-0000-000000000001' && s.customerId === 'cust-001') ||
-          (customerId === '55555555-0000-0000-0000-000000000002' && s.customerId === 'cust-002'),
+        (s: { customerId?: string; customerName?: string }) => {
+          if (!s) return false;
+          if (s.customerId === customerId) return true;
+          // Đồng bộ Đại lý Minh Khang
+          if (
+            (customerId === '55555555-0000-0000-0000-000000000001' || customerId === 'cust-dl-0001' || customerId === 'cust-001' || customerId === 'cust-003') &&
+            (s.customerId === '55555555-0000-0000-0000-000000000001' || s.customerId === 'cust-001' || s.customerId === 'cust-003' || s.customerId === 'cust-dl-0001' || s.customerName?.toLowerCase().includes('minh khang'))
+          ) {
+            return true;
+          }
+          // Đồng bộ Đại lý Toàn Cầu / Hưng Yên
+          if (
+            (customerId === '55555555-0000-0000-0000-000000000002' || customerId === '55555555-0000-0000-0000-000000000003' || customerId === 'cust-dl-0002' || customerId === 'cust-002') &&
+            (s.customerId === '55555555-0000-0000-0000-000000000002' || s.customerId === '55555555-0000-0000-0000-000000000003' || s.customerId === 'cust-002' || s.customerId === 'cust-dl-0002' || s.customerName?.toLowerCase().includes('toàn cầu') || s.customerName?.toLowerCase().includes('hưng yên'))
+          ) {
+            return true;
+          }
+          return false;
+        },
       );
     }
 
