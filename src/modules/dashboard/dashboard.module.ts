@@ -5,6 +5,7 @@ import { OrdersModule } from '../orders/orders.module';
 import { CustomersModule } from '../customers/customers.module';
 import { ProductsModule } from '../products/products.module';
 import { InventoryModule } from '../inventory/inventory.module';
+import { DebtReportModule } from '../debt-report/debt-report.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { InventoryModule } from '../inventory/inventory.module';
     forwardRef(() => CustomersModule),
     forwardRef(() => ProductsModule),
     forwardRef(() => InventoryModule),
+    forwardRef(() => DebtReportModule),
   ],
   controllers: [DashboardController],
   providers: [DashboardService],

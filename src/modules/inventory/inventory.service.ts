@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import * as ExcelJS from 'exceljs';
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
@@ -3828,4 +3829,326 @@ export class InventoryService implements OnModuleInit {
     return adjustment;
   }
 
+
+  /**
+   * SN-229 / SN-220: Xuất báo cáo tồn kho ra tệp Excel (.xlsx) gửi Kế toán
+   * Giữ nguyên ba cột tồn: Tồn Thực Tế, Tồn Tạm Giữ, Tồn Khả Dụng
+   * Tên tệp chứa mã kho và ngày xuất theo múi giờ hệ thống (vi-VN): TonKho_KHO01_YYYY-MM-DD.xlsx
+   */
+  async exportStockExcel(
+    query?: {
+      warehouse?: string;
+      warehouseId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<{ buffer: Buffer; fileName: string; totalItems: number }> {
+    const rawWh = query?.warehouseId || query?.warehouse;
+
+    // 1. Lấy toàn bộ dữ liệu thỏa mãn bộ lọc (bao gồm tất cả các trang)
+    const items = await this.getStockOverview(query, currentUser);
+
+    if (!items || items.length === 0) {
+      throw new BadRequestException('Không tìm thấy dữ liệu tồn kho nào phù hợp với bộ lọc để xuất Excel');
+    }
+
+    // 2. Xác định mã kho và tên kho
+    let warehouseCode = 'ALL';
+    let warehouseName = 'Tất cả kho hàng';
+
+    if (rawWh && rawWh !== 'ALL') {
+      const resolved = await this.resolveWarehouseId(rawWh);
+      if (resolved) {
+        warehouseCode = resolved.code || 'KHO01';
+        warehouseName = resolved.name || 'Kho hàng';
+      } else {
+        const stdWh = STANDARD_WAREHOUSES.find(
+          (w) => w.id === rawWh || w.code === rawWh || w.name === rawWh,
+        );
+        if (stdWh) {
+          warehouseCode = stdWh.code;
+          warehouseName = stdWh.name;
+        } else {
+          warehouseCode = rawWh;
+        }
+      }
+    } else {
+      const roles = currentUser?.roles || [];
+      const isAdmin = roles.includes(UserRole.ADMIN);
+      const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+      const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
+      if (isKeeper) {
+        const myWhId = currentUser?.warehouseId || currentUser?.warehouseCode || currentUser?.assignedWarehouse;
+        if (myWhId) {
+          const resolved = await this.resolveWarehouseId(myWhId);
+          if (resolved) {
+            warehouseCode = resolved.code;
+            warehouseName = resolved.name;
+          }
+        }
+      }
+    }
+
+    // 3. Thời gian xuất theo múi giờ Việt Nam (UTC+7)
+    const now = new Date();
+    const utcTime = now.getTime() + now.getTimezoneOffset() * 60000;
+    const vnTime = new Date(utcTime + 7 * 3600000);
+    const yyyy = vnTime.getFullYear();
+    const mm = String(vnTime.getMonth() + 1).padStart(2, '0');
+    const dd = String(vnTime.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+    const timeFormatted = `${dd}/${mm}/${yyyy} ${String(vnTime.getHours()).padStart(2, '0')}:${String(vnTime.getMinutes()).padStart(2, '0')}:${String(vnTime.getSeconds()).padStart(2, '0')}`;
+
+    const cleanWhCode = warehouseCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `TonKho_${cleanWhCode}_${dateStr}.xlsx`;
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'LOHA SALES & WAREHOUSE SYSTEM';
+    workbook.lastModifiedBy = currentUser?.username || 'Quản lý kho';
+    workbook.created = vnTime;
+    workbook.modified = vnTime;
+
+    const ws = workbook.addWorksheet('Bao_Cao_Ton_Kho', {
+      views: [{ showGridLines: true, state: 'frozen', ySplit: 5 }],
+    });
+
+    // 4. Thiết lập độ rộng 11 cột
+    ws.columns = [
+      { key: 'stt', width: 8 },
+      { key: 'sku', width: 18 },
+      { key: 'productName', width: 44 },
+      { key: 'category', width: 22 },
+      { key: 'baseUnit', width: 14 },
+      { key: 'warehouse', width: 28 },
+      { key: 'physicalStock', width: 16 },
+      { key: 'reservedStock', width: 16 },
+      { key: 'availableStock', width: 16 },
+      { key: 'minStock', width: 16 },
+      { key: 'status', width: 20 },
+    ];
+
+    // Hàng 1: Tên đơn vị / Doanh nghiệp
+    ws.mergeCells('A1:K1');
+    const row1 = ws.getCell('A1');
+    row1.value = 'HỆ THỐNG QUẢN LÝ BÁN HÀNG & PHÂN PHỐI B2B LOHA';
+    row1.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FF1E3A8A' } };
+    row1.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(1).height = 24;
+
+    // Hàng 2: Tiêu đề báo cáo
+    ws.mergeCells('A2:K2');
+    const row2 = ws.getCell('A2');
+    row2.value = 'BÁO CÁO TỒN KHO HÀNG HÓA (SN-229 / SN-220)';
+    row2.font = { name: 'Arial', size: 15, bold: true, color: { argb: 'FF0F172A' } };
+    row2.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(2).height = 28;
+
+    // Hàng 3: Metadata kho & thời điểm xuất
+    ws.mergeCells('A3:K3');
+    const row3 = ws.getCell('A3');
+    const exporterName = currentUser?.username || 'Quản lý kho';
+    row3.value = `Kho hàng: ${warehouseName} (${warehouseCode}) | Thời điểm xuất: ${timeFormatted} | Người lập: ${exporterName}`;
+    row3.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FF475569' } };
+    row3.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(3).height = 20;
+
+    // Hàng 4: Bộ lọc áp dụng
+    ws.mergeCells('A4:K4');
+    const row4 = ws.getCell('A4');
+    let statusText = 'Tất cả trạng thái';
+    if (query?.status === 'BELOW_MIN_STOCK') statusText = 'Dưới tồn tối thiểu';
+    else if (query?.status === 'IN_STOCK') statusText = 'Còn hàng';
+    else if (query?.status === 'OUT_OF_STOCK') statusText = 'Hết hàng (Tồn khả dụng = 0)';
+    const filterCat = query?.category && query.category !== 'ALL' ? `Nhóm hàng: ${query.category}` : 'Tất cả nhóm hàng';
+    const filterSearch = query?.search?.trim() ? `Từ khóa: "${query.search.trim()}"` : 'Tất cả sản phẩm';
+    row4.value = `Phạm vi bộ lọc: [ ${filterCat} ] • [ Trạng thái: ${statusText} ] • [ ${filterSearch} ] • [ Tổng cộng: ${items.length} mặt hàng ] • [ Ghi chú: Mẫu tồn kho chuẩn hệ thống - Chưa có mẫu đối chiếu riêng từ kế toán ]`;
+    row4.font = { name: 'Arial', size: 9.5, italic: true, color: { argb: 'FF64748B' } };
+    row4.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(4).height = 20;
+
+    // Hàng 5: Tiêu đề các cột chuẩn hóa
+    const headers = [
+      'STT',
+      'Mã SKU',
+      'Tên sản phẩm',
+      'Nhóm ngành hàng',
+      'ĐVT cơ sở',
+      'Kho hàng',
+      'Tồn Thực Tế',
+      'Tồn Tạm Giữ',
+      'Tồn Khả Dụng',
+      'Tồn Tối Thiểu',
+      'Tình Trạng',
+    ];
+
+    const headerRow = ws.addRow(headers);
+    headerRow.height = 28;
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' },
+      };
+      cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        right: { style: 'thin', color: { argb: 'FF94A3B8' } },
+      };
+    });
+
+    let sumPhysical = 0;
+    let sumReserved = 0;
+    let sumAvailable = 0;
+
+    // 5. Đổ dữ liệu các dòng
+    items.forEach((item, index) => {
+      const physical = Number(item.physicalStock ?? item.physicalStockQuantity ?? item.physicalQuantity ?? 0);
+      const reserved = Number(item.reservedStock ?? item.reservedQuantity ?? 0);
+      const available = Number(item.availableStock ?? item.availableQuantity ?? item.stockQuantity ?? (physical - reserved));
+      const minStock = Number(item.minStockLevel || 0);
+
+      sumPhysical += physical;
+      sumReserved += reserved;
+      sumAvailable += available;
+
+      let statusStr = 'Còn hàng';
+      if (available <= 0) {
+        statusStr = 'Hết hàng';
+      } else if (item.isBelowMinStock || (minStock > 0 && available <= minStock)) {
+        statusStr = 'Dưới tồn tối thiểu';
+      }
+
+      const dataRow = ws.addRow([
+        index + 1,
+        String(item.sku || ''),
+        item.name || item.productName || item.sku,
+        item.category || item.parentCategory || 'Chung',
+        item.baseUnit || 'Đơn vị',
+        item.warehouse || warehouseName,
+        physical,
+        reserved,
+        available,
+        minStock,
+        statusStr,
+      ]);
+
+      dataRow.height = 22;
+
+      // Căn chỉnh và định dạng số
+      dataRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' }; // STT
+      dataRow.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' }; // SKU
+      dataRow.getCell(2).numFmt = '@'; // Định dạng text để giữ nguyên số 0 đầu
+      dataRow.getCell(3).alignment = { horizontal: 'left', vertical: 'middle' }; // Tên SP
+      dataRow.getCell(4).alignment = { horizontal: 'left', vertical: 'middle' }; // Ngành hàng
+      dataRow.getCell(5).alignment = { horizontal: 'center', vertical: 'middle' }; // ĐVT
+      dataRow.getCell(6).alignment = { horizontal: 'left', vertical: 'middle' }; // Kho
+
+      // 3 CỘT TỒN ĐỊNH DẠNG SỐ #,##0
+      dataRow.getCell(7).numFmt = '#,##0';
+      dataRow.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(8).numFmt = '#,##0';
+      dataRow.getCell(8).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(9).numFmt = '#,##0';
+      dataRow.getCell(9).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(10).numFmt = '#,##0';
+      dataRow.getCell(10).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(11).alignment = { horizontal: 'center', vertical: 'middle' };
+
+      // Border mờ
+      dataRow.eachCell((cell) => {
+        cell.font = { name: 'Arial', size: 10 };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        };
+      });
+
+      // Highlight nếu dưới tồn tối thiểu hoặc hết hàng
+      if (statusStr === 'Hết hàng') {
+        dataRow.getCell(11).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFE11D48' } };
+      } else if (statusStr === 'Dưới tồn tối thiểu') {
+        dataRow.getCell(11).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFD97706' } };
+      }
+    });
+
+    // 6. DÒNG TỔNG CỘNG (TOTAL ROW)
+    const totalRowIndex = 5 + items.length + 1;
+    ws.mergeCells(`A${totalRowIndex}:F${totalRowIndex}`);
+    const totalLabelCell = ws.getCell(`A${totalRowIndex}`);
+    totalLabelCell.value = `TỔNG CỘNG (${items.length} mặt hàng)`;
+    totalLabelCell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF0F172A' } };
+    totalLabelCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const totalRow = ws.getRow(totalRowIndex);
+    totalRow.height = 26;
+
+    // Gán giá trị tổng cộng cho 3 cột tồn (Công thức SUM kết hợp giá trị tính sẵn)
+    const startDataRow = 6;
+    const endDataRow = 5 + items.length;
+
+    const cellPhys = ws.getCell(`G${totalRowIndex}`);
+    cellPhys.value = {
+      formula: `SUM(G${startDataRow}:G${endDataRow})`,
+      result: sumPhysical,
+    };
+    cellPhys.numFmt = '#,##0';
+    cellPhys.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF1E40AF' } };
+    cellPhys.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    const cellRes = ws.getCell(`H${totalRowIndex}`);
+    cellRes.value = {
+      formula: `SUM(H${startDataRow}:H${endDataRow})`,
+      result: sumReserved,
+    };
+    cellRes.numFmt = '#,##0';
+    cellRes.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFB45309' } };
+    cellRes.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    const cellAvail = ws.getCell(`I${totalRowIndex}`);
+    cellAvail.value = {
+      formula: `SUM(I${startDataRow}:I${endDataRow})`,
+      result: sumAvailable,
+    };
+    cellAvail.numFmt = '#,##0';
+    cellAvail.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF047857' } };
+    cellAvail.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    totalRow.eachCell({ includeEmpty: true }, (cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF1F5F9' },
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF0F172A' } },
+        bottom: { style: 'double', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      };
+    });
+
+    // Kích hoạt bộ lọc AutoFilter
+    ws.autoFilter = {
+      from: { row: 5, column: 1 },
+      to: { row: 5 + items.length, column: 11 },
+    };
+
+    const uint8Array = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.from(uint8Array);
+
+    return {
+      buffer,
+      fileName,
+      totalItems: items.length,
+    };
+  }
 }
+
+

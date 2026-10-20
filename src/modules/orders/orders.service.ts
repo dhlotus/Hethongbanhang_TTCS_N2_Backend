@@ -1142,6 +1142,11 @@ export class OrdersService implements OnModuleInit {
           return false;
         }
 
+        // 3. Nếu chưa có cấu hình phân kho đại lý (hoặc offline memory mode), cho phép hiển thị
+        if (assignedAgencies.size === 0 && otherWarehouseAgencies.size === 0) {
+          return true;
+        }
+
         return false;
       });
     }
