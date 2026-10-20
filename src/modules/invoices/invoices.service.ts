@@ -29,6 +29,7 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PDFDocument = require('pdfkit');
 import * as fs from 'fs';
+import * as path from 'path';
 
 export interface InvoiceLineItem {
   productId: string;
@@ -369,7 +370,58 @@ export class InvoicesService implements OnModuleInit {
     ];
   }
 
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'invoices.json');
+  }
+
+  public saveInvoicesToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const uniqueList = Array.from(new Set(this.invoices.values()));
+      fs.writeFileSync(filePath, JSON.stringify(uniqueList, null, 2), 'utf-8');
+    } catch (err: unknown) {
+      this.logger.warn(`[InvoicesService] Không thể lưu invoices.json: ${(err as Error).message}`);
+    }
+  }
+
+  private loadInvoicesFromDisk(): boolean {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return false;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        for (const item of parsed) {
+          const inv: InvoiceItem = {
+            ...item,
+            issueDate: new Date(item.issueDate),
+            dueDate: new Date(item.dueDate),
+            createdAt: new Date(item.createdAt),
+            updatedAt: new Date(item.updatedAt),
+            paymentHistory: (item.paymentHistory || []).map((ph: any) => ({
+              ...ph,
+              paymentDate: new Date(ph.paymentDate),
+            })),
+          };
+          this.invoices.set(inv.id, inv);
+          this.invoices.set(inv.invoiceCode, inv);
+        }
+        return true;
+      }
+    } catch (err: unknown) {
+      this.logger.warn(`[InvoicesService] Lỗi nạp invoices.json: ${(err as Error).message}`);
+    }
+    return false;
+  }
+
   private seedInitialInvoices() {
+    const loaded = this.loadInvoicesFromDisk();
+    if (loaded) return;
+
     const now = Date.now();
     const dealerCustId = '55555555-0000-0000-0000-000000000001';
     const dailyCustId = '55555555-0000-0000-0000-000000000002';
@@ -859,6 +911,7 @@ export class InvoicesService implements OnModuleInit {
       this.invoices.set(inv.id, inv);
       this.invoices.set(inv.invoiceCode, inv);
     }
+    this.saveInvoicesToDisk();
   }
 
   /**
@@ -1383,6 +1436,40 @@ export class InvoicesService implements OnModuleInit {
       summary,
       message: `Đã ghi nhận thanh toán ${payAmount.toLocaleString('vi-VN')} đ cho hóa đơn ${invoice.invoiceCode}. Số tiền còn nợ: ${invoice.remainingAmount.toLocaleString('vi-VN')} đ.`,
     };
+  }
+
+  /**
+   * Lấy danh sách các hóa đơn còn dư nợ của đại lý (SN-202)
+   */
+  async findUnpaidInvoicesForCustomer(customerId: string): Promise<InvoiceItem[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncFromDatabase();
+    }
+    const uniqueMap = new Map<string, InvoiceItem>();
+    for (const inv of this.invoices.values()) {
+      uniqueMap.set(inv.id, inv);
+    }
+    const all = Array.from(uniqueMap.values());
+    return all.filter((inv) => {
+      const matchCustomer =
+        inv.customerId === customerId ||
+        inv.customerCode === customerId ||
+        (customerId === 'cust-001' && (inv.customerId === '55555555-0000-0000-0000-000000000001' || inv.customerCode === 'DL-0001')) ||
+        (customerId === '55555555-0000-0000-0000-000000000001' && (inv.customerId === 'cust-001' || inv.customerCode === 'DL-0001')) ||
+        (customerId === 'cust-002' && (inv.customerId === '55555555-0000-0000-0000-000000000002' || inv.customerCode === 'DL-0002')) ||
+        (customerId === '55555555-0000-0000-0000-000000000002' && (inv.customerId === 'cust-002' || inv.customerCode === 'DL-0002'));
+
+      return matchCustomer && inv.remainingAmount > 0 && inv.status !== 'PAID' && inv.status !== 'CANCELLED';
+    });
+  }
+
+  /**
+   * Cập nhật trạng thái và số tiền hóa đơn trong bộ nhớ (SN-202)
+   */
+  async updateInvoiceStateInMemory(updatedInvoice: InvoiceItem): Promise<void> {
+    this.invoices.set(updatedInvoice.id, updatedInvoice);
+    this.invoices.set(updatedInvoice.invoiceCode, updatedInvoice);
+    this.saveInvoicesToDisk();
   }
 
   private formatCustomerCode(invoice: InvoiceItem): string {
@@ -1949,11 +2036,13 @@ export class InvoicesService implements OnModuleInit {
       ? await this.shipmentsService.findAll({ status: 'DELIVERED' }, currentUser)
       : [];
 
-    let unbilledShipments = allShipments.filter((s: any) => s.status === 'DELIVERED' && !s.invoiceId);
+    let unbilledShipments = allShipments.filter(
+      (s: { status?: string; invoiceId?: string }) => s.status === 'DELIVERED' && !s.invoiceId,
+    );
 
     if (customerId && customerId !== 'ALL') {
       unbilledShipments = unbilledShipments.filter(
-        (s: any) =>
+        (s: { customerId?: string }) =>
           s.customerId === customerId ||
           (customerId === '55555555-0000-0000-0000-000000000001' && s.customerId === 'cust-001') ||
           (customerId === '55555555-0000-0000-0000-000000000002' && s.customerId === 'cust-002'),

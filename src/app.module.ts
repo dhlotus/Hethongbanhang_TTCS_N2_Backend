@@ -28,6 +28,8 @@ import { DebtReportModule } from './modules/debt-report/debt-report.module';
 import { ReceiptsModule } from './modules/receipts/receipts.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CollectionsModule } from './modules/collections/collections.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { DebtReconciliationModule } from './modules/debt-reconciliation/debt-reconciliation.module';
 
 @Module({
   imports: [
@@ -60,6 +62,8 @@ import { CollectionsModule } from './modules/collections/collections.module';
     ReceiptsModule,
     NotificationsModule,
     CollectionsModule,
+    PaymentsModule,
+    DebtReconciliationModule,
   ],
 })
 export class AppModule { }
