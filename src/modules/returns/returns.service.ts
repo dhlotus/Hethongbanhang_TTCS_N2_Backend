@@ -1028,6 +1028,63 @@ export class ReturnsService implements OnModuleInit {
         // B. Cập nhật giảm trừ công nợ đại lý
         const totalRefund = Number(receipt.totalRefundAmount || 0);
         if (totalRefund > 0) {
+          // Sinh mã chứng từ giảm trừ công nợ theo chuẩn SN-212: DC-CN-YYMM-XXX
+          let voucherCode = `DC-CN-${now.getFullYear().toString().slice(-2)}${(now.getMonth() + 1).toString().padStart(2, '0')}-${Date.now().toString().slice(-3)}`;
+          try {
+            const yy = now.getFullYear().toString().slice(-2);
+            const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+            const vPrefix = `DC-CN-${yy}${mm}-`;
+            const seqVRes = await client.query(
+              `INSERT INTO debt_adjustment_sequences (prefix, current_number, updated_at)
+               VALUES ($1, 1, CURRENT_TIMESTAMP)
+               ON CONFLICT (prefix)
+               DO UPDATE SET current_number = debt_adjustment_sequences.current_number + 1, updated_at = CURRENT_TIMESTAMP
+               RETURNING current_number;`,
+              [vPrefix],
+            );
+            const vSeq = Number(seqVRes.rows[0]?.current_number || 1);
+            voucherCode = `${vPrefix}${vSeq.toString().padStart(3, '0')}`;
+          } catch {}
+
+          // Tạo bản ghi chứng từ điều chỉnh giảm trừ công nợ (debt_adjustment_vouchers)
+          try {
+            await client.query(
+              `INSERT INTO debt_adjustment_vouchers (
+                 code, return_receipt_id, return_receipt_code,
+                 agency_id, agency_code, agency_name,
+                 original_invoice_id, original_invoice_code,
+                 adjustment_amount, reason, status,
+                 created_by, creator_name, items,
+                 created_at, updated_at
+               ) VALUES (
+                 $1, $2::uuid, $3,
+                 $4, $5, $6,
+                 $7, $8,
+                 $9, $10, 'POSTED',
+                 $11, $12, $13::jsonb,
+                 NOW(), NOW()
+               )
+               ON CONFLICT (code) DO NOTHING;`,
+              [
+                voucherCode,
+                receipt.id,
+                receipt.code,
+                receipt.agencyId,
+                receipt.agencyCode || receipt.agencyId,
+                receipt.agencyName || 'Đại lý',
+                receipt.originalInvoiceId,
+                receipt.originalInvoiceCode || receipt.originalInvoiceId,
+                totalRefund,
+                `Giảm trừ công nợ tự động theo phiếu trả hàng ${receipt.code} (HĐ: ${receipt.originalInvoiceCode || receipt.originalInvoiceId})`,
+                warehouseManagerId,
+                (currentUser as any)?.fullName || (currentUser as any)?.username || 'Quản lý kho',
+                JSON.stringify(receipt.items || []),
+              ],
+            );
+          } catch (e: any) {
+            this.logger.warn(`Lỗi lưu debt_adjustment_vouchers khi duyệt kho: ${e.message}`);
+          }
+
           // Trừ trực tiếp vào current_debt của đại lý
           await client.query(
             `UPDATE customers
@@ -1050,13 +1107,13 @@ export class ReturnsService implements OnModuleInit {
               `INSERT INTO customer_debt_ledger (
                  customer_id, transaction_type, reference_type, reference_id,
                  debit_amount, credit_amount, balance_after, aging_bucket, notes, created_by, created_at
-               ) VALUES ($1::uuid, 'RETURN_DEDUCTION', 'RETURN_RECEIPT', $2, 0, $3, $4, 'CURRENT', $5, $6, NOW());`,
+               ) VALUES ($1::uuid, 'RETURN_DEDUCTION', 'DEBT_ADJUSTMENT', $2, 0, $3, $4, 'CURRENT', $5, $6, NOW());`,
               [
                 custUuid,
-                receipt.code,
+                voucherCode,
                 totalRefund,
                 newDebt,
-                `Giảm trừ công nợ từ phiếu trả hàng ${receipt.code} (HĐ: ${receipt.originalInvoiceId})`,
+                `Bút toán giảm trừ công nợ theo chứng từ ${voucherCode} (Phiếu trả: ${receipt.code}, HĐ: ${receipt.originalInvoiceCode || receipt.originalInvoiceId})`,
                 warehouseManagerId.length === 36 ? warehouseManagerId : null,
               ],
             );
@@ -1119,12 +1176,14 @@ export class ReturnsService implements OnModuleInit {
         const rows = await this.databaseService.query<any>(
           `SELECT rr.*, c.name as agency_name, c.code as agency_code,
                   w.name as warehouse_name, w.code as warehouse_code,
-                  u.full_name as created_by_name, wm.full_name as warehouse_manager_name
+                  u.full_name as created_by_name, wm.full_name as warehouse_manager_name,
+                  dav.code as debt_adjustment_code
            FROM return_receipts rr
            LEFT JOIN customers c ON c.id::text = rr.agency_id OR c.code = rr.agency_id
            LEFT JOIN warehouses w ON w.id::text = rr.warehouse_id OR w.code = rr.warehouse_id
            LEFT JOIN users u ON u.id::text = rr.created_by
            LEFT JOIN users wm ON wm.id::text = rr.warehouse_manager_id
+           LEFT JOIN debt_adjustment_vouchers dav ON dav.return_receipt_id = rr.id OR dav.return_receipt_code = rr.code
            WHERE rr.id::text = $1 OR rr.code = $1 LIMIT 1;`,
           [id],
         );
@@ -1170,6 +1229,7 @@ export class ReturnsService implements OnModuleInit {
             warehouseManagerName: r.warehouse_manager_name,
             approvedAt: r.approved_at ? new Date(r.approved_at) : null,
             approvalNote: r.approval_note,
+            debtAdjustmentCode: r.debt_adjustment_code || undefined,
             createdAt: new Date(r.created_at),
             updatedAt: new Date(r.updated_at),
             items,
@@ -1197,12 +1257,14 @@ export class ReturnsService implements OnModuleInit {
         let sql = `
           SELECT rr.*, c.name as agency_name, c.code as agency_code,
                  w.name as warehouse_name, w.code as warehouse_code,
-                 u.full_name as created_by_name, wm.full_name as warehouse_manager_name
+                 u.full_name as created_by_name, wm.full_name as warehouse_manager_name,
+                 dav.code as debt_adjustment_code
           FROM return_receipts rr
           LEFT JOIN customers c ON c.id::text = rr.agency_id OR c.code = rr.agency_id
           LEFT JOIN warehouses w ON w.id::text = rr.warehouse_id OR w.code = rr.warehouse_id
           LEFT JOIN users u ON u.id::text = rr.created_by
           LEFT JOIN users wm ON wm.id::text = rr.warehouse_manager_id
+          LEFT JOIN debt_adjustment_vouchers dav ON dav.return_receipt_id = rr.id OR dav.return_receipt_code = rr.code
           WHERE 1=1
         `;
         const params: any[] = [];
@@ -1252,6 +1314,7 @@ export class ReturnsService implements OnModuleInit {
             warehouseManagerName: r.warehouse_manager_name,
             approvedAt: r.approved_at ? new Date(r.approved_at) : null,
             approvalNote: r.approval_note,
+            debtAdjustmentCode: r.debt_adjustment_code || undefined,
             createdAt: new Date(r.created_at),
             updatedAt: new Date(r.updated_at),
             items: itemsRows.map((it) => ({
