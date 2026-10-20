@@ -18,7 +18,14 @@ import {
   QueryBatchesDto,
   CheckBatchDispatchDto,
   BatchStatusFilter,
+  CreateStockAdjustmentDto,
+  RejectStockAdjustmentDto,
+  QueryStockAdjustmentsDto,
 } from './dto';
+import {
+  StockAdjustmentEntity,
+  StockAdjustmentItemEntity,
+} from './entities/stock-adjustment.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import {
@@ -90,6 +97,8 @@ export class InventoryService implements OnModuleInit {
   private ledger = new Map<string, InventoryTransactionEntity[]>();
   private audits = new Map<string, InventoryAuditEntity>();
   private batches = new Map<string, InventoryBatchEntity>();
+  private adjustments = new Map<string, StockAdjustmentEntity>();
+  private stockAdjustmentsSchemaPromise: Promise<void> | null = null;
 
   /**
    * Fix #2: Per-product Promise mutex lock.
@@ -127,13 +136,18 @@ export class InventoryService implements OnModuleInit {
     if (this.batches.size === 0) {
       this.seedInitialBatches();
     }
+    if (this.adjustments.size === 0) {
+      this.seedInitialAdjustments();
+    }
     if (this.databaseService?.isConnected()) {
       await this.ensureStockBalanceTable();
       await this.ensureStockReservationsTable();
       await this.ensureStockTransactionsTable();
+      await this.ensureStockAdjustmentsTable();
       await this.seedStockBalances();
       await this.ensureAllWarehousesInventory();
       await this.syncBatchesFromDatabase();
+      await this.syncAdjustmentsFromDatabase();
     }
   }
 
@@ -3177,5 +3191,641 @@ export class InventoryService implements OnModuleInit {
       batches: res.allBatches,
     };
   }
-}
 
+  // =========================================================================
+  // SN-214: QUẢN LÝ PHIẾU ĐIỀU CHỈNH TỒN KHO CÓ PHÊ DUYỆT (Hàng hỏng, mất, huỷ)
+  // =========================================================================
+
+  async ensureStockAdjustmentsTable(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    if (!this.stockAdjustmentsSchemaPromise) {
+      this.stockAdjustmentsSchemaPromise = (async () => {
+        await this.databaseService.query(`
+          CREATE TABLE IF NOT EXISTS app_stock_adjustments (
+            id TEXT PRIMARY KEY,
+            adjustment_code TEXT NOT NULL UNIQUE,
+            warehouse_id TEXT NOT NULL,
+            warehouse_name TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            reason_detail TEXT,
+            total_loss_value NUMERIC(15, 2) NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            items JSONB NOT NULL DEFAULT '[]'::jsonb,
+            creator_id TEXT NOT NULL,
+            creator_name TEXT NOT NULL,
+            creator_role TEXT,
+            approver_id TEXT,
+            approver_name TEXT,
+            approved_at TIMESTAMPTZ,
+            reject_reason TEXT,
+            note TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_stock_adj_code ON app_stock_adjustments(adjustment_code);
+          CREATE INDEX IF NOT EXISTS idx_stock_adj_status ON app_stock_adjustments(status);
+          CREATE INDEX IF NOT EXISTS idx_stock_adj_created ON app_stock_adjustments(created_at DESC);
+        `);
+
+        try {
+          const countRes = await this.databaseService.query<{ count: string }>(
+            `SELECT count(*)::text as count FROM app_stock_adjustments`,
+          );
+          const count = Number(countRes[0]?.count ?? 0);
+          if (count === 0 && this.adjustments.size > 0) {
+            for (const adj of this.adjustments.values()) {
+              await this.databaseService.query(
+                `INSERT INTO app_stock_adjustments (
+                  id, adjustment_code, warehouse_id, warehouse_name, reason,
+                  reason_detail, total_loss_value, status, items,
+                  creator_id, creator_name, creator_role, approver_id, approver_name,
+                  approved_at, reject_reason, note, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                ON CONFLICT (id) DO NOTHING`,
+                [
+                  adj.id,
+                  adj.adjustmentCode,
+                  adj.warehouseId,
+                  adj.warehouseName,
+                  adj.reason,
+                  adj.reasonDetail || '',
+                  adj.totalLossValue,
+                  adj.status,
+                  JSON.stringify(adj.items || []),
+                  adj.creatorId,
+                  adj.creatorName,
+                  adj.creatorRole || 'WAREHOUSE_KEEPER',
+                  adj.approverId || null,
+                  adj.approverName || null,
+                  adj.approvedAt || null,
+                  adj.rejectReason || null,
+                  adj.note || null,
+                  adj.createdAt,
+                  adj.updatedAt,
+                ],
+              );
+            }
+          }
+        } catch (seedErr: any) {
+          console.warn('[INVENTORY_SERVICE] Không thể nạp khởi tạo app_stock_adjustments:', seedErr?.message);
+        }
+      })().catch((err: unknown) => {
+        console.warn('[INVENTORY_SERVICE] Lỗi tạo bảng app_stock_adjustments:', (err as any)?.message);
+      });
+    }
+    return this.stockAdjustmentsSchemaPromise;
+  }
+
+  private async syncAdjustmentsFromDatabase(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      const rows = await this.databaseService.query<any>(
+        `SELECT * FROM app_stock_adjustments ORDER BY created_at DESC`,
+      );
+      for (const r of rows) {
+        const items = Array.isArray(r.items) ? r.items : JSON.parse(r.items || '[]');
+        const adj = new StockAdjustmentEntity({
+          id: r.id,
+          adjustmentCode: r.adjustment_code,
+          warehouseId: r.warehouse_id,
+          warehouseName: r.warehouse_name,
+          reason: r.reason,
+          reasonDetail: r.reason_detail,
+          totalLossValue: Number(r.total_loss_value || 0),
+          status: r.status,
+          items,
+          creatorId: r.creator_id,
+          creatorName: r.creator_name,
+          creatorRole: r.creator_role,
+          approverId: r.approver_id,
+          approverName: r.approver_name,
+          approvedAt: r.approved_at ? new Date(r.approved_at) : undefined,
+          rejectReason: r.reject_reason,
+          note: r.note,
+          createdAt: new Date(r.created_at),
+          updatedAt: new Date(r.updated_at),
+        });
+        this.adjustments.set(adj.id, adj);
+      }
+    } catch (err: any) {
+      console.warn('[INVENTORY_SERVICE] Lỗi đồng bộ app_stock_adjustments từ DB:', err?.message);
+    }
+  }
+
+  private seedInitialAdjustments(): void {
+    const now = Date.now();
+    const seed1 = new StockAdjustmentEntity({
+      id: 'adj-seed-001',
+      adjustmentCode: 'PDC-20261018-001',
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouseName: DEFAULT_WAREHOUSE_NAME,
+      reason: 'DAMAGED',
+      reasonDetail: 'Hàng bị móp vỏ thùng và bể vỡ trong lúc dỡ hàng từ xe tải',
+      totalLossValue: 1100000,
+      status: 'APPROVED',
+      creatorId: 'usr-wh-keeper',
+      creatorName: 'Thủ kho Nguyễn Văn Kho',
+      creatorRole: 'WAREHOUSE_KEEPER',
+      approverId: 'usr-wh-manager',
+      approverName: 'Quản lý kho Trần Văn Quản',
+      approvedAt: new Date(now - 86400000 * 2),
+      note: 'Đã lập biên bản sự việc và xử lý tồn kho',
+      createdAt: new Date(now - 86400000 * 2 - 3600000),
+      updatedAt: new Date(now - 86400000 * 2),
+      items: [
+        {
+          id: 'adj-item-001',
+          productId: 'prod-001',
+          productSku: 'LH-MILK-900G',
+          productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+          unit: 'Lon',
+          currentStock: 340,
+          adjustedQuantity: 2,
+          unitPrice: 550000,
+          lossValue: 1100000,
+          reason: 'DAMAGED',
+          note: 'Móp méo 2 lon',
+        },
+      ],
+    });
+
+    const seed2 = new StockAdjustmentEntity({
+      id: 'adj-seed-002',
+      adjustmentCode: 'PDC-20261020-002',
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouseName: DEFAULT_WAREHOUSE_NAME,
+      reason: 'EXPIRED',
+      reasonDetail: 'Sản phẩm cận date hỏng màng co và quá hạn sử dụng tại kệ B-02',
+      totalLossValue: 560000,
+      status: 'PENDING',
+      creatorId: 'usr-wh-keeper',
+      creatorName: 'Thủ kho Nguyễn Văn Kho',
+      creatorRole: 'WAREHOUSE_KEEPER',
+      note: 'Đề nghị duyệt huỷ để dọn dẹp kệ kho',
+      createdAt: new Date(now - 3600000 * 4),
+      updatedAt: new Date(now - 3600000 * 4),
+      items: [
+        {
+          id: 'adj-item-002',
+          productId: 'prod-002',
+          productSku: 'LH-NUT-180ML',
+          productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+          unit: 'Hộp',
+          currentStock: 1200,
+          adjustedQuantity: 20,
+          unitPrice: 28000,
+          lossValue: 560000,
+          reason: 'EXPIRED',
+          note: 'Hết hạn sử dụng lô EXP-202610',
+        },
+      ],
+    });
+
+    this.adjustments.set(seed1.id, seed1);
+    this.adjustments.set(seed2.id, seed2);
+  }
+
+  /**
+   * SN-214: Lấy danh sách phiếu điều chỉnh tồn kho có lọc
+   */
+  async getStockAdjustments(
+    query?: QueryStockAdjustmentsDto,
+    currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity[]> {
+    let list = Array.from(this.adjustments.values());
+
+    const roles = currentUser?.roles || [];
+    const isWarehouseStaff =
+      roles.some((r) =>
+        ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+      ) && !roles.includes(UserRole.ADMIN);
+
+    if (isWarehouseStaff) {
+      const staffWhId = currentUser?.warehouseId;
+      const staffWhName = (currentUser?.assignedWarehouse || currentUser?.warehouseName || '').toLowerCase();
+      list = list.filter((a) => {
+        if (staffWhId && a.warehouseId && a.warehouseId.toLowerCase() === staffWhId.toLowerCase()) {
+          return true;
+        }
+        if (staffWhName) {
+          const aWhName = (a.warehouseName || '').toLowerCase();
+          return (
+            aWhName.includes(staffWhName) ||
+            staffWhName.includes(aWhName) ||
+            (a.warehouseId && staffWhName.includes(a.warehouseId.toLowerCase()))
+          );
+        }
+        return true;
+      });
+    }
+
+    if (query?.status && query.status !== 'ALL') {
+      const statusUpper = query.status.trim().toUpperCase();
+      list = list.filter((a) => a.status.toUpperCase() === statusUpper);
+    }
+
+    if (query?.reason && query.reason !== 'ALL') {
+      const reasonUpper = query.reason.trim().toUpperCase();
+      list = list.filter((a) => a.reason.toUpperCase() === reasonUpper);
+    }
+
+    if (query?.warehouseId && query.warehouseId !== 'ALL' && !isWarehouseStaff) {
+      const whId = query.warehouseId.trim().toUpperCase();
+      list = list.filter((a) => a.warehouseId.toUpperCase() === whId);
+    }
+
+    if (query?.search) {
+      const s = query.search.trim().toLowerCase();
+      list = list.filter(
+        (a) =>
+          a.adjustmentCode.toLowerCase().includes(s) ||
+          (a.note && a.note.toLowerCase().includes(s)) ||
+          a.creatorName.toLowerCase().includes(s) ||
+          (a.approverName && a.approverName.toLowerCase().includes(s)) ||
+          (a.reasonDetail && a.reasonDetail.toLowerCase().includes(s)),
+      );
+    }
+
+    if (query?.fromDate) {
+      const from = new Date(query.fromDate);
+      if (!isNaN(from.getTime())) {
+        list = list.filter((a) => new Date(a.createdAt).getTime() >= from.getTime());
+      }
+    }
+
+    if (query?.toDate) {
+      const to = new Date(query.toDate);
+      if (!isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        list = list.filter((a) => new Date(a.createdAt).getTime() <= to.getTime());
+      }
+    }
+
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  /**
+   * SN-214: Xem chi tiết phiếu điều chỉnh tồn kho
+   */
+  async getStockAdjustmentById(id: string): Promise<StockAdjustmentEntity> {
+    const adj =
+      this.adjustments.get(id) ||
+      Array.from(this.adjustments.values()).find(
+        (a) => a.adjustmentCode === id || a.id === id,
+      );
+    if (!adj) {
+      throw new NotFoundException(`Không tìm thấy phiếu điều chỉnh tồn kho ${id}`);
+    }
+    return adj;
+  }
+
+  /**
+   * SN-214: Lập phiếu điều chỉnh tồn kho (Chờ duyệt)
+   * - Bắt buộc chọn lý do: DAMAGED, LOST, EXPIRED, OTHER (AC-1 & AC-2)
+   * - Bắt buộc ghi rõ giá trị tổn thất (VNĐ) (AC-2)
+   */
+  async createStockAdjustment(
+    dto: CreateStockAdjustmentDto,
+    creator?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    if (!dto.reason || !['DAMAGED', 'LOST', 'EXPIRED', 'OTHER'].includes(dto.reason)) {
+      throw new BadRequestException('Bắt buộc chọn lý do hợp lệ (Hàng hỏng, Hàng mất, Hàng hết hạn).');
+    }
+
+    if (!dto.items || dto.items.length === 0) {
+      throw new BadRequestException('Phiếu điều chỉnh phải chứa ít nhất một sản phẩm.');
+    }
+
+    let calculatedLoss = 0;
+    for (const item of dto.items) {
+      if (!item.adjustedQuantity || item.adjustedQuantity <= 0) {
+        throw new BadRequestException(
+          `Số lượng điều chỉnh của sản phẩm ${item.productName || item.productSku} phải lớn hơn 0.`,
+        );
+      }
+      calculatedLoss += Number(item.lossValue || item.adjustedQuantity * item.unitPrice || 0);
+    }
+
+    const totalLossValue = Number(dto.totalLossValue ?? calculatedLoss);
+    if (totalLossValue < 0) {
+      throw new BadRequestException('Giá trị tổn thất (VNĐ) không được âm.');
+    }
+
+    const warehouseId = dto.warehouseId || DEFAULT_WAREHOUSE_ID;
+    const warehouseName = dto.warehouseName || DEFAULT_WAREHOUSE_NAME;
+
+    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const randCode = Math.floor(1000 + Math.random() * 9000);
+    const adjustmentCode = `PDC-${dateStr}-${randCode}`;
+    const id = `adj-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+    const creatorId = creator?.userId || creator?.username || 'usr-wh-keeper';
+    const creatorName = (creator as any)?.fullName || creator?.username || 'Thủ kho';
+    const creatorRoles = creator?.roles || [];
+    const creatorRole = creatorRoles.length > 0 ? String(creatorRoles[0]) : 'WAREHOUSE_KEEPER';
+
+    const items: StockAdjustmentItemEntity[] = dto.items.map((item, idx) => ({
+      id: `adj-item-${Date.now()}-${idx + 1}`,
+      productId: item.productId,
+      productSku: item.productSku,
+      productName: item.productName,
+      unit: item.unit,
+      currentStock: Number(item.currentStock ?? 0),
+      adjustedQuantity: Number(item.adjustedQuantity),
+      unitPrice: Number(item.unitPrice ?? 0),
+      lossValue: Number(item.lossValue ?? item.adjustedQuantity * item.unitPrice),
+      reason: item.reason || dto.reason,
+      note: item.note?.trim(),
+    }));
+
+    const adjustment = new StockAdjustmentEntity({
+      id,
+      adjustmentCode,
+      warehouseId,
+      warehouseName,
+      reason: dto.reason,
+      reasonDetail: dto.reasonDetail?.trim(),
+      totalLossValue,
+      status: 'PENDING',
+      items,
+      creatorId,
+      creatorName,
+      creatorRole,
+      note: dto.note?.trim(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    this.adjustments.set(adjustment.id, adjustment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.ensureStockAdjustmentsTable();
+        await this.databaseService.query(
+          `INSERT INTO app_stock_adjustments (
+            id, adjustment_code, warehouse_id, warehouse_name, reason,
+            reason_detail, total_loss_value, status, items,
+            creator_id, creator_name, creator_role, approver_id, approver_name,
+            approved_at, reject_reason, note, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            adjustment.id,
+            adjustment.adjustmentCode,
+            adjustment.warehouseId,
+            adjustment.warehouseName,
+            adjustment.reason,
+            adjustment.reasonDetail || '',
+            adjustment.totalLossValue,
+            adjustment.status,
+            JSON.stringify(adjustment.items),
+            adjustment.creatorId,
+            adjustment.creatorName,
+            adjustment.creatorRole,
+            null,
+            null,
+            null,
+            null,
+            adjustment.note || null,
+            adjustment.createdAt,
+            adjustment.updatedAt,
+          ],
+        );
+      } catch (err: any) {
+        console.warn('[INVENTORY_SERVICE] Lỗi lưu phiếu điều chỉnh vào DB:', err?.message);
+      }
+    }
+
+    return adjustment;
+  }
+
+  /**
+   * SN-214: Phê duyệt phiếu điều chỉnh tồn kho
+   * - Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN) được duyệt (AC-3)
+   * - Người lập và người duyệt KHÔNG ĐƯỢC là một (creatorId !== approverId) (AC-3)
+   * - Ghi nhận Thẻ kho với transactionType: 'ADJUSTMENT' (AC-4)
+   * - Khấu trừ tồn kho thực tế
+   */
+  async approveStockAdjustment(
+    id: string,
+    approver?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    const adjustment =
+      this.adjustments.get(id) ||
+      Array.from(this.adjustments.values()).find(
+        (a) => a.adjustmentCode === id || a.id === id,
+      );
+
+    if (!adjustment) {
+      throw new NotFoundException(`Không tìm thấy phiếu điều chỉnh tồn kho ${id}`);
+    }
+
+    if (adjustment.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Phiếu điều chỉnh đã ở trạng thái ${adjustment.status}, không thể phê duyệt lại.`,
+      );
+    }
+
+    // Kiểm tra quyền Quản lý kho / Admin
+    const approverRoles = (approver?.roles || []).map((r) => String(r).toUpperCase());
+    const isManagerOrAdmin =
+      approverRoles.some((r) =>
+        ['ADMIN', 'WAREHOUSE_MANAGER', 'WH_MANAGER'].includes(r),
+      ) || (approver as any)?.role === 'ADMIN' || (approver as any)?.role === 'WAREHOUSE_MANAGER';
+
+    if (!isManagerOrAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản lý kho hoặc Quản trị viên mới có quyền phê duyệt phiếu điều chỉnh tồn kho.',
+      );
+    }
+
+    // Kiểm tra quy tắc SN-214: creatorId !== approverId
+    const approverUserId = approver?.userId;
+    const approverUsername = approver?.username;
+
+    const isSamePerson =
+      Boolean(approverUserId && adjustment.creatorId && approverUserId === adjustment.creatorId) ||
+      Boolean(
+        approverUsername &&
+          adjustment.creatorName &&
+          approverUsername.toLowerCase() === adjustment.creatorName.toLowerCase(),
+      );
+
+    if (isSamePerson) {
+      throw new BadRequestException(
+        'Chỉ Quản lý kho được duyệt và người lập với người duyệt không được là một người (Quy tắc SN-214: creatorId !== approverId).',
+      );
+    }
+
+    const reasonMap: Record<string, string> = {
+      DAMAGED: 'Hàng hỏng hóc, bể vỡ',
+      LOST: 'Hàng thất thoát, mất',
+      EXPIRED: 'Hàng hết hạn sử dụng',
+      OTHER: 'Khác',
+    };
+    const reasonText = reasonMap[adjustment.reason] || adjustment.reason;
+
+    // Tiến hành trừ tồn kho và ghi nhận Thẻ kho (AC-4)
+    for (const item of adjustment.items) {
+      const currentBook = item.currentStock;
+      const newStock = Math.max(0, currentBook - item.adjustedQuantity);
+
+      // 1. Cập nhật productsService stock
+      try {
+        await this.productsService.setStockQuantity(item.productId, newStock);
+      } catch (e) {
+        try {
+          const p = await this.productsService.findById(item.productSku);
+          if (p) {
+            await this.productsService.setStockQuantity(p.id, newStock);
+          }
+        } catch {}
+      }
+
+      // 2. Cập nhật DB inventories & app_inventory_stock_balances nếu có DB
+      if (this.databaseService?.isConnected()) {
+        try {
+          await this.databaseService.query(
+            `UPDATE app_inventory_stock_balances
+             SET physical_quantity = GREATEST(0, physical_quantity - $2), updated_at = CURRENT_TIMESTAMP
+             WHERE product_sku = UPPER($1)`,
+            [item.productSku, item.adjustedQuantity],
+          );
+          await this.databaseService.query(
+            `UPDATE inventories
+             SET on_hand = GREATEST(0, on_hand - $2), updated_at = CURRENT_TIMESTAMP
+             WHERE product_id = $1`,
+            [item.productId, item.adjustedQuantity],
+          );
+        } catch (e) {
+          // Fallback handled in-memory
+        }
+      }
+
+      // 3. Ghi Thẻ kho với transactionType = 'ADJUSTMENT' (AC-4)
+      const tx = new InventoryTransactionEntity({
+        productId: item.productId,
+        sku: item.productSku,
+        productName: item.productName,
+        transactionType: 'ADJUSTMENT',
+        inputQuantity: item.adjustedQuantity,
+        inputUnit: item.unit,
+        conversionRate: 1,
+        baseQuantityChange: -item.adjustedQuantity,
+        baseUnit: item.unit,
+        previousStock: currentBook,
+        newStock: newStock,
+        reason: `Điều chỉnh tồn kho [${adjustment.adjustmentCode}] - Lý do: ${reasonText}. Giá trị tổn thất: ${Number(adjustment.totalLossValue).toLocaleString('vi-VN')} đ${item.note ? ` (${item.note})` : ''}`,
+        referenceCode: adjustment.adjustmentCode,
+        warehouse: adjustment.warehouseName,
+        performedBy: (approver as any)?.fullName || approver?.username || 'Quản lý kho',
+        createdAt: new Date(),
+      });
+
+      this.writeLedger(tx);
+    }
+
+    // Cập nhật trạng thái phiếu
+    adjustment.status = 'APPROVED';
+    adjustment.approverId = approverUserId || 'usr-approver';
+    adjustment.approverName = (approver as any)?.fullName || approverUsername || 'Quản lý kho';
+    adjustment.approvedAt = new Date();
+    adjustment.updatedAt = new Date();
+
+    this.adjustments.set(adjustment.id, adjustment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE app_stock_adjustments
+           SET status = $1, approver_id = $2, approver_name = $3, approved_at = $4, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5`,
+          [
+            adjustment.status,
+            adjustment.approverId,
+            adjustment.approverName,
+            adjustment.approvedAt,
+            adjustment.id,
+          ],
+        );
+      } catch (err: any) {
+        console.warn('[INVENTORY_SERVICE] Lỗi cập nhật trạng thái duyệt vào DB:', err?.message);
+      }
+    }
+
+    return adjustment;
+  }
+
+  /**
+   * SN-214: Từ chối phiếu điều chỉnh tồn kho
+   * - Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN)
+   * - Ghi rõ lý do từ chối
+   */
+  async rejectStockAdjustment(
+    id: string,
+    dto: RejectStockAdjustmentDto,
+    approver?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    const adjustment =
+      this.adjustments.get(id) ||
+      Array.from(this.adjustments.values()).find(
+        (a) => a.adjustmentCode === id || a.id === id,
+      );
+
+    if (!adjustment) {
+      throw new NotFoundException(`Không tìm thấy phiếu điều chỉnh tồn kho ${id}`);
+    }
+
+    if (adjustment.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Phiếu điều chỉnh đã ở trạng thái ${adjustment.status}, không thể từ chối.`,
+      );
+    }
+
+    if (!dto?.rejectReason?.trim()) {
+      throw new BadRequestException('Bắt buộc ghi rõ lý do từ chối phiếu điều chỉnh.');
+    }
+
+    const approverRoles = (approver?.roles || []).map((r) => String(r).toUpperCase());
+    const isManagerOrAdmin =
+      approverRoles.some((r) =>
+        ['ADMIN', 'WAREHOUSE_MANAGER', 'WH_MANAGER'].includes(r),
+      ) || (approver as any)?.role === 'ADMIN' || (approver as any)?.role === 'WAREHOUSE_MANAGER';
+
+    if (!isManagerOrAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản lý kho hoặc Quản trị viên mới có quyền từ chối phiếu điều chỉnh tồn kho.',
+      );
+    }
+
+    adjustment.status = 'REJECTED';
+    adjustment.rejectReason = dto.rejectReason.trim();
+    adjustment.approverId = approver?.userId || 'usr-approver';
+    adjustment.approverName = (approver as any)?.fullName || approver?.username || 'Quản lý kho';
+    adjustment.updatedAt = new Date();
+
+    this.adjustments.set(adjustment.id, adjustment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE app_stock_adjustments
+           SET status = $1, reject_reason = $2, approver_id = $3, approver_name = $4, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5`,
+          [
+            adjustment.status,
+            adjustment.rejectReason,
+            adjustment.approverId,
+            adjustment.approverName,
+            adjustment.id,
+          ],
+        );
+      } catch (err: any) {
+        console.warn('[INVENTORY_SERVICE] Lỗi cập nhật từ chối phiếu vào DB:', err?.message);
+      }
+    }
+
+    return adjustment;
+  }
+
+}

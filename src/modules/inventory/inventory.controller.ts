@@ -34,7 +34,11 @@ import {
   QueryAuditsDto,
   QueryBatchesDto,
   CheckBatchDispatchDto,
+  CreateStockAdjustmentDto,
+  RejectStockAdjustmentDto,
+  QueryStockAdjustmentsDto,
 } from './dto';
+import { StockAdjustmentEntity } from './entities/stock-adjustment.entity';
 import { ShipmentsService } from '../shipments/shipments.service';
 
 /**
@@ -605,5 +609,79 @@ export class InventoryController {
     }
     return this.shipmentsService.findById(id, currentUser);
   }
-}
 
+  /**
+   * SN-214: Tạo phiếu điều chỉnh tồn kho (Chờ duyệt)
+   * POST /inventory/stock-adjustments
+   * Quyền: ADMIN, WAREHOUSE_MANAGER, WH_MANAGER, WAREHOUSE_KEEPER, WAREHOUSE
+   */
+  @Post('stock-adjustments')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  @HttpCode(HttpStatus.CREATED)
+  async createStockAdjustment(
+    @Body() dto: CreateStockAdjustmentDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.createStockAdjustment(dto, currentUser);
+  }
+
+  /**
+   * SN-214: Danh sách phiếu điều chỉnh tồn kho
+   * GET /inventory/stock-adjustments
+   */
+  @Get('stock-adjustments')
+  async getStockAdjustments(
+    @Query() query: QueryStockAdjustmentsDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity[]> {
+    return this.inventoryService.getStockAdjustments(query, currentUser);
+  }
+
+  /**
+   * SN-214: Chi tiết phiếu điều chỉnh tồn kho
+   * GET /inventory/stock-adjustments/:id
+   */
+  @Get('stock-adjustments/:id')
+  async getStockAdjustmentById(
+    @Param('id') id: string,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.getStockAdjustmentById(id);
+  }
+
+  /**
+   * SN-214: Phê duyệt phiếu điều chỉnh tồn kho
+   * PATCH /inventory/stock-adjustments/:id/approve
+   * Quyền: Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN)
+   * Ràng buộc: Người lập và người duyệt KHÔNG ĐƯỢC là một (creatorId !== approverId)
+   */
+  @Patch('stock-adjustments/:id/approve')
+  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
+  async approveStockAdjustment(
+    @Param('id') id: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.approveStockAdjustment(id, currentUser);
+  }
+
+  /**
+   * SN-214: Từ chối phiếu điều chỉnh tồn kho
+   * PATCH /inventory/stock-adjustments/:id/reject
+   * Quyền: Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN)
+   */
+  @Patch('stock-adjustments/:id/reject')
+  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WH_MANAGER)
+  async rejectStockAdjustment(
+    @Param('id') id: string,
+    @Body() dto: RejectStockAdjustmentDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    return this.inventoryService.rejectStockAdjustment(id, dto, currentUser);
+  }
+
+}
