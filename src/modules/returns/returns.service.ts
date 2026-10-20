@@ -51,6 +51,13 @@ export class ReturnsService {
   }
 
   /**
+   * Lấy toàn bộ yêu cầu trả hàng / giảm trừ công nợ (dành cho module Báo cáo công nợ & đối soát)
+   */
+  async getAllReturns(): Promise<ReturnRequestItem[]> {
+    return Array.from(this.returnRequests.values());
+  }
+
+  /**
    * Phân quyền Data Scope (*) cho Module 8 (Trả hàng & điều chỉnh):
    * - Customer: W* (Chỉ thấy và tạo yêu cầu trả hàng của chính mình)
    * - Sales Rep: W* (Chỉ thấy và tạo yêu cầu trả hàng cho tuyến mình)
