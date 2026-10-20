@@ -29,6 +29,8 @@ import { ReceiptsModule } from './modules/receipts/receipts.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DeliveryTripsModule } from './modules/delivery-trips/delivery-trips.module';
 import { CollectionsModule } from './modules/collections/collections.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { DebtReconciliationModule } from './modules/debt-reconciliation/debt-reconciliation.module';
 
 @Module({
   imports: [
@@ -62,6 +64,8 @@ import { CollectionsModule } from './modules/collections/collections.module';
     NotificationsModule,
     DeliveryTripsModule,
     CollectionsModule,
+    PaymentsModule,
+    DebtReconciliationModule,
   ],
 })
 export class AppModule { }

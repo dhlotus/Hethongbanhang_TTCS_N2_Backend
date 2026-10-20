@@ -92,6 +92,94 @@ export class ShipmentsService implements OnModuleInit {
 
   async onModuleInit() {
     await this.ensureShipmentTables();
+    await this.loadShipmentsFromDatabase();
+  }
+
+  async loadShipmentsFromDatabase(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      const rows = await this.databaseService.query<any>(
+        `SELECT s.*, w.name as warehouse_name
+         FROM shipments s
+         LEFT JOIN warehouses w ON s.warehouse_id = w.id::text OR s.warehouse_id = w.code
+         ORDER BY s.created_at DESC;`,
+      );
+      if (rows) {
+        // Đồng bộ xóa: Loại bỏ các phiếu đã bị xóa khỏi database khỏi bộ nhớ
+        const dbIds = new Set(rows.map((r: any) => r.id));
+        for (const [id] of this.shipments.entries()) {
+          if (id.startsWith('shp-1') && !dbIds.has(id)) {
+            this.shipments.delete(id);
+          }
+        }
+
+        for (const r of rows) {
+          const existing = this.shipments.get(r.id);
+          let items = existing?.items;
+          if (!items || items.length === 0) {
+            try {
+              const itemRows = await this.databaseService.query<any>(
+                `SELECT * FROM shipment_items WHERE shipment_id = $1 ORDER BY created_at ASC;`,
+                [r.id],
+              );
+              items = (itemRows || []).map((it: any) => ({
+                id: it.id,
+                sku_code: it.sku_code,
+                skuCode: it.sku_code,
+                product_name: it.product_name,
+                productName: it.product_name,
+                quantity_requested: Number(it.quantity_requested) || 0,
+                quantityRequested: Number(it.quantity_requested) || 0,
+                selected_batch_no: it.selected_batch_no,
+                selectedBatchNo: it.selected_batch_no,
+                fefo_suggested_batch_no: it.fefo_suggested_batch_no,
+                fefoSuggestedBatchNo: it.fefo_suggested_batch_no,
+                is_overridden: it.is_overridden,
+                isOverridden: it.is_overridden,
+                override_reason: it.override_reason,
+                overrideReason: it.override_reason,
+              }));
+            } catch {
+              items = [];
+            }
+          }
+
+          const shipment: ShipmentItem = {
+            id: r.id,
+            orderId: r.order_id,
+            orderCode: r.order_code,
+            customerId: r.customer_id,
+            customerName: r.customer_name,
+            salesRepId: r.sales_rep_id,
+            warehouseId: r.warehouse_id,
+            warehouseName: r.warehouse_name,
+            status: r.status,
+            deliveryAddress: r.delivery_address,
+            receiverName: r.receiver_name,
+            phone: r.phone,
+            carrierName: r.carrier_name,
+            shippingCarrier: r.carrier_name,
+            trackingNumber: r.tracking_number,
+            proofOfDeliveryUrl: r.proof_of_delivery_url,
+            deliveryNote: r.delivery_note,
+            failureReason: r.failure_reason,
+            tripId: r.trip_id,
+            tripCode: r.trip_code,
+            invoiceId: r.invoice_id,
+            invoiceCode: r.invoice_code,
+            shippedAt: r.shipped_at ? new Date(r.shipped_at) : undefined,
+            deliveredAt: r.delivered_at ? new Date(r.delivered_at) : undefined,
+            createdAt: r.created_at ? new Date(r.created_at) : new Date(),
+            updatedAt: r.updated_at ? new Date(r.updated_at) : new Date(),
+            items,
+          };
+          this.shipments.set(shipment.id, shipment);
+        }
+        this.logger.log(`[Shipments] Đã nạp ${rows.length} phiếu xuất kho từ cơ sở dữ liệu PostgreSQL.`);
+      }
+    } catch (err) {
+      this.logger.warn(`Lỗi nạp phiếu xuất từ database: ${err}`);
+    }
   }
 
   async ensureShipmentTables(): Promise<void> {
@@ -257,9 +345,19 @@ export class ShipmentsService implements OnModuleInit {
    * - Sales Rep: R* (Chỉ thấy phiếu xuất của tuyến mình)
    */
   async findAll(
-    query?: { orderId?: string; orderCode?: string; status?: ShipmentItem['status'] },
+    query?: {
+      orderId?: string;
+      orderCode?: string;
+      status?: ShipmentItem['status'] | string;
+      search?: string;
+      page?: string | number;
+      limit?: string | number;
+    },
     currentUser?: ICurrentUser,
-  ): Promise<ShipmentItem[]> {
+  ): Promise<any> {
+    if (this.databaseService?.isConnected()) {
+      await this.loadShipmentsFromDatabase();
+    }
     let list = Array.from(this.shipments.values());
 
     if (currentUser?.roles) {
@@ -297,8 +395,46 @@ export class ShipmentsService implements OnModuleInit {
       const qCode = String(query.orderCode).toLowerCase().trim();
       list = list.filter((s) => s.orderCode?.toLowerCase().trim() === qCode);
     }
-    if (query?.status) {
+    if (query?.status && query.status !== 'ALL') {
       list = list.filter((s) => s.status === query.status);
+    }
+
+    // Backend Search Filter
+    if (query?.search && String(query.search).trim()) {
+      const q = String(query.search).toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.id?.toLowerCase().includes(q) ||
+          s.orderCode?.toLowerCase().includes(q) ||
+          s.customerName?.toLowerCase().includes(q) ||
+          s.receiverName?.toLowerCase().includes(q) ||
+          s.phone?.includes(q) ||
+          s.carrierName?.toLowerCase().includes(q) ||
+          s.trackingNumber?.toLowerCase().includes(q) ||
+          s.tripCode?.toLowerCase().includes(q) ||
+          s.deliveryAddress?.toLowerCase().includes(q),
+      );
+    }
+
+    // Sắp xếp mới nhất lên đầu
+    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Nếu có tham số page hoặc limit thì trả về phân trang
+    if (query?.page !== undefined || query?.limit !== undefined) {
+      const total = list.length;
+      const page = Math.max(1, parseInt(String(query.page || 1), 10) || 1);
+      const limit = Math.max(1, parseInt(String(query.limit || 10), 10) || 10);
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const startIndex = (page - 1) * limit;
+      const data = list.slice(startIndex, startIndex + limit);
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+      };
     }
 
     return list;
@@ -426,6 +562,42 @@ export class ShipmentsService implements OnModuleInit {
     const orderCode = (dto.order_id || dto.orderId || dto.orderCode || '').trim();
     if (!orderCode) {
       throw new BadRequestException('Mã đơn hàng không được để trống');
+    }
+
+    // Nghiệp vụ ERP chuẩn: Kiểm tra xem đơn hàng này đã được tạo phiếu xuất kho đang hoạt động chưa
+    const targetOrderKey = orderCode.toUpperCase();
+    const existingInMem = Array.from(this.shipments.values()).find(
+      (s) =>
+        (s.orderCode?.toUpperCase() === targetOrderKey ||
+          s.orderId?.toUpperCase() === targetOrderKey ||
+          (dto.order_id && s.orderId?.toUpperCase() === String(dto.order_id).toUpperCase()) ||
+          (dto.orderCode && s.orderCode?.toUpperCase() === String(dto.orderCode).toUpperCase())) &&
+        s.status !== 'CANCELLED',
+    );
+    if (existingInMem) {
+      throw new BadRequestException(
+        `Đơn hàng "${orderCode}" đã được lập phiếu xuất kho (Mã phiếu: ${existingInMem.id}). Không thể tạo thêm phiếu xuất trùng lặp!`,
+      );
+    }
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        const existingInDb = await this.databaseService.query<any>(
+          `SELECT id, order_code, status FROM shipments 
+           WHERE (UPPER(order_code) = UPPER($1) OR UPPER(order_id) = UPPER($1) OR (UPPER(order_id) = UPPER($2) AND $2 != '')) 
+             AND status != 'CANCELLED' 
+           LIMIT 1;`,
+          [orderCode, dto.order_id || ''],
+        );
+        if (existingInDb && existingInDb.length > 0) {
+          throw new BadRequestException(
+            `Đơn hàng "${orderCode}" đã được lập phiếu xuất kho (Mã phiếu: ${existingInDb[0].id}). Không thể tạo thêm phiếu xuất trùng lặp!`,
+          );
+        }
+      } catch (checkErr) {
+        if (checkErr instanceof BadRequestException) throw checkErr;
+        this.logger.warn(`Lỗi kiểm tra trùng lặp phiếu xuất: ${checkErr}`);
+      }
     }
     const customerName = (dto.customer_name || dto.customerName || 'Đại lý').trim();
     const warehouseId = dto.warehouse_id || dto.warehouseId || '11111111-0000-0000-0000-000000000001';

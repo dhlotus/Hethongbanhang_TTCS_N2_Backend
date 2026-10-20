@@ -67,12 +67,14 @@ export class WarehousesService implements OnModuleInit {
     }
   }
 
-  async findAll(currentUser?: ICurrentUser): Promise<WarehouseEntity[]> {
+  async findAll(currentUser?: ICurrentUser, query?: Record<string, string>): Promise<any> {
+    let list: WarehouseEntity[] = [];
+
     if (!this.databaseService?.isConnected()) {
       await this.databaseService?.ensureConnection?.();
     }
     if (!this.databaseService?.isConnected()) {
-      return STANDARD_WAREHOUSES.map((wh) => ({
+      list = STANDARD_WAREHOUSES.map((wh) => ({
         id: wh.id,
         code: wh.code,
         name: wh.name,
@@ -82,54 +84,91 @@ export class WarehousesService implements OnModuleInit {
         status: wh.status,
         locationCount: 2,
       }));
+    } else {
+      const roles = currentUser?.roles || [];
+      const isAdmin = roles.includes(UserRole.ADMIN);
+      const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+      const isKeeperOnly = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
+
+      if (isKeeperOnly && currentUser) {
+        const keeperWhId = currentUser.warehouseId;
+        const keeperUserId = currentUser.userId;
+        list = await this.databaseService.query<WarehouseEntity>(
+          `
+          SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
+                 w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
+                 COUNT(l.id)::int AS "locationCount"
+          FROM warehouses w 
+          LEFT JOIN warehouse_locations l ON l.warehouse_id = w.id
+          WHERE (
+            w.manager_id = $1::uuid
+            OR w.id IN (SELECT warehouse_id FROM user_warehouses WHERE user_id = $1::uuid)
+            OR ($2::uuid IS NOT NULL AND w.id = $2::uuid)
+          )
+          GROUP BY w.id
+          ORDER BY w.name ASC
+          `,
+          [keeperUserId, keeperWhId || null],
+        );
+      } else {
+        list = await this.databaseService.query<WarehouseEntity>(`
+          SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
+                 w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
+                 COUNT(l.id)::int AS "locationCount"
+          FROM warehouses w LEFT JOIN warehouse_locations l ON l.warehouse_id = w.id
+          GROUP BY w.id
+          ORDER BY CASE 
+            WHEN w.code = 'KHO-MB-01' THEN 1
+            WHEN w.code = 'KHO-MT-01' THEN 2
+            WHEN w.code = 'KHO-MN-01' THEN 3
+            WHEN w.code = 'KHO-WEST-01' THEN 4
+            ELSE 5
+          END, w.created_at ASC, w.name ASC
+        `);
+      }
     }
 
-    const roles = currentUser?.roles || [];
-    const isAdmin = roles.includes(UserRole.ADMIN);
-    const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
-    const isKeeperOnly = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
-
-    if (isKeeperOnly && currentUser) {
-      const keeperWhId = currentUser.warehouseId;
-      const keeperUserId = currentUser.userId;
-      return this.databaseService.query<WarehouseEntity>(
-        `
-        SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
-               w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
-               COUNT(l.id)::int AS "locationCount"
-        FROM warehouses w 
-        LEFT JOIN warehouse_locations l ON l.warehouse_id = w.id
-        WHERE (
-          w.manager_id = $1::uuid
-          OR w.id IN (SELECT warehouse_id FROM user_warehouses WHERE user_id = $1::uuid)
-          OR ($2::uuid IS NOT NULL AND w.id = $2::uuid)
-        )
-        GROUP BY w.id
-        ORDER BY w.name ASC
-        `,
-        [keeperUserId, keeperWhId || null],
+    // Lọc theo search
+    if (query?.search && String(query.search).trim()) {
+      const q = String(query.search).toLowerCase().trim();
+      list = list.filter(
+        (w) =>
+          w.code?.toLowerCase().includes(q) ||
+          w.name?.toLowerCase().includes(q) ||
+          w.address?.toLowerCase().includes(q) ||
+          w.phone?.includes(q),
       );
     }
 
-    return this.databaseService.query<WarehouseEntity>(`
-      SELECT w.id, w.code, w.name, w.address, w.phone, w.manager_id AS "managerId",
-             w.status, w.created_at AS "createdAt", w.updated_at AS "updatedAt",
-             COUNT(l.id)::int AS "locationCount"
-      FROM warehouses w LEFT JOIN warehouse_locations l ON l.warehouse_id = w.id
-      GROUP BY w.id
-      ORDER BY CASE 
-        WHEN w.code = 'KHO-MB-01' THEN 1
-        WHEN w.code = 'KHO-MT-01' THEN 2
-        WHEN w.code = 'KHO-MN-01' THEN 3
-        WHEN w.code = 'KHO-WEST-01' THEN 4
-        ELSE 5
-      END, w.created_at ASC, w.name ASC
-    `);
+    // Lọc theo status
+    if (query?.status && query.status !== 'ALL') {
+      list = list.filter((w) => w.status === query.status);
+    }
+
+    // Phân trang nếu có query.page hoặc query.limit
+    if (query?.page !== undefined || query?.limit !== undefined) {
+      const total = list.length;
+      const page = Math.max(1, parseInt(String(query.page || 1), 10) || 1);
+      const limit = Math.max(1, parseInt(String(query.limit || 10), 10) || 10);
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const startIndex = (page - 1) * limit;
+      const data = list.slice(startIndex, startIndex + limit);
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+      };
+    }
+
+    return list;
   }
 
   async findById(id: string): Promise<WarehouseEntity | null> {
-    const list = await this.findAll();
-    return list.find((w) => w.id === id || w.code === id) || null;
+    const list: WarehouseEntity[] = await this.findAll();
+    return list.find((w: WarehouseEntity) => w.id === id || w.code === id) || null;
   }
 
   async listManagers(): Promise<WarehouseManagerEntity[]> {

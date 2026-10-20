@@ -29,6 +29,7 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PDFDocument = require('pdfkit');
 import * as fs from 'fs';
+import * as path from 'path';
 
 export interface InvoiceLineItem {
   productId: string;
@@ -96,6 +97,7 @@ export interface DealerDebtSummary {
   maxDebtDays: number;
   paymentTerms: string;
   creditStatus: string;
+  isCreditLimitConfigured: boolean;
 }
 
 export interface PaginatedInvoicesResult {
@@ -202,6 +204,26 @@ export class InvoicesService implements OnModuleInit {
   }
 
   /**
+   * Kiểm tra ngày hóa đơn có thực sự quá hạn theo lịch Việt Nam (Asia/Ho_Chi_Minh)
+   * Chỉ quá hạn khi ngày đến hạn trước ngày hôm nay (không tính quá hạn trong chính ngày đến hạn)
+   */
+  isDateOverdue(dueDate: Date | string): boolean {
+    try {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      const todayStr = formatter.format(new Date());
+      const dueStr = formatter.format(new Date(dueDate));
+      return dueStr < todayStr;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Đồng bộ danh sách hóa đơn trực tiếp từ PostgreSQL và nạp vào bộ nhớ
    */
   async syncFromDatabase(): Promise<void> {
@@ -232,14 +254,19 @@ export class InvoicesService implements OnModuleInit {
         `);
 
         if (rows && rows.length > 0) {
+          const freshMap = new Map<string, InvoiceItem>();
           for (const row of rows) {
             const rawStatus = String(row.payment_status || 'ISSUED').toUpperCase();
             const paid = Number(row.paid_amount || 0);
             const remaining = Number(row.remaining_amount || 0);
-            const isDueOver = remaining > 0 && new Date(row.due_date).getTime() < Date.now();
+            const isDueOver = remaining > 0 && this.isDateOverdue(row.due_date);
 
             let status: InvoiceItem['status'] = 'ISSUED';
-            if (rawStatus === 'PAID' || remaining === 0) {
+            if (rawStatus === 'CANCELLED') {
+              status = 'CANCELLED';
+            } else if (rawStatus === 'DRAFT') {
+              status = 'DRAFT';
+            } else if (rawStatus === 'PAID' || remaining === 0) {
               status = 'PAID';
             } else if (rawStatus === 'OVERDUE' || isDueOver) {
               status = 'OVERDUE';
@@ -247,10 +274,6 @@ export class InvoicesService implements OnModuleInit {
               status = 'PARTIALLY_PAID';
             } else if (rawStatus === 'UNPAID' || paid === 0) {
               status = 'UNPAID';
-            } else if (rawStatus === 'CANCELLED') {
-              status = 'CANCELLED';
-            } else if (rawStatus === 'DRAFT') {
-              status = 'DRAFT';
             }
 
             const inv: InvoiceItem = {
@@ -287,9 +310,12 @@ export class InvoicesService implements OnModuleInit {
               updatedAt: new Date(row.updated_at),
             };
 
-            this.invoices.set(inv.id, inv);
-            // Cũng map theo invoiceCode để tìm kiếm linh hoạt
-            this.invoices.set(inv.invoiceCode, inv);
+            freshMap.set(inv.id, inv);
+            freshMap.set(inv.invoiceCode, inv);
+          }
+          this.invoices.clear();
+          for (const [k, v] of freshMap.entries()) {
+            this.invoices.set(k, v);
           }
           this.logger.log(`[InvoicesService] Đã đồng bộ ${rows.length} hóa đơn từ PostgreSQL.`);
           return;
@@ -344,7 +370,58 @@ export class InvoicesService implements OnModuleInit {
     ];
   }
 
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'invoices.json');
+  }
+
+  public saveInvoicesToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const uniqueList = Array.from(new Set(this.invoices.values()));
+      fs.writeFileSync(filePath, JSON.stringify(uniqueList, null, 2), 'utf-8');
+    } catch (err: unknown) {
+      this.logger.warn(`[InvoicesService] Không thể lưu invoices.json: ${(err as Error).message}`);
+    }
+  }
+
+  private loadInvoicesFromDisk(): boolean {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return false;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        for (const item of parsed) {
+          const inv: InvoiceItem = {
+            ...item,
+            issueDate: new Date(item.issueDate),
+            dueDate: new Date(item.dueDate),
+            createdAt: new Date(item.createdAt),
+            updatedAt: new Date(item.updatedAt),
+            paymentHistory: (item.paymentHistory || []).map((ph: any) => ({
+              ...ph,
+              paymentDate: new Date(ph.paymentDate),
+            })),
+          };
+          this.invoices.set(inv.id, inv);
+          this.invoices.set(inv.invoiceCode, inv);
+        }
+        return true;
+      }
+    } catch (err: unknown) {
+      this.logger.warn(`[InvoicesService] Lỗi nạp invoices.json: ${(err as Error).message}`);
+    }
+    return false;
+  }
+
   private seedInitialInvoices() {
+    const loaded = this.loadInvoicesFromDisk();
+    if (loaded) return;
+
     const now = Date.now();
     const dealerCustId = '55555555-0000-0000-0000-000000000001';
     const dailyCustId = '55555555-0000-0000-0000-000000000002';
@@ -425,7 +502,7 @@ export class InvoicesService implements OnModuleInit {
         amount: 8500000,
         paidAmount: 0,
         remainingAmount: 8500000,
-        status: 'ISSUED',
+        status: 'UNPAID',
         issueDate: new Date(now - 27 * 86400000),
         dueDate: new Date(now + 3 * 86400000),
         note: 'Hóa đơn lô nước yến dinh dưỡng - Còn đúng 3 ngày đến hạn',
@@ -447,7 +524,7 @@ export class InvoicesService implements OnModuleInit {
         amount: 6000000,
         paidAmount: 0,
         remainingAmount: 6000000,
-        status: 'ISSUED',
+        status: 'OVERDUE',
         issueDate: new Date(now - 35 * 86400000),
         dueDate: new Date(now - 5 * 86400000),
         note: 'Hóa đơn bánh kẹo nhập khẩu - Đã quá hạn thanh toán 5 ngày',
@@ -478,12 +555,377 @@ export class InvoicesService implements OnModuleInit {
         createdAt: new Date(now - 15 * 86400000),
         updatedAt: new Date(now - 15 * 86400000),
       },
+      // 6. Minh Khang - Hóa đơn đợt 5 để khớp đúng dư nợ 45.000.000 đ
+      {
+        id: '88888888-0000-0000-0000-000000000006',
+        invoiceCode: 'HD2609-MK-05',
+        orderId: '77777777-0000-0000-0000-000000000006',
+        orderCode: 'DH2609-08910',
+        customerId: dealerCustId,
+        customerName: 'Đại Lý Cửa Hàng Minh Khang',
+        customerEmail: 'dealer@loha.vn',
+        salesRepId: 'usr-sale-01',
+        amount: 20500000,
+        paidAmount: 0,
+        remainingAmount: 20500000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-09-01T08:30:00+07:00'),
+        dueDate: new Date('2026-09-25T17:00:00+07:00'),
+        note: 'Hóa đơn lô sản phẩm Loha Gold đợt 5 - Đã quá hạn 25 ngày',
+        items: this.generateSampleLineItems(20500000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-01T08:30:00+07:00'),
+        updatedAt: new Date('2026-09-01T08:30:00+07:00'),
+      },
+      // 7. Đại lý Toàn Cầu (DL-0002) - 28.000.000 đ trong hạn
+      {
+        id: '88888888-0000-0000-0000-000000000007',
+        invoiceCode: 'HD2609-TC-01',
+        orderId: '77777777-0000-0000-0000-000000000007',
+        orderCode: 'DH2609-09123',
+        customerId: 'cust-dl-0002',
+        customerName: 'Tổng Đại Lý Phân Phối Thực Phẩm Toàn Cầu',
+        customerEmail: 'toancau.food@lohasales.vn',
+        salesRepId: 'usr-sale-01',
+        amount: 28000000,
+        paidAmount: 0,
+        remainingAmount: 28000000,
+        status: 'UNPAID',
+        issueDate: new Date('2026-09-20T09:00:00+07:00'),
+        dueDate: new Date('2026-11-05T17:00:00+07:00'),
+        note: 'Xuất hàng phân phối thực phẩm dinh dưỡng miền Nam - Còn hạn 16 ngày',
+        items: this.generateSampleLineItems(28000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-20T09:00:00+07:00'),
+        updatedAt: new Date('2026-09-20T09:00:00+07:00'),
+      },
+      // 8. Đại lý Hoàng Gia (DL-0003) - Hóa đơn 1: 40tr, thanh toán 15tr, còn nợ 25tr, quá hạn 56 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000008',
+        invoiceCode: 'HD2608-HG-01',
+        orderId: '77777777-0000-0000-0000-000000000008',
+        orderCode: 'DH2608-08111',
+        customerId: 'cust-dl-0003',
+        customerName: 'Công Ty Cổ Phần Thương Mại Dịch Vụ Hoàng Gia',
+        customerEmail: 'hoanggia.trade@lohasales.vn',
+        salesRepId: 'usr-sale-02',
+        amount: 40000000,
+        paidAmount: 15000000,
+        remainingAmount: 25000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-07-20T08:00:00+07:00'),
+        dueDate: new Date('2026-08-25T17:00:00+07:00'),
+        note: 'Hóa đơn lô sữa lon Hoàng Gia - Quá hạn 56 ngày (Nhóm 31–60 ngày)',
+        items: this.generateSampleLineItems(40000000),
+        paymentHistory: [
+          {
+            id: 'pay-hg-001',
+            paymentCode: 'UNC-HG-01',
+            amount: 15000000,
+            paymentDate: new Date('2026-08-20T10:00:00+07:00'),
+            paymentMethod: 'BANK_TRANSFER',
+            note: 'Tạm ứng đợt 1 chuyển khoản qua Techcombank',
+            recordedBy: 'Kế toán công nợ',
+          },
+        ],
+        createdAt: new Date('2026-07-20T08:00:00+07:00'),
+        updatedAt: new Date('2026-08-20T10:00:00+07:00'),
+      },
+      // 9. Đại lý Hoàng Gia (DL-0003) - Hóa đơn 2: 25tr, chưa trả, quá hạn 49 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000009',
+        invoiceCode: 'HD2609-HG-02',
+        orderId: '77777777-0000-0000-0000-000000000009',
+        orderCode: 'DH2609-08222',
+        customerId: 'cust-dl-0003',
+        customerName: 'Công Ty Cổ Phần Thương Mại Dịch Vụ Hoàng Gia',
+        customerEmail: 'hoanggia.trade@lohasales.vn',
+        salesRepId: 'usr-sale-02',
+        amount: 25000000,
+        paidAmount: 0,
+        remainingAmount: 25000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-08-05T09:30:00+07:00'),
+        dueDate: new Date('2026-09-01T17:00:00+07:00'),
+        note: 'Hóa đơn lô bánh quy canxi - Quá hạn 49 ngày (Nhóm 31–60 ngày)',
+        items: this.generateSampleLineItems(25000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-08-05T09:30:00+07:00'),
+        updatedAt: new Date('2026-08-05T09:30:00+07:00'),
+      },
+      // 10. Đại lý Hoàng Gia (DL-0003) - Hóa đơn 3: 15tr, trong hạn (Tổng dư nợ = 25+25+15 = 65tr)
+      {
+        id: '88888888-0000-0000-0000-000000000010',
+        invoiceCode: 'HD2610-HG-03',
+        orderId: '77777777-0000-0000-0000-000000000010',
+        orderCode: 'DH2610-09333',
+        customerId: 'cust-dl-0003',
+        customerName: 'Công Ty Cổ Phần Thương Mại Dịch Vụ Hoàng Gia',
+        customerEmail: 'hoanggia.trade@lohasales.vn',
+        salesRepId: 'usr-sale-02',
+        amount: 15000000,
+        paidAmount: 0,
+        remainingAmount: 15000000,
+        status: 'UNPAID',
+        issueDate: new Date('2026-10-02T14:00:00+07:00'),
+        dueDate: new Date('2026-11-15T17:00:00+07:00'),
+        note: 'Hóa đơn đợt 3 hàng dinh dưỡng - Còn hạn 26 ngày',
+        items: this.generateSampleLineItems(15000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-10-02T14:00:00+07:00'),
+        updatedAt: new Date('2026-10-02T14:00:00+07:00'),
+      },
+      // 11. Đại lý An Phát (DL-0004) - Hóa đơn 5tr, quá hạn 15 ngày (khớp nợ 12tr với HD2609-005 còn 7tr)
+      {
+        id: '88888888-0000-0000-0000-000000000011',
+        invoiceCode: 'HD2609-AB-02',
+        orderId: '77777777-0000-0000-0000-000000000011',
+        orderCode: 'DH2609-09444',
+        customerId: dailyCustId,
+        customerName: 'Đại Lý Phân Phối Hàng Tiêu Dùng An Phát',
+        customerEmail: 'daily@loha.vn',
+        salesRepId: 'usr-sale-02',
+        amount: 5000000,
+        paidAmount: 0,
+        remainingAmount: 5000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-09-10T10:00:00+07:00'),
+        dueDate: new Date('2026-10-05T17:00:00+07:00'),
+        note: 'Hóa đơn lô nước yến dinh dưỡng - Quá hạn 15 ngày (Nhóm 1–30 ngày)',
+        items: this.generateSampleLineItems(5000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-10T10:00:00+07:00'),
+        updatedAt: new Date('2026-09-10T10:00:00+07:00'),
+      },
+      // 12. Đại lý Phương Đông (DL-0005) - 35.000.000 đ trong hạn
+      {
+        id: '88888888-0000-0000-0000-000000000012',
+        invoiceCode: 'HD2609-PD-01',
+        orderId: '77777777-0000-0000-0000-000000000012',
+        orderCode: 'DH2609-09555',
+        customerId: 'cust-dl-0005',
+        customerName: 'Nhà Phân Phối Dinh Dưỡng Phương Đông',
+        customerEmail: 'phuongdong.nutri@lohasales.vn',
+        salesRepId: 'usr-sale-01',
+        amount: 35000000,
+        paidAmount: 0,
+        remainingAmount: 35000000,
+        status: 'UNPAID',
+        issueDate: new Date('2026-09-25T11:00:00+07:00'),
+        dueDate: new Date('2026-11-10T17:00:00+07:00'),
+        note: 'Xuất kho sữa bột dinh dưỡng - Chưa đến hạn thanh toán',
+        items: this.generateSampleLineItems(35000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-25T11:00:00+07:00'),
+        updatedAt: new Date('2026-09-25T11:00:00+07:00'),
+      },
+      // 13. Đại lý Bảo Châu (DL-0006) - 18.000.000 đ quá hạn 8 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000013',
+        invoiceCode: 'HD2609-BC-01',
+        orderId: '77777777-0000-0000-0000-000000000013',
+        orderCode: 'DH2609-09666',
+        customerId: 'cust-dl-0006',
+        customerName: 'Đại Lý Bách Hóa Thực Phẩm Bảo Châu',
+        customerEmail: 'baochau.food@lohasales.vn',
+        salesRepId: 'usr-sale-01',
+        amount: 18000000,
+        paidAmount: 0,
+        remainingAmount: 18000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-09-12T09:00:00+07:00'),
+        dueDate: new Date('2026-10-12T17:00:00+07:00'),
+        note: 'Hóa đơn bánh ngũ cốc - Quá hạn 8 ngày (Nhóm 1–30 ngày)',
+        items: this.generateSampleLineItems(18000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-12T09:00:00+07:00'),
+        updatedAt: new Date('2026-09-12T09:00:00+07:00'),
+      },
+      // 14. Đại lý Khánh An (DL-0007) - 9.500.000 đ trong hạn
+      {
+        id: '88888888-0000-0000-0000-000000000014',
+        invoiceCode: 'HD2609-KA-01',
+        orderId: '77777777-0000-0000-0000-000000000014',
+        orderCode: 'DH2609-09777',
+        customerId: 'cust-dl-0007',
+        customerName: 'Cửa Hàng Bách Hóa Tổng Hợp Khánh An',
+        customerEmail: 'khanhan.mart@lohasales.vn',
+        salesRepId: 'usr-sale-01',
+        amount: 9500000,
+        paidAmount: 0,
+        remainingAmount: 9500000,
+        status: 'UNPAID',
+        issueDate: new Date('2026-09-28T14:30:00+07:00'),
+        dueDate: new Date('2026-10-28T17:00:00+07:00'),
+        note: 'Hóa đơn nước yến dinh dưỡng - Trong hạn',
+        items: this.generateSampleLineItems(9500000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-28T14:30:00+07:00'),
+        updatedAt: new Date('2026-09-28T14:30:00+07:00'),
+      },
+      // 15. Đại lý Thịnh Vượng (DL-0008) - 30tr, thanh toán 8tr, còn nợ 22tr, quá hạn 30 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000015',
+        invoiceCode: 'HD2608-TV-01',
+        orderId: '77777777-0000-0000-0000-000000000015',
+        orderCode: 'DH2608-08888',
+        customerId: 'cust-dl-0008',
+        customerName: 'Đại Lý Tiêu Dùng Nhanh Thịnh Vượng',
+        customerEmail: 'thinhvuong.fmcg@lohasales.vn',
+        salesRepId: 'usr-sale-02',
+        amount: 30000000,
+        paidAmount: 8000000,
+        remainingAmount: 22000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-08-20T08:00:00+07:00'),
+        dueDate: new Date('2026-09-20T17:00:00+07:00'),
+        note: 'Hóa đơn tổng hợp bánh kẹo sữa - Quá hạn 30 ngày (Nhóm 1–30 ngày)',
+        items: this.generateSampleLineItems(30000000),
+        paymentHistory: [
+          {
+            id: 'pay-tv-001',
+            paymentCode: 'UNC-TV-01',
+            amount: 8000000,
+            paymentDate: new Date('2026-09-18T15:00:00+07:00'),
+            paymentMethod: 'BANK_TRANSFER',
+            note: 'Thanh toán đợt 1 qua Vietcombank',
+            recordedBy: 'Kế toán công nợ',
+          },
+        ],
+        createdAt: new Date('2026-08-20T08:00:00+07:00'),
+        updatedAt: new Date('2026-09-18T15:00:00+07:00'),
+      },
+      // 16. Đại lý Vạn Phúc (DL-0009) - 15.500.000 đ quá hạn 50 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000016',
+        invoiceCode: 'HD2608-VP-01',
+        orderId: '77777777-0000-0000-0000-000000000016',
+        orderCode: 'DH2608-08999',
+        customerId: 'cust-dl-0009',
+        customerName: 'Siêu Thị Mini Sức Khỏe Gia Đình Vạn Phúc',
+        customerEmail: 'vanphuc.mart@lohasales.vn',
+        salesRepId: 'usr-sale-02',
+        amount: 15500000,
+        paidAmount: 0,
+        remainingAmount: 15500000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-08-01T08:30:00+07:00'),
+        dueDate: new Date('2026-08-31T17:00:00+07:00'),
+        note: 'Hóa đơn sữa hạt dinh dưỡng - Quá hạn 50 ngày (Nhóm 31–60 ngày)',
+        items: this.generateSampleLineItems(15500000),
+        paymentHistory: [],
+        createdAt: new Date('2026-08-01T08:30:00+07:00'),
+        updatedAt: new Date('2026-08-01T08:30:00+07:00'),
+      },
+      // 17. Đại lý Thảo Điền (DL-0010) - 11.000.000 đ trong hạn
+      {
+        id: '88888888-0000-0000-0000-000000000017',
+        invoiceCode: 'HD2610-TD-01',
+        orderId: '77777777-0000-0000-0000-000000000017',
+        orderCode: 'DH2610-09010',
+        customerId: 'cust-dl-0010',
+        customerName: 'Cửa Hàng Thực Dưỡng Xanh Thảo Điền',
+        customerEmail: 'thaodien.organic@lohasales.vn',
+        salesRepId: 'usr-sale-01',
+        amount: 11000000,
+        paidAmount: 0,
+        remainingAmount: 11000000,
+        status: 'UNPAID',
+        issueDate: new Date('2026-10-01T09:00:00+07:00'),
+        dueDate: new Date('2026-11-01T17:00:00+07:00'),
+        note: 'Hóa đơn nước yến & trà thực dưỡng - Trong hạn',
+        items: this.generateSampleLineItems(11000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-10-01T09:00:00+07:00'),
+        updatedAt: new Date('2026-10-01T09:00:00+07:00'),
+      },
+      // 18. Bách Hóa Hà Đông (DL-HN-004) - 128.000.000 đ quá hạn 97 ngày (KHẨN CẤP / CRITICAL)
+      {
+        id: '88888888-0000-0000-0000-000000000018',
+        invoiceCode: 'HD2606-HD-01',
+        orderId: '77777777-0000-0000-0000-000000000018',
+        orderCode: 'DH2606-06101',
+        customerId: 'cust-hn-002',
+        customerName: 'Bách Hóa Tổng Hợp Hà Đông',
+        customerEmail: 'hadong.mart@lohasales.vn',
+        salesRepId: 'usr-sales-002',
+        amount: 128000000,
+        paidAmount: 0,
+        remainingAmount: 128000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-06-15T08:00:00+07:00'),
+        dueDate: new Date('2026-07-15T17:00:00+07:00'),
+        note: 'Hóa đơn tổng hợp bánh kẹo & sữa lon - Quá hạn 97 ngày (> 90 ngày, Cần ưu tiên xử lý khẩn cấp)',
+        items: this.generateSampleLineItems(128000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-06-15T08:00:00+07:00'),
+        updatedAt: new Date('2026-06-15T08:00:00+07:00'),
+      },
+      // 19. Đại Lý Thăng Long (DL-HN-001) - 45.000.000 đ quá hạn 15 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000019',
+        invoiceCode: 'HD2609-TL-01',
+        orderId: '77777777-0000-0000-0000-000000000019',
+        orderCode: 'DH2609-09119',
+        customerId: 'cust-dl-hn-001',
+        customerName: 'Đại Lý Thực Phẩm Sạch Thăng Long',
+        customerEmail: 'thanglong.clean@lohasales.vn',
+        salesRepId: 'usr-sales-002',
+        amount: 45000000,
+        paidAmount: 0,
+        remainingAmount: 45000000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-09-10T10:00:00+07:00'),
+        dueDate: new Date('2026-10-05T17:00:00+07:00'),
+        note: 'Hóa đơn nước yến Thăng Long - Quá hạn 15 ngày (Nhóm 1–30 ngày)',
+        items: this.generateSampleLineItems(45000000),
+        paymentHistory: [],
+        createdAt: new Date('2026-09-10T10:00:00+07:00'),
+        updatedAt: new Date('2026-09-10T10:00:00+07:00'),
+      },
+      // 20. Miền Trung Đà Nẵng (DL-DN-001) - 48.222.000 đ quá hạn 35 ngày
+      {
+        id: '88888888-0000-0000-0000-000000000020',
+        invoiceCode: 'HD2608-DN-01',
+        orderId: '77777777-0000-0000-0000-000000000020',
+        orderCode: 'DH2608-08120',
+        customerId: 'cust-dl-dn-001',
+        customerName: 'Công Ty TNHH Thương Mại Miền Trung Đà Nẵng',
+        customerEmail: 'mientrung.trade@lohasales.vn',
+        salesRepId: 'usr-sale-03',
+        amount: 48222000,
+        paidAmount: 0,
+        remainingAmount: 48222000,
+        status: 'OVERDUE',
+        issueDate: new Date('2026-08-15T09:00:00+07:00'),
+        dueDate: new Date('2026-09-15T17:00:00+07:00'),
+        note: 'Hóa đơn hàng dinh dưỡng Đà Nẵng - Quá hạn 35 ngày (Nhóm 31–60 ngày)',
+        items: this.generateSampleLineItems(48222000),
+        paymentHistory: [],
+        createdAt: new Date('2026-08-15T09:00:00+07:00'),
+        updatedAt: new Date('2026-08-15T09:00:00+07:00'),
+      },
     ];
 
     for (const inv of seed) {
       this.invoices.set(inv.id, inv);
       this.invoices.set(inv.invoiceCode, inv);
     }
+    this.saveInvoicesToDisk();
+  }
+
+  /**
+   * Lấy toàn bộ danh sách hóa đơn hiện hành trong hệ thống (dành cho module Báo cáo công nợ & đối soát)
+   */
+  async getAllInvoices(): Promise<InvoiceItem[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncFromDatabase();
+    }
+    const unique = new Map<string, InvoiceItem>();
+    for (const inv of this.invoices.values()) {
+      unique.set(inv.id, inv);
+    }
+    return Array.from(unique.values());
   }
 
   /**
@@ -492,24 +934,37 @@ export class InvoicesService implements OnModuleInit {
   resolveTargetCustomerId(currentUser?: ICurrentUser): string {
     if (!currentUser) return '55555555-0000-0000-0000-000000000001';
 
-    // 1. Nếu Token có sẵn customerId hoặc agencyId thì dùng ngay
-    if (currentUser.customerId) return currentUser.customerId;
-    if (currentUser.agencyId) return currentUser.agencyId;
-
-    // 2. Tra cứu email / username đặc trưng của đại lý
     const email = (currentUser.email || '').toLowerCase().trim();
     const uname = (currentUser.username || '').toLowerCase().trim();
+    const cId = currentUser.customerId || currentUser.agencyId || '';
 
-    if (uname === 'dealer' || email === 'dealer@loha.vn') {
+    // 1. Nhận diện đại lý Minh Khang
+    if (
+      uname === 'dealer' ||
+      email === 'dealer@loha.vn' ||
+      cId === 'cust-dl-0001' ||
+      cId === 'cust-001' ||
+      cId === '55555555-0000-0000-0000-000000000001'
+    ) {
       return '55555555-0000-0000-0000-000000000001';
     }
-    if (uname === 'daily' || email === 'daily@loha.vn') {
+
+    // 2. Nhận diện đại lý An Bình
+    if (
+      uname === 'daily' ||
+      email === 'daily@loha.vn' ||
+      cId === 'cust-dl-0002' ||
+      cId === 'cust-002' ||
+      cId === '55555555-0000-0000-0000-000000000002'
+    ) {
       return '55555555-0000-0000-0000-000000000002';
     }
+
     if (email === 'bahung@gmail.com') {
       return '0c4a39c5-0b00-4205-9fa8-2853d85ef0dc';
     }
 
+    if (cId) return cId;
     return currentUser.userId;
   }
 
@@ -573,28 +1028,36 @@ export class InvoicesService implements OnModuleInit {
       list = list.filter((inv) => inv.customerId === query.customerId);
     }
 
+    // Chuẩn hóa trạng thái nợ (PAID, PARTIALLY_PAID, UNPAID, OVERDUE)
+    list = list.map((inv) => {
+      if (inv.status !== 'CANCELLED' && inv.status !== 'DRAFT') {
+        if (inv.remainingAmount === 0 || inv.status === 'PAID') {
+          return { ...inv, status: 'PAID' as const };
+        }
+        if (inv.remainingAmount > 0 && this.isDateOverdue(inv.dueDate)) {
+          return { ...inv, status: 'OVERDUE' as const };
+        }
+        if (inv.paidAmount > 0 && inv.remainingAmount > 0) {
+          return { ...inv, status: 'PARTIALLY_PAID' as const };
+        }
+        if (inv.paidAmount === 0) {
+          return { ...inv, status: 'UNPAID' as const };
+        }
+      }
+      return inv;
+    });
+
     // Lọc theo trạng thái nợ
     if (query?.status) {
-      const now = new Date();
       const statusParam = String(query.status).toUpperCase().trim();
       if (statusParam === 'OVERDUE') {
-        list = list.filter((inv) => inv.remainingAmount > 0 && new Date(inv.dueDate) < now);
+        list = list.filter((inv) => inv.status === 'OVERDUE');
       } else if (statusParam === 'UNPAID') {
-        list = list.filter(
-          (inv) =>
-            (inv.status === 'UNPAID' || inv.status === 'ISSUED' || inv.paidAmount === 0) &&
-            inv.status !== 'PAID' &&
-            !(inv.remainingAmount > 0 && new Date(inv.dueDate) < now),
-        );
+        list = list.filter((inv) => inv.status === 'UNPAID');
       } else if (statusParam === 'PARTIAL' || statusParam === 'PARTIALLY_PAID') {
-        list = list.filter(
-          (inv) =>
-            (inv.status === 'PARTIALLY_PAID' || (inv.paidAmount > 0 && inv.remainingAmount > 0)) &&
-            inv.status !== 'PAID' &&
-            !(inv.remainingAmount > 0 && new Date(inv.dueDate) < now),
-        );
+        list = list.filter((inv) => inv.status === 'PARTIALLY_PAID');
       } else if (statusParam === 'PAID') {
-        list = list.filter((inv) => inv.status === 'PAID' || inv.remainingAmount === 0);
+        list = list.filter((inv) => inv.status === 'PAID');
       } else {
         list = list.filter((inv) => inv.status === statusParam);
       }
@@ -722,29 +1185,29 @@ export class InvoicesService implements OnModuleInit {
         inv.status !== 'CANCELLED',
     );
 
-    const now = new Date();
     let currentDebt = 0;
     let overdueDebt = 0;
     let overdueInvoicesCount = 0;
     let unpaidInvoicesCount = 0;
 
     for (const inv of invoices) {
-      if (inv.remainingAmount > 0) {
+      if (inv.status !== 'CANCELLED' && inv.status !== 'DRAFT' && inv.remainingAmount > 0) {
         currentDebt += inv.remainingAmount;
         unpaidInvoicesCount++;
-        if (new Date(inv.dueDate) < now) {
+        if (this.isDateOverdue(inv.dueDate)) {
           overdueDebt += inv.remainingAmount;
           overdueInvoicesCount++;
         }
       }
     }
 
-    let creditLimit = 150000000;
+    let creditLimit = 0;
     let temporaryCreditLimit = 0;
     let maxDebtDays = 30;
     let paymentTerms = 'NET_30';
-    let customerCode = 'DL-MK-001';
-    let customerName = 'Đại Lý Cửa Hàng Minh Khang';
+    let customerCode = '';
+    let customerName = '';
+    let isCreditLimitConfigured = false;
 
     // 1. Thử lấy từ PostgreSQL Database
     if (this.databaseService?.isConnected()) {
@@ -757,7 +1220,10 @@ export class InvoicesService implements OnModuleInit {
           const row = custRes[0];
           customerCode = row.code || customerCode;
           customerName = row.name || customerName;
-          creditLimit = Number(row.credit_limit || creditLimit);
+          if (row.credit_limit !== null && row.credit_limit !== undefined) {
+            creditLimit = Number(row.credit_limit);
+            isCreditLimitConfigured = true;
+          }
         }
       } catch {}
     }
@@ -767,7 +1233,10 @@ export class InvoicesService implements OnModuleInit {
       try {
         const cl = await this.creditLimitService.getAgencyCreditLimitById(targetCustId);
         if (cl) {
-          creditLimit = cl.creditLimit || creditLimit;
+          if (cl.creditLimit !== undefined && cl.creditLimit !== null) {
+            creditLimit = Number(cl.creditLimit);
+            isCreditLimitConfigured = true;
+          }
           temporaryCreditLimit = cl.temporaryCreditLimit || 0;
           maxDebtDays = cl.maxDebtDays || maxDebtDays;
           paymentTerms = cl.paymentTerms || paymentTerms;
@@ -775,6 +1244,16 @@ export class InvoicesService implements OnModuleInit {
           customerName = cl.agencyName || customerName;
         }
       } catch {}
+    }
+
+    // Fallback cho đại lý mẫu Minh Khang nếu chưa có cấu hình trong DB
+    if (targetCustId === '55555555-0000-0000-0000-000000000001') {
+      customerCode = customerCode || 'DL-MK-001';
+      customerName = customerName || 'Đại Lý Cửa Hàng Minh Khang';
+      if (!isCreditLimitConfigured) {
+        creditLimit = 150000000;
+        isCreditLimitConfigured = true;
+      }
     }
 
     const effectiveLimit = creditLimit + temporaryCreditLimit;
@@ -808,6 +1287,7 @@ export class InvoicesService implements OnModuleInit {
       maxDebtDays,
       paymentTerms,
       creditStatus,
+      isCreditLimitConfigured,
     };
   }
 
@@ -821,6 +1301,9 @@ export class InvoicesService implements OnModuleInit {
     currentUser?: ICurrentUser,
   ): Promise<{ invoice: InvoiceItem; summary: DealerDebtSummary; message: string }> {
     const invoice = await this.findById(invoiceId, currentUser);
+    if (invoice.status === 'CANCELLED') {
+      throw new BadRequestException('Hóa đơn đã bị hủy, không thể thực hiện thanh toán.');
+    }
     const payAmount = Math.max(0, Number(dto.amount || 0));
 
     if (payAmount <= 0) {
@@ -953,6 +1436,40 @@ export class InvoicesService implements OnModuleInit {
       summary,
       message: `Đã ghi nhận thanh toán ${payAmount.toLocaleString('vi-VN')} đ cho hóa đơn ${invoice.invoiceCode}. Số tiền còn nợ: ${invoice.remainingAmount.toLocaleString('vi-VN')} đ.`,
     };
+  }
+
+  /**
+   * Lấy danh sách các hóa đơn còn dư nợ của đại lý (SN-202)
+   */
+  async findUnpaidInvoicesForCustomer(customerId: string): Promise<InvoiceItem[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncFromDatabase();
+    }
+    const uniqueMap = new Map<string, InvoiceItem>();
+    for (const inv of this.invoices.values()) {
+      uniqueMap.set(inv.id, inv);
+    }
+    const all = Array.from(uniqueMap.values());
+    return all.filter((inv) => {
+      const matchCustomer =
+        inv.customerId === customerId ||
+        inv.customerCode === customerId ||
+        (customerId === 'cust-001' && (inv.customerId === '55555555-0000-0000-0000-000000000001' || inv.customerCode === 'DL-0001')) ||
+        (customerId === '55555555-0000-0000-0000-000000000001' && (inv.customerId === 'cust-001' || inv.customerCode === 'DL-0001')) ||
+        (customerId === 'cust-002' && (inv.customerId === '55555555-0000-0000-0000-000000000002' || inv.customerCode === 'DL-0002')) ||
+        (customerId === '55555555-0000-0000-0000-000000000002' && (inv.customerId === 'cust-002' || inv.customerCode === 'DL-0002'));
+
+      return matchCustomer && inv.remainingAmount > 0 && inv.status !== 'PAID' && inv.status !== 'CANCELLED';
+    });
+  }
+
+  /**
+   * Cập nhật trạng thái và số tiền hóa đơn trong bộ nhớ (SN-202)
+   */
+  async updateInvoiceStateInMemory(updatedInvoice: InvoiceItem): Promise<void> {
+    this.invoices.set(updatedInvoice.id, updatedInvoice);
+    this.invoices.set(updatedInvoice.invoiceCode, updatedInvoice);
+    this.saveInvoicesToDisk();
   }
 
   private formatCustomerCode(invoice: InvoiceItem): string {
@@ -1146,10 +1663,76 @@ export class InvoicesService implements OnModuleInit {
     <html lang="vi">
     <head>
       <meta charset="UTF-8">
-      <title></title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+      <title>Hóa đơn ${invoice.invoiceCode} — LOHA SALES</title>
       <style>
         @page { size: A4; margin: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 15mm 18mm; font-size: 13px; line-height: 1.5; background: #fff; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: #0f172a; margin: 0; padding: 15mm 18mm; font-size: 13px; line-height: 1.5; background: #fff; }
+        
+        /* ── THANH ĐIỀU HƯỚNG QUAY LẠI & THAO TÁC (ẨN HOÀN TOÀN KHI IN / XUẤT PDF) ── */
+        .invoice-navigation-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 22px;
+          padding: 10px 16px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        .btn-back {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 9px 18px;
+          background: #ffffff;
+          color: #1e293b;
+          border: 1.5px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 13.5px;
+          font-weight: 700;
+          cursor: pointer;
+          text-decoration: none;
+          transition: all 0.2s ease;
+          min-height: 42px;
+          touch-action: manipulation;
+          user-select: none;
+        }
+        .btn-back:hover {
+          background: #f1f5f9;
+          color: #4f46e5;
+          border-color: #6366f1;
+        }
+        .btn-back:active {
+          transform: scale(0.97);
+        }
+        .btn-action-print {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 9px 18px;
+          background: #4f46e5;
+          color: #ffffff;
+          border: 1px solid #4338ca;
+          border-radius: 8px;
+          font-size: 13.5px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          min-height: 42px;
+          touch-action: manipulation;
+          user-select: none;
+        }
+        .btn-action-print:hover {
+          background: #4338ca;
+        }
+        .btn-action-print:active {
+          transform: scale(0.97);
+        }
+
         .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4f46e5; padding-bottom: 14px; margin-bottom: 20px; }
         .brand-title { font-size: 22px; font-weight: 800; color: #4f46e5; margin: 0; }
         .invoice-title { font-size: 17px; font-weight: 700; color: #0f172a; margin: 4px 0 0 0; text-transform: uppercase; }
@@ -1159,7 +1742,7 @@ export class InvoicesService implements OnModuleInit {
         .info-col h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #475569; margin: 0 0 8px 0; border-bottom: 1px dashed #cbd5e1; padding-bottom: 4px; }
         .info-row { display: flex; margin-bottom: 4px; font-size: 12px; }
         .info-row .lbl { width: 110px; color: #64748b; flex-shrink: 0; }
-        .info-row .val { font-weight: 600; color: #0f172a; }
+        .info-row .val { font-weight: 600; color: #0f172a; word-break: break-word; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
         th { background: #f1f5f9; color: #334155; font-weight: 700; text-align: left; padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; text-transform: uppercase; }
         td { padding: 8px 10px; border: 1px solid #e2e8f0; font-size: 12px; }
@@ -1172,9 +1755,55 @@ export class InvoicesService implements OnModuleInit {
         .badge-paid { background: #dcfce7; color: #15803d; }
         .badge-partial { background: #fef9c3; color: #a16207; }
         .badge-unpaid { background: #fee2e2; color: #b91c1c; }
+
+        @media (max-width: 640px) {
+          body { padding: 12px 14px; font-size: 12px; }
+          .invoice-navigation-bar { padding: 8px 10px; margin-bottom: 16px; }
+          .btn-back, .btn-action-print { padding: 8px 12px; font-size: 13px; min-height: 40px; }
+          .info-grid { grid-template-columns: 1fr; gap: 14px; padding: 12px; }
+          .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 16px; }
+          .brand-title { font-size: 18px; }
+          .invoice-title { font-size: 14px; }
+          .header { flex-direction: column; gap: 10px; }
+          .invoice-title-box { text-align: left; }
+        }
+
+        /* ── QUY TẮC IN ẤN / XUẤT PDF: ẨN TOÀN BỘ NÚT ĐIỀU HƯỚNG ── */
+        @media print {
+          .no-print, .invoice-navigation-bar {
+            display: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          body {
+            padding: 8mm 12mm !important;
+            background: #fff !important;
+          }
+        }
       </style>
     </head>
     <body>
+      <!-- THANH ĐIỀU HƯỚNG QUAY LẠI (TỰ ĐỘNG ẨN KHI IN / XUẤT PDF) -->
+      <div class="no-print invoice-navigation-bar">
+        <button type="button" class="btn-back" onclick="handleGoBack()" title="Quay lại màn hình trước hoặc Sổ công nợ">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          <span>Quay lại</span>
+        </button>
+        <div>
+          <button type="button" class="btn-action-print" onclick="window.print()" title="In hóa đơn bán hàng">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9"></polyline>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+              <rect x="6" y="14" width="12" height="8"></rect>
+            </svg>
+            <span>In hóa đơn</span>
+          </button>
+        </div>
+      </div>
+
       <div class="header">
         <div>
           <h1 class="brand-title">LOHA SALES</h1>
@@ -1212,38 +1841,40 @@ export class InvoicesService implements OnModuleInit {
         </div>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th class="text-center" style="width: 40px;">STT</th>
-            <th>Mã SKU</th>
-            <th>Tên sản phẩm & Quy cách</th>
-            <th class="text-center">ĐVT</th>
-            <th class="text-right">SL Đặt</th>
-            <th class="text-right" style="color: #4338ca;">SL Thực Giao</th>
-            <th class="text-right">Đơn giá</th>
-            <th class="text-right">Thành tiền</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${(invoice.items || this.generateSampleLineItems(invoice.amount))
-            .map(
-              (it, idx) => `
+      <div class="table-container">
+        <table>
+          <thead>
             <tr>
-              <td class="text-center">${idx + 1}</td>
-              <td style="font-family: monospace;">${it.productSku}</td>
-              <td><strong>${it.productName}</strong></td>
-              <td class="text-center">${it.unit}</td>
-              <td class="text-right font-medium text-slate-500">${it.orderedQuantity !== undefined ? it.orderedQuantity : it.quantity}</td>
-              <td class="text-right" style="color: #4338ca; font-weight: 700;">${it.quantity.toLocaleString('vi-VN')}</td>
-              <td class="text-right">${formatMoney(it.unitPrice)}</td>
-              <td class="text-right font-semibold">${formatMoney(it.lineTotal)}</td>
+              <th class="text-center" style="width: 40px;">STT</th>
+              <th>Mã SKU</th>
+              <th>Tên sản phẩm & Quy cách</th>
+              <th class="text-center">ĐVT</th>
+              <th class="text-right">SL Đặt</th>
+              <th class="text-right" style="color: #4338ca;">SL Thực Giao</th>
+              <th class="text-right">Đơn giá</th>
+              <th class="text-right">Thành tiền</th>
             </tr>
-          `,
-            )
-            .join('')}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${(invoice.items || this.generateSampleLineItems(invoice.amount))
+              .map(
+                (it, idx) => `
+              <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td style="font-family: monospace;">${it.productSku}</td>
+                <td><strong>${it.productName}</strong></td>
+                <td class="text-center">${it.unit}</td>
+                <td class="text-right font-medium text-slate-500">${it.orderedQuantity !== undefined ? it.orderedQuantity : it.quantity}</td>
+                <td class="text-right" style="color: #4338ca; font-weight: 700;">${it.quantity.toLocaleString('vi-VN')}</td>
+                <td class="text-right">${formatMoney(it.unitPrice)}</td>
+                <td class="text-right font-semibold">${formatMoney(it.lineTotal)}</td>
+              </tr>
+            `,
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
 
       <table style="width: 100%; border-collapse: collapse; margin-top: 8px; margin-bottom: 12px; border: 1px solid #cbd5e1;">
         <tbody>
@@ -1285,10 +1916,43 @@ export class InvoicesService implements OnModuleInit {
           <div class="sig-space"></div>
         </div>
       </div>
+
       <script>
-        // Hỗ trợ in ấn tự động hoặc qua hàm window.print()
-        function printInvoice() {
-          window.print();
+        function handleGoBack() {
+          // 1. Kiểm tra nếu tab này được mở từ một cửa sổ trước đó (window.opener)
+          if (window.opener && !window.opener.closed) {
+            try {
+              window.opener.focus();
+              window.close();
+              return;
+            } catch (e) {
+              console.warn('Cannot close popup window directly', e);
+            }
+          }
+
+          // 2. Nếu có lịch sử duyệt trong cùng một tab (history.length > 1)
+          if (window.history.length > 1 && document.referrer && document.referrer !== window.location.href) {
+            window.history.back();
+            setTimeout(function() {
+              fallbackToDebtPage();
+            }, 350);
+            return;
+          }
+
+          // 3. Đường dẫn dự phòng tuyệt đối về /portal/debt
+          fallbackToDebtPage();
+        }
+
+        function fallbackToDebtPage() {
+          var origin = window.location.origin;
+          if (!origin || origin === 'null' || origin === 'about:blank') {
+            origin = 'http://localhost:5173';
+          }
+          // Nếu đang xem trực tiếp từ backend port 3000, trỏ về frontend port 5173
+          if (origin.indexOf(':3000') !== -1) {
+            origin = origin.replace(':3000', ':5173');
+          }
+          window.location.href = origin + '/portal/debt';
         }
       </script>
     </body>
@@ -1298,7 +1962,10 @@ export class InvoicesService implements OnModuleInit {
     return { html, invoice };
   }
 
-  getAllRawInvoices(): InvoiceItem[] {
+  async getAllRawInvoices(): Promise<InvoiceItem[]> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncFromDatabase();
+    }
     const uniqueMap = new Map<string, InvoiceItem>();
     for (const inv of this.invoices.values()) {
       uniqueMap.set(inv.id, inv);
@@ -1369,11 +2036,13 @@ export class InvoicesService implements OnModuleInit {
       ? await this.shipmentsService.findAll({ status: 'DELIVERED' }, currentUser)
       : [];
 
-    let unbilledShipments = allShipments.filter((s) => s.status === 'DELIVERED' && !s.invoiceId);
+    let unbilledShipments = allShipments.filter(
+      (s: { status?: string; invoiceId?: string }) => s.status === 'DELIVERED' && !s.invoiceId,
+    );
 
     if (customerId && customerId !== 'ALL') {
       unbilledShipments = unbilledShipments.filter(
-        (s) =>
+        (s: { customerId?: string }) =>
           s.customerId === customerId ||
           (customerId === '55555555-0000-0000-0000-000000000001' && s.customerId === 'cust-001') ||
           (customerId === '55555555-0000-0000-0000-000000000002' && s.customerId === 'cust-002'),

@@ -73,6 +73,22 @@ export class InvoicesController {
   }
 
   /**
+   * Alias: GET /api/invoices/my-debt
+   */
+  @Get('my-debt')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async getMyDebt(@CurrentUser() currentUser: ICurrentUser): Promise<DealerDebtSummary> {
+    return this.invoicesService.getMyDebtSummary(currentUser);
+  }
+
+  /**
    * Kích hoạt thủ công tác vụ kiểm tra và gửi nhắc hạn thanh toán (SN-208 A, B, C, D)
    * POST /api/invoices/reminders/trigger
    */

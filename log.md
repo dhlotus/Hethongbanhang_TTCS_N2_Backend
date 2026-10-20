@@ -1041,3 +1041,83 @@ est build -> 0 lỗi.
 - **Trạng thái kiểm thử:**
   - Unit Test: `npx jest test/invoices-sn200.spec.ts` -> 8/8 test cases PASSED (100%).
   - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 7] - [SN-202]: Ghi Nhận Thanh Toán & Đối Trừ Công Nợ Bằng ACID Database Transaction (Kế Toán Công Nợ)
+- **Thời gian hoàn thành:** 2026-10-18
+- **Mã Jira / Task:** SN-202 (Parent Story: SN-201 / Phân hệ Kế toán công nợ & Thu hồi công nợ)
+- **Tiêu đề:** "Là Kế toán công nợ, tôi muốn ghi nhận thanh toán và đối trừ vào công nợ, để biết chính xác đại lý còn nợ hoá đơn nào."
+- **5 Tiêu chí chấp nhận (AC) hoàn thành 100%:**
+  1. **Lưu trữ đủ 5 trường thông tin:** Ghi nhận chính xác `amount` (số tiền), `paymentMethod` (hình thức thu), `paymentDate` (ngày thu), `collectorId`/`collectorName` (người thu), `note` (ghi chú / mã tham chiếu chứng từ UNC).
+  2. **Đối trừ cụ thể hoặc tự động theo hoá đơn cũ nhất (FIFO):**
+     - Cho phép chỉ định danh sách `invoiceIds` cụ thể để ưu tiên đối trừ.
+     - Nếu không chọn hóa đơn cụ thể (mặc định), hệ thống tự động truy vấn danh sách hóa đơn còn nợ của đại lý và sắp xếp theo ngày phát hành/ngày tạo cũ nhất trước (`ORDER BY issue_date ASC, created_at ASC`).
+  3. **Thu một phần & Cập nhật trạng thái:** Cho phép thu một phần số tiền; hoá đơn chưa thanh toán hết sẽ tự động chuyển sang trạng thái `PARTIALLY_PAID` (Thanh toán một phần); khi trừ hết số dư nợ về 0 sẽ chuyển thành `PAID` (Đã thanh toán).
+  4. **Chặn thu vượt tổng công nợ còn lại:** Kiểm tra chặt chẽ số tiền thu không được lớn hơn tổng số nợ thực tế của các hóa đơn đối trừ; ném `BadRequestException` lập tức nếu phát hiện vượt nợ.
+  5. **Bất biến - Chặn xóa phiếu thu:** Tuyệt đối không xóa bản ghi thanh toán và phiếu thu đã ghi nhận (`DELETE /api/payments/:id` ném `ForbiddenException`); mọi sai lệch bắt buộc phải xử lý qua bút toán điều chỉnh.
+- **Danh sách file tạo mới & thay đổi:**
+  - `src/modules/payments/entities/payment.entity.ts`: Entity `Payment` lưu trữ mã thanh toán `code` (PT{YY}{MM}-XXXX), `customerId`, `customerName`, `amount`, `paymentMethod`, `paymentDate`, `collectorId`, `collectorName`, `note`, `allocations`, `receiptId`.
+  - `src/modules/payments/entities/payment-allocation.entity.ts`: Entity `PaymentAllocation` liên kết bảng trung gian chi tiết từng đợt đối trừ vào hoá đơn (`invoiceId`, `invoiceCode`, `amount`, `previousRemaining`, `newRemaining`, `allocatedAt`).
+  - `src/modules/payments/dto/create-payment.dto.ts`: DTO `CreatePaymentDto` với đầy đủ bộ decorators validation (`class-validator`, `class-transformer`).
+  - `src/modules/payments/dto/query-payments.dto.ts`: DTO `QueryPaymentsDto` hỗ trợ phân trang và tìm kiếm.
+  - `src/modules/payments/payments.service.ts`: Toàn bộ logic nghiệp vụ, khởi tạo bảng DB `payments` & `payment_allocations`, thuật toán đối trừ FIFO trong ACID Transaction, đồng bộ sang `InvoicesService` và tự động sinh phiếu thu tại `ReceiptsService`.
+  - `src/modules/payments/payments.controller.ts`: Controller cung cấp `POST /api/payments`, `GET /api/payments`, `GET /api/payments/:id`, và `DELETE /api/payments/:id` (ném `ForbiddenException`).
+  - `src/modules/payments/payments.module.ts`: Khai báo module Payments kết nối InvoicesModule, ReceiptsModule, CustomersModule, DatabaseModule.
+  - `src/modules/invoices/invoices.service.ts`: Bổ sung hàm `findUnpaidInvoicesForCustomer` (hỗ trợ mapping bí danh đại lý đa kênh) và `updateInvoiceStateInMemory`.
+  - `src/app.module.ts`: Đăng ký `PaymentsModule`.
+  - `test/payments-sn202.spec.ts`: Bộ unit test gồm 7 kịch bản kiểm thử tự động đạt 100% tỷ lệ pass.
+- **Mô tả chi tiết thuật toán đối trừ hoá đơn cũ nhất bằng Database Transaction (ACID):**
+  1. **Bước 1 - Kiểm tra số tiền & Tính toán tổng nợ:**
+     - Xác thực `payAmount > 0`.
+     - Lấy thông tin đại lý qua `CustomersService` (`getCustomerById` / `filterCustomers`).
+     - Lấy danh sách hóa đơn còn nợ của đại lý qua `findUnpaidInvoicesForCustomer`.
+     - Tính `totalRemainingDebt = SUM(inv.remainingAmount)`.
+     - **AC 4:** Nếu `payAmount > totalRemainingDebt` -> Ném `BadRequestException("Số tiền thu vượt quá tổng công nợ còn lại của đại lý...")`.
+  2. **Bước 2 - Lựa chọn danh sách hóa đơn đối trừ:**
+     - Nếu `invoiceIds` được truyền lên (và `autoOffsetOldest !== true`): Lọc danh sách các hóa đơn được chọn, kiểm tra `payAmount <= SUM(selectedInvoices.remainingAmount)`.
+     - Nếu không chỉ định hóa đơn cụ thể (mặc định): Sắp xếp toàn bộ hóa đơn còn nợ theo thứ tự FIFO cũ nhất trước:
+       `invoicesToOffset = [...allInvoices].sort((a, b) => new Date(a.issueDate).getTime() - new Date(b.issueDate).getTime())`.
+  3. **Bước 3 - Thuật toán vòng lặp trừ dần công nợ (Allocation Loop):**
+     - Khởi tạo `remainingPay = payAmount`.
+     - Duyệt qua từng `invoice` trong danh sách `invoicesToOffset`:
+       - `invoiceDebt = invoice.remainingAmount`.
+       - `allocated = Math.min(remainingPay, invoiceDebt)`.
+       - `newRemaining = invoiceDebt - allocated`.
+       - `newPaid = invoice.paidAmount + allocated`.
+       - `newStatus = newRemaining === 0 ? 'PAID' : 'PARTIALLY_PAID'`.
+       - Ghi nhận một bản ghi phân bổ `PaymentAllocation` gồm: `invoiceId`, `invoiceCode`, `amount: allocated`, `previousRemaining: invoiceDebt`, `newRemaining`, `allocatedAt`.
+       - Cập nhật số tiền còn lại cần cấn trừ: `remainingPay -= allocated`.
+       - Nếu `remainingPay === 0`, ngắt vòng lặp (`break`).
+  4. **Bước 4 - Thực thi ACID Database Transaction:**
+     - Mở client từ `dbService.getPool()` và bắt đầu `BEGIN`.
+     - `INSERT INTO payments (id, code, customer_id, customer_code, customer_name, amount, payment_method, payment_date, collector_id, collector_name, note, created_at, updated_at) VALUES (...)`.
+     - `INSERT INTO payment_allocations (id, payment_id, invoice_id, invoice_code, amount, previous_remaining, new_remaining, allocated_at) VALUES (...)` cho từng đợt phân bổ.
+     - Cập nhật từng hóa đơn trong DB:
+       `UPDATE invoices SET paid_amount = $1, remaining_amount = $2, status = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4`.
+     - Ghi nhận lịch sử vào sổ cái nợ đại lý `customer_debt_ledger` (loại bút toán `CREDIT` - Thu nợ giảm dư nợ).
+     - Gọi `COMMIT` nếu toàn bộ thao tác thành công; nếu phát sinh bất kỳ ngoại lệ nào lập tức gọi `ROLLBACK` và giải phóng client an toàn trong khối `finally`.
+  5. **Bước 5 - Đồng bộ In-Memory Cache & Receipts Service:**
+     - Cập nhật trạng thái bộ nhớ `updateInvoiceStateInMemory` để các API tra cứu khác phản ánh tức thì.
+     - Tự động gọi `ReceiptsService.createReceiptFromInvoicePayment` để sinh phiếu thu tiền chính thức phục vụ in ấn / xuất PDF.
+- **Trạng thái kiểm thử:**
+  - Unit Test: `npx jest test/payments-sn202.spec.ts` -> 7/7 test cases PASSED (100%).
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.
+
+---
+
+### [Sprint 7] - [SN-202-PERSISTENCE]: Cơ Chế Lưu Trữ Bền Vững Kép (PostgreSQL + Disk Persistence) & Chuẩn Hóa Mã Đại Lý
+- **Thời gian hoàn thành:** 2026-10-18
+- **Chi tiết kỹ thuật & Khắc phục:**
+  1. **Khắc phục kết nối PostgreSQL:** Sửa `DB_PASSWORD=123456` trong `.env` khớp với dịch vụ PostgreSQL cục bộ, khôi phục khả năng ghi dữ liệu trực tiếp vào database `htbh_db`.
+  2. **Cơ chế lưu trữ bền vững kép (Dual Persistence):** Bổ sung lưu trữ và đọc dữ liệu dự phòng từ đĩa cứng (`uploads/data/payments.json`, `uploads/data/receipts.json`, `uploads/data/invoices.json`), bảo đảm toàn bộ hóa đơn, thanh toán và phiếu thu không bị mất sau khi tắt hoặc khởi động lại dev server.
+  3. **Chuẩn hóa mã đại lý:** Ánh xạ tự động các chuỗi UUID đại lý (ví dụ: `55555555-0000-0000-0000-000000000002` -> `DL-0002`), loại bỏ hoàn toàn việc hiển thị chuỗi UUID mã hóa thô trong phiếu thu và PDF.
+- **Danh sách file thay đổi:**
+  - `.env`: Sửa `DB_PASSWORD=123456`.
+  - `src/modules/payments/dto/create-payment.dto.ts`: Bổ sung trường `customerCode` và `customerName`.
+  - `src/modules/payments/payments.service.ts`: Lưu trữ bền vững `payments.json` và chuẩn hóa mã đại lý.
+  - `src/modules/receipts/receipts.service.ts`: Lưu trữ bền vững `receipts.json` và bổ sung hàm `sanitizeCustomerCode`.
+  - `src/modules/invoices/invoices.service.ts`: Lưu trữ bền vững `invoices.json` cho cả tạo mới và cập nhật trạng thái thanh toán.
+- **Trạng thái kiểm thử:**
+  - Unit Test: `npx jest test/payments-sn202.spec.ts` -> 7/7 test cases PASSED (100%).
+  - Backend Build: `npm run build` (`nest build`) -> 0 lỗi, compile thành công 100%.

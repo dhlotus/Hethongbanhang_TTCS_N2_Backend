@@ -358,27 +358,44 @@ export class NotificationsService implements OnModuleInit {
 
       let rows: any[] = [];
 
-      // 1. Nếu là Đại lý / Khách hàng B2B (Cổng portal)
+      // 1. Nếu là Đại lý / Khách hàng B2B (Cổng portal) - CHỈ hiển thị đúng thông báo của đại lý đó
       if (
         explicitRole.includes('CUSTOMER') ||
         explicitRole.includes('AGENCY') ||
         explicitCustomerId
       ) {
+        const agencyIdentifiers = new Set<string>();
+        if (explicitUserId) agencyIdentifiers.add(String(explicitUserId).trim());
+        if (explicitCustomerId) agencyIdentifiers.add(String(explicitCustomerId).trim());
+        if (user?.username) agencyIdentifiers.add(String(user.username).trim());
+        if (query?.username) agencyIdentifiers.add(String(query.username).trim());
+
+        // Tra cứu thêm các định danh liên kết (code, id, user_id) nếu có kết nối DB
+        if (explicitCustomerId || explicitUserId) {
+          try {
+            const matchedCustomers = await this.databaseService.query<any>(
+              `SELECT id, code, user_id FROM customers WHERE id::text = $1 OR code = $1 OR user_id::text = $1 OR id::text = $2 OR code = $2 OR user_id::text = $2;`,
+              [explicitCustomerId || explicitUserId, explicitUserId || explicitCustomerId],
+            );
+            for (const mc of matchedCustomers || []) {
+              if (mc.id) agencyIdentifiers.add(String(mc.id).trim());
+              if (mc.code) agencyIdentifiers.add(String(mc.code).trim());
+              if (mc.user_id) agencyIdentifiers.add(String(mc.user_id).trim());
+            }
+          } catch {}
+        }
+
+        const idList = Array.from(agencyIdentifiers).filter(Boolean);
         const querySql = `
           SELECT * FROM app_system_notifications
           WHERE (
-            ($1::text IS NOT NULL AND user_id = $1) OR
-            ($2::text IS NOT NULL AND user_id = $2) OR
-            recipient_role ILIKE '%đại lý%' OR
-            recipient_role ILIKE '%khách hàng%'
+            user_id = ANY($1::text[]) OR
+            user_id = 'ALL' OR
+            user_id = 'BROADCAST'
           )
-          ORDER BY created_at DESC LIMIT $3;
+          ORDER BY created_at DESC LIMIT $2;
         `;
-        rows = await this.databaseService.query<any>(querySql, [
-          explicitCustomerId || explicitUserId || null,
-          explicitUserId || null,
-          limit,
-        ]);
+        rows = await this.databaseService.query<any>(querySql, [idList, limit]);
       }
       // 2. Nếu là Admin hoặc Quản trị kinh doanh
       else if (
@@ -462,15 +479,20 @@ export class NotificationsService implements OnModuleInit {
         rows = await this.databaseService.query<any>(querySql, [explicitUserId, limit]);
       }
 
-      // Fallback an toàn: Nếu không tìm thấy hoặc người dùng là khách vãng lai, trả về danh sách thông báo hệ thống mới nhất
-      if (!rows || rows.length === 0) {
+      // Fallback an toàn: Chỉ áp dụng cho người dùng nội bộ/khách nếu không có thông báo riêng, TUYỆT ĐỐI KHÔNG áp dụng cho Đại lý
+      const isAgencyUser =
+        explicitRole.includes('CUSTOMER') ||
+        explicitRole.includes('AGENCY') ||
+        Boolean(explicitCustomerId);
+
+      if (!isAgencyUser && (!rows || rows.length === 0)) {
         rows = await this.databaseService.query<any>(
           `SELECT * FROM app_system_notifications ORDER BY created_at DESC LIMIT $1;`,
           [limit],
         );
       }
 
-      return rows.map((r) => this.mapDbRowToEntity(r));
+      return (rows || []).map((r) => this.mapDbRowToEntity(r));
     }
 
     const userId = user?.userId || query?.userId || 'admin';

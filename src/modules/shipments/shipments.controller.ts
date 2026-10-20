@@ -54,7 +54,7 @@ export class ShipmentsController {
   async findAll(
     @Query() query: Record<string, string>,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ShipmentItem[]> {
+  ): Promise<any> {
     return this.shipmentsService.findAll(query, currentUser);
   }
 
