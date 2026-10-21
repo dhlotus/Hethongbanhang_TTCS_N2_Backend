@@ -105,6 +105,7 @@ export class AuthService {
    * Đăng nhập người dùng, kiểm tra khóa tạm thời và cấp phát cặp Access Token & Refresh Token
    */
   async login(loginDto: LoginDto): Promise<LoginResponseDto> {
+    await this.usersService.loadUsersFromDatabase().catch(() => {});
     const identifier = (loginDto.username || loginDto.email || '').trim().toLowerCase();
     const user = await this.usersService.findByEmailOrUsername(identifier);
 
@@ -205,6 +206,9 @@ export class AuthService {
       warehouseIds,
       warehouses,
       avatarUrl: user.avatarUrl ?? null,
+      customerId: user.customerId ?? (user as any).agencyId ?? null,
+      customerCode: user.customerCode ?? null,
+      agencyId: user.customerId ?? (user as any).agencyId ?? null,
     };
 
     const tokens = await this.generateTokens(userInfo);
@@ -284,6 +288,9 @@ export class AuthService {
           warehouseName: whName,
           warehouses: whs,
           avatarUrl: userAccount.avatarUrl ?? null,
+          customerId: userAccount.customerId ?? (userAccount as any).agencyId ?? null,
+          customerCode: userAccount.customerCode ?? null,
+          agencyId: userAccount.customerId ?? (userAccount as any).agencyId ?? null,
         }
       : {
           id: payload.sub,
@@ -298,6 +305,9 @@ export class AuthService {
           warehouseName: whName,
           warehouses: whs,
           avatarUrl: null,
+          customerId: (payload as any).customerId ?? null,
+          customerCode: (payload as any).customerCode ?? null,
+          agencyId: (payload as any).agencyId ?? (payload as any).customerId ?? null,
         };
 
     // 5. Cơ chế Refresh Token Rotation: Thu hồi token cũ để chống tấn công Replay Attack

@@ -248,6 +248,16 @@ export class UsersService implements OnModuleInit {
       };
     }
 
+    if (
+      /^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(raw)
+    ) {
+      return {
+        warehouseId: raw,
+        warehouseCode: raw,
+        warehouseName: raw,
+      };
+    }
+
     return {};
   }
 
@@ -604,7 +614,7 @@ export class UsersService implements OnModuleInit {
     }
   }
 
-  private async loadUsersFromDatabase(): Promise<void> {
+  public async loadUsersFromDatabase(): Promise<void> {
     if (!this.dbService?.isConnected()) return;
     try {
       // 1. Nạp danh sách quan hệ phân quyền kho từ user_warehouses kèm thông tin kho
@@ -790,6 +800,18 @@ export class UsersService implements OnModuleInit {
           }
         }
 
+        let customerId: string | undefined = undefined;
+        let customerCode: string | undefined = undefined;
+        const emailLower = (row.email || '').toLowerCase().trim();
+        const usernameLower = (row.username || '').toLowerCase().trim();
+        if (emailLower.includes('daily') || usernameLower === 'daily') {
+          customerId = 'cust-dl-0002';
+          customerCode = 'DL-0002';
+        } else if (emailLower.includes('dealer') || usernameLower === 'dealer') {
+          customerId = 'cust-dl-0001';
+          customerCode = 'DL-0001';
+        }
+
         const entity = new UserEntity({
           id: row.id,
           username: row.username,
@@ -807,6 +829,8 @@ export class UsersService implements OnModuleInit {
           warehouseIds,
           warehouses: assignedWarehouses,
           passwordHash: row.password_hash,
+          customerId,
+          customerCode,
           failedAttempts: row.failed_attempts || 0,
           lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
           createdAt: new Date(row.created_at),
@@ -841,6 +865,7 @@ export class UsersService implements OnModuleInit {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (username) DO UPDATE
          SET email = EXCLUDED.email,
+             password_hash = EXCLUDED.password_hash,
              full_name = EXCLUDED.full_name,
              phone = EXCLUDED.phone,
              role_id = EXCLUDED.role_id,
@@ -1707,6 +1732,23 @@ export class UsersService implements OnModuleInit {
     this.users.set(user.id, user);
     this.saveUsersToDisk();
 
+    // Đồng bộ trực tiếp vào cơ sở dữ liệu PostgreSQL nếu đang kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE users 
+           SET password_hash = $1, 
+               failed_attempts = 0, 
+               locked_until = NULL, 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $2::uuid OR id::text = $2 OR username = $3;`,
+          [user.passwordHash, user.id, user.username],
+        );
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi cập nhật mật khẩu reset vào CSDL:', err);
+      }
+    }
+
     // Thu hồi toàn bộ phiên đăng nhập cũ
     this.revokeSessions(user.id);
 
@@ -1751,6 +1793,27 @@ export class UsersService implements OnModuleInit {
     user.failedAttempts = 0;
     user.lockedUntil = null;
     user.updatedAt = new Date();
+    this.users.set(user.id, user);
+
+    // 1. Lưu ngay lập tức ra đĩa (uploads/data/users.json) để đảm bảo không bị mất khi restart server
+    this.saveUsersToDisk();
+
+    // 2. Cập nhật trực tiếp vào cơ sở dữ liệu PostgreSQL nếu đang kết nối
+    if (this.dbService?.isConnected()) {
+      try {
+        await this.dbService.query(
+          `UPDATE users 
+           SET password_hash = $1, 
+               failed_attempts = 0, 
+               locked_until = NULL, 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $2::uuid OR id::text = $2 OR username = $3;`,
+          [newPasswordHash, user.id, user.username],
+        );
+      } catch (err) {
+        console.warn('[USERS_SERVICE] Lỗi cập nhật mật khẩu mới vào CSDL PostgreSQL:', err);
+      }
+    }
   }
 
   /**

@@ -24,6 +24,15 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { GoodsReceiptsModule } from './modules/inventory-receipts/goods-receipts.module';
 import { WarehousesModule } from './modules/warehouses/warehouses.module';
 import { InternalTransfersModule } from './modules/inventory-transfers/internal-transfers.module';
+import { DebtReportModule } from './modules/debt-report/debt-report.module';
+import { ReceiptsModule } from './modules/receipts/receipts.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { CollectionsModule } from './modules/collections/collections.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { DebtReconciliationModule } from './modules/debt-reconciliation/debt-reconciliation.module';
+import { PickingSheetsModule } from './modules/picking-sheets/picking-sheets.module';
+import { SalesTargetsModule } from './modules/sales-targets/sales-targets.module';
+import { DebtAdjustmentsModule } from './modules/debt-adjustments/debt-adjustments.module';
 
 @Module({
   imports: [
@@ -52,6 +61,15 @@ import { InternalTransfersModule } from './modules/inventory-transfers/internal-
     AgencyModule,
     DashboardModule,
     WarehousesModule,
+    DebtReportModule,
+    ReceiptsModule,
+    NotificationsModule,
+    CollectionsModule,
+    PaymentsModule,
+    DebtReconciliationModule,
+    PickingSheetsModule,
+    SalesTargetsModule,
+    DebtAdjustmentsModule,
   ],
 })
 export class AppModule { }

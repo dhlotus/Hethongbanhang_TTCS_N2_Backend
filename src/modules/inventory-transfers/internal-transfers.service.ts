@@ -346,7 +346,7 @@ export class InternalTransfersService implements OnModuleInit {
     await client.query('BEGIN');
     try {
       const codeRes = await client.query<{ next_code: string }>(
-        `SELECT 'CK-' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '-' || LPAD(COALESCE(MAX(SUBSTRING(code FROM 11)), '0')::INT + 1, 4, '0') AS next_code
+        `SELECT 'CK-' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '-' || LPAD((COALESCE(MAX(SUBSTRING(code FROM 11)), '0')::INT + 1)::TEXT, 4, '0') AS next_code
          FROM internal_transfers WHERE code LIKE 'CK-' || TO_CHAR(CURRENT_DATE, 'YYMMDD') || '-%'`,
       );
       const code = codeRes.rows[0]?.next_code || this.generateFallbackCode();
@@ -835,8 +835,12 @@ export class InternalTransfersService implements OnModuleInit {
     toWarehouse: { id: string; name: string };
   }> {
     const warehouses = await this.warehousesService.findAll();
-    const fromWarehouse = warehouses.find((w) => w.id === fromId || w.code === fromId);
-    const toWarehouse = warehouses.find((w) => w.id === toId || w.code === toId);
+    const fromWarehouse = warehouses.find(
+      (w: { id?: string; code?: string }) => w.id === fromId || w.code === fromId,
+    );
+    const toWarehouse = warehouses.find(
+      (w: { id?: string; code?: string }) => w.id === toId || w.code === toId,
+    );
 
     if (!fromWarehouse) {
       throw new NotFoundException(`Kho xuất hàng với ID "${fromId}" không tồn tại.`);

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -7,6 +7,8 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 import { CreateLocationDto } from './dto/create-location.dto';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import {
   AgencyWarehouseAssignmentEntity,
   AgencyWarehouseDetailEntity,
@@ -33,12 +35,15 @@ export class WarehousesController {
     UserRole.ACCOUNTANT,
     UserRole.SALES_REP,
   )
-  findAll(): Promise<WarehouseEntity[]> {
-    return this.warehousesService.findAll();
+  findAll(
+    @CurrentUser() currentUser?: ICurrentUser,
+    @Query() query?: Record<string, string>,
+  ): Promise<any> {
+    return this.warehousesService.findAll(currentUser, query);
   }
 
   @Get('managers')
-  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
   listManagers(): Promise<WarehouseManagerEntity[]> {
     return this.warehousesService.listManagers();
   }
@@ -71,7 +76,7 @@ export class WarehousesController {
   }
 
   @Get('agencies/defaults')
-  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
   listAgencyDefaults(): Promise<AgencyWarehouseAssignmentEntity[]> {
     return this.warehousesService.listAgencyDefaults();
   }
@@ -100,9 +105,18 @@ export class WarehousesController {
     return this.warehousesService.assignAgencies(id, body.agencyIds || []);
   }
 
+  @Get(':id/delete-check')
+  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  checkDeleteEligibility(@Param('id') id: string) {
+    return this.warehousesService.checkDeleteEligibility(id);
+  }
+
   @Delete(':id')
   @Roles(...WAREHOUSE_MANAGER_ROLES)
-  delete(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
-    return this.warehousesService.delete(id);
+  delete(
+    @Param('id') id: string,
+    @Query('confirmZeroStock') confirmZeroStock?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.warehousesService.delete(id, confirmZeroStock === 'true' || confirmZeroStock === '1');
   }
 }

@@ -10,6 +10,7 @@ export enum OrderStatus {
   REJECTED = 'REJECTED', // Bị từ chối sau khi quản lý xét duyệt
   RETURNED_FOR_UPDATE = 'RETURNED_FOR_UPDATE', // Trả lại nhân viên kinh doanh để chỉnh sửa
   PROCESSING = 'PROCESSING', // Đang soạn hàng
+  PACKED = 'PACKED', // Đã đóng gói
   DISPATCHED = 'DISPATCHED', // Đã xuất kho (SN-199)
   SHIPPED = 'SHIPPED', // Đang giao hàng / vận chuyển
   DELIVERED = 'DELIVERED', // Đã giao / Giao thành công
@@ -27,3 +28,23 @@ export enum PaymentStatus {
   PARTIAL = 'PARTIAL', // Thanh toán một phần
   PAID = 'PAID', // Đã thanh toán
 }
+
+/**
+ * Danh sách trạng thái được chính thức ghi nhận doanh số bán hàng (SN-215, SN-217, SN-218)
+ * Chỉ ghi nhận các đơn hàng ĐÃ ĐƯỢC PHÊ DUYỆT hoặc đang thực hiện giao/nhận hàng thành công.
+ * Loại bỏ tuyệt đối: DRAFT (nháp), PENDING / PENDING_APPROVAL (đang chờ duyệt),
+ * REJECTED (từ chối), RETURNED_FOR_UPDATE (trả lại sửa), CANCELLED (đã hủy), RETURNED (hoàn hàng).
+ */
+export const RECOGNIZED_SALES_STATUSES: readonly OrderStatus[] = [
+  OrderStatus.APPROVED,
+  OrderStatus.PROCESSING,
+  OrderStatus.PACKED,
+  OrderStatus.DISPATCHED,
+  OrderStatus.SHIPPED,
+  OrderStatus.DELIVERED,
+  OrderStatus.COMPLETED,
+  OrderStatus.CLOSED,
+] as const;
+
+export const isRecognizedSalesStatus = (status: OrderStatus): boolean =>
+  RECOGNIZED_SALES_STATUSES.includes(status);

@@ -4,6 +4,7 @@ import { DiscountPoliciesModule } from '../discount-policies/discount-policies.m
 import { PriceListsModule } from '../price-lists/price-lists.module';
 import { ProductsModule } from '../products/products.module';
 import { InventoryModule } from '../inventory/inventory.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
@@ -14,6 +15,7 @@ import { OrdersService } from './orders.service';
     DiscountPoliciesModule,
     forwardRef(() => ProductsModule),
     forwardRef(() => InventoryModule),
+    NotificationsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

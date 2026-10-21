@@ -5,7 +5,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Response, Request } from 'express';
 import { MulterError } from 'multer';
 
 @Catch()
@@ -13,6 +13,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    // Đảm bảo luôn gắn CORS header cho mọi phản hồi lỗi (tránh việc trình duyệt báo Network Error giả)
+    const origin = request.headers.origin;
+    if (origin) {
+      response.setHeader('Access-Control-Allow-Origin', origin);
+      response.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let formattedMessage = 'Đã có lỗi xảy ra trên hệ thống';

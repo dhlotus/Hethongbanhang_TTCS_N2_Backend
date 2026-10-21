@@ -13,8 +13,8 @@ export class UpdateWarehouseDto {
   @IsOptional()
   @IsString()
   @ValidateIf((o) => Boolean(o.phone))
-  @Matches(/^(0[235789])[0-9]{8}$/, {
-    message: 'Số điện thoại phải là số điện thoại Việt Nam gồm 10 chữ số (bắt đầu bằng 02, 03, 05, 07, 08, 09)',
+  @Matches(/^(0[235789])[0-9]{8,9}$/, {
+    message: 'Số điện thoại phải là số điện thoại Việt Nam gồm 10 hoặc 11 chữ số (bắt đầu bằng 02, 03, 05, 07, 08, 09)',
   })
   phone?: string;
 

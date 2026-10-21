@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import * as ExcelJS from 'exceljs';
 import { ProductsService } from '../products/products.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
@@ -9,7 +10,23 @@ import type { ProductEntity } from '../products/entities/product.entity';
 import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
 import { InventoryAuditEntity, InventoryAuditItemEntity } from './entities/inventory-audit.entity';
 import { InventoryAuditStatus } from './entities/inventory-audit-status.enum';
-import { CreateInventoryAuditDto, UpdateAuditItemsDto, CompleteAuditDto, QueryAuditsDto } from './dto';
+import { InventoryBatchEntity } from './entities/inventory-batch.entity';
+import {
+  CreateInventoryAuditDto,
+  UpdateAuditItemsDto,
+  CompleteAuditDto,
+  QueryAuditsDto,
+  QueryBatchesDto,
+  CheckBatchDispatchDto,
+  BatchStatusFilter,
+  CreateStockAdjustmentDto,
+  RejectStockAdjustmentDto,
+  QueryStockAdjustmentsDto,
+} from './dto';
+import {
+  StockAdjustmentEntity,
+  StockAdjustmentItemEntity,
+} from './entities/stock-adjustment.entity';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import {
@@ -18,6 +35,24 @@ import {
 } from '../warehouses/warehouse.constants';
 
 const DEFAULT_WAREHOUSE_NAME = 'Kho Tổng Miền Nam';
+
+export interface PaginatedBatchesResponse {
+  data: InventoryBatchEntity[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  thresholdDays: number;
+}
+
+export interface BatchStatsResponse {
+  totalBatches: number;
+  validCount: number;
+  expiringSoonCount: number;
+  expiredCount: number;
+  totalQuantity: number;
+  thresholdDays: number;
+}
 
 export interface StockAdjustmentResult {
   success: boolean;
@@ -48,12 +83,19 @@ export interface StockOverviewItem extends StockBalance {
   physicalStock: number;
   reservedStock: number;
   availableStock: number;
-  status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'DAMAGED';
   imageUrl?: string;
+  damagedQuantity?: number;
+  damagedStock?: number;
+  batchNumber?: string;
+  expiryDate?: string;
+  mfgDate?: string;
+  warehouseCode?: string;
 }
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
+  private readonly logger = new Logger(InventoryService.name);
   /**
    * Fix #4: Sổ kho tập trung theo Map<productId, giao dịch[]>.
    * - Lookup O(1) theo productId thay vì O(n) full-scan mảng phẳng.
@@ -62,6 +104,9 @@ export class InventoryService implements OnModuleInit {
    */
   private ledger = new Map<string, InventoryTransactionEntity[]>();
   private audits = new Map<string, InventoryAuditEntity>();
+  private batches = new Map<string, InventoryBatchEntity>();
+  private adjustments = new Map<string, StockAdjustmentEntity>();
+  private stockAdjustmentsSchemaPromise: Promise<void> | null = null;
 
   /**
    * Fix #2: Per-product Promise mutex lock.
@@ -78,6 +123,7 @@ export class InventoryService implements OnModuleInit {
 
   private memoryStockReservations = new Map<string, StockReservationEntity>();
   private stockReservationSchemaPromise: Promise<void> | null = null;
+  private stockTransactionsSchemaPromise: Promise<void> | null = null;
 
   constructor(
     @Inject(forwardRef(() => ProductsService))
@@ -95,12 +141,103 @@ export class InventoryService implements OnModuleInit {
     if (this.audits.size === 0) {
       this.seedInitialAudits();
     }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+    if (this.adjustments.size === 0) {
+      this.seedInitialAdjustments();
+    }
     if (this.databaseService?.isConnected()) {
       await this.ensureStockBalanceTable();
       await this.ensureStockReservationsTable();
+      await this.ensureStockTransactionsTable();
+      await this.ensureStockAdjustmentsTable();
       await this.seedStockBalances();
       await this.ensureAllWarehousesInventory();
+      await this.syncBatchesFromDatabase();
+      await this.syncAdjustmentsFromDatabase();
+      try {
+        await this.databaseService.query(`ALTER TABLE inventory_batches ALTER COLUMN expiry_date DROP NOT NULL;`);
+      } catch {}
     }
+  }
+
+  async ensureStockTransactionsTable(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    if (!this.stockTransactionsSchemaPromise) {
+      this.stockTransactionsSchemaPromise = (async () => {
+        await this.databaseService.query(`
+          CREATE TABLE IF NOT EXISTS app_inventory_transactions (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            sku TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            transaction_type TEXT NOT NULL,
+            input_quantity NUMERIC(15, 2) NOT NULL,
+            input_unit TEXT NOT NULL,
+            conversion_rate NUMERIC(15, 2) NOT NULL DEFAULT 1,
+            base_quantity_change NUMERIC(15, 2) NOT NULL,
+            base_unit TEXT NOT NULL,
+            previous_stock NUMERIC(15, 2) NOT NULL,
+            new_stock NUMERIC(15, 2) NOT NULL,
+            reason TEXT,
+            reference_code TEXT,
+            warehouse TEXT,
+            performed_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_stock_tx_sku ON app_inventory_transactions(sku);
+          CREATE INDEX IF NOT EXISTS idx_stock_tx_created_at ON app_inventory_transactions(created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_stock_tx_ref ON app_inventory_transactions(reference_code);
+        `);
+
+        try {
+          const countRes = await this.databaseService.query<{ count: string }>(
+            `SELECT count(*)::text as count FROM app_inventory_transactions`,
+          );
+          const count = Number(countRes[0]?.count ?? 0);
+          if (count === 0) {
+            for (const bucket of this.ledger.values()) {
+              for (const tx of bucket) {
+                await this.databaseService.query(
+                  `INSERT INTO app_inventory_transactions (
+                    id, product_id, sku, product_name, transaction_type,
+                    input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+                    previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                  ON CONFLICT (id) DO NOTHING`,
+                  [
+                    tx.id,
+                    tx.productId,
+                    tx.sku,
+                    tx.productName,
+                    tx.transactionType,
+                    tx.inputQuantity,
+                    tx.inputUnit,
+                    tx.conversionRate,
+                    tx.baseQuantityChange,
+                    tx.baseUnit,
+                    tx.previousStock,
+                    tx.newStock,
+                    tx.reason,
+                    tx.referenceCode,
+                    tx.warehouse,
+                    tx.performedBy,
+                    tx.createdAt,
+                  ],
+                );
+              }
+            }
+          }
+        } catch (seedErr: any) {
+          console.warn('[INVENTORY_SERVICE] Không thể nạp khởi tạo app_inventory_transactions:', seedErr?.message);
+        }
+      })().catch((error: unknown) => {
+        this.stockTransactionsSchemaPromise = null;
+        console.warn('[INVENTORY_SERVICE] Lỗi tạo bảng app_inventory_transactions:', (error as any)?.message);
+      });
+    }
+    await this.stockTransactionsSchemaPromise;
   }
 
   async ensureStockReservationsTable(): Promise<void> {
@@ -169,15 +306,17 @@ export class InventoryService implements OnModuleInit {
   }
 
   private async seedStockBalances(): Promise<void> {
-    const products = await this.productsService.findAll();
-    if (products.length === 0) return;
-    await this.databaseService.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-       SELECT UPPER(sku), $3::uuid, quantity
-       FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
-       ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => product.stockQuantity), DEFAULT_WAREHOUSE_ID],
-    );
+    try {
+      // Đồng bộ app_inventory_stock_balances từ bảng chuẩn inventories (chỉ cho các kho thực tế có tồn)
+      await this.databaseService.query(`
+        INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+        SELECT UPPER(p.sku), i.warehouse_id, i.on_hand
+        FROM inventories i
+        JOIN products p ON p.id = i.product_id
+        ON CONFLICT (product_sku, warehouse_id) DO UPDATE
+        SET physical_quantity = EXCLUDED.physical_quantity;
+      `);
+    } catch {}
   }
 
   async ensureAllWarehousesInventory(): Promise<void> {
@@ -187,65 +326,27 @@ export class InventoryService implements OnModuleInit {
     if (!this.databaseService?.isConnected()) return;
 
     try {
-      const mb = '11111111-0000-0000-0000-000000000002';
-      const mt = '11111111-0000-0000-0000-000000000004';
-      const mn = '11111111-0000-0000-0000-000000000001';
-      const west = '11111111-0000-0000-0000-000000000003';
-      const allFour = [mb, mt, mn, west];
+      // Đảm bảo mọi sản phẩm đều có bản ghi cơ sở dữ liệu tồn kho riêng ở TẤT CẢ các kho đang hoạt động
+      // Kho mới tạo hoặc sản phẩm mới tạo sẽ có on_hand = 0, allocated = 0, physical_quantity = 0
+      await this.databaseService.query(`
+        INSERT INTO inventories (warehouse_id, product_id, on_hand, allocated)
+        SELECT w.id, p.id, 0, 0
+        FROM warehouses w
+        CROSS JOIN products p
+        WHERE (w.status IS NULL OR w.status = 'ACTIVE')
+        ON CONFLICT (warehouse_id, product_id) DO NOTHING;
+      `);
 
-      const products = await this.databaseService.query<{
-        id: string;
-        sku: string;
-        status: string;
-      }>(`SELECT id, sku, status FROM products ORDER BY sku;`);
-
-      for (const prod of products) {
-        const invRows = await this.databaseService.query<{
-          warehouse_id: string;
-          on_hand: string;
-        }>(`SELECT warehouse_id, on_hand::text FROM inventories WHERE product_id = $1`, [prod.id]);
-
-        const existingWhs = new Set(invRows.map((r) => r.warehouse_id));
-        const missing = allFour.filter((w) => !existingWhs.has(w));
-
-        if (missing.length > 0) {
-          const totalStock = invRows.reduce((sum, r) => sum + (Number(r.on_hand) || 0), 0);
-          let distTotal = totalStock;
-          if (distTotal <= 0 && prod.status === 'ACTIVE') {
-            distTotal = 4000;
-          }
-
-          const baseStock = Math.floor(distTotal / 4);
-          const remainder = distTotal - baseStock * 4;
-
-          const distMap: Record<string, number> = {
-            [mb]: baseStock,
-            [mt]: baseStock,
-            [mn]: baseStock + remainder,
-            [west]: baseStock,
-          };
-
-          for (const whId of allFour) {
-            const qty = distMap[whId] ?? baseStock;
-            await this.databaseService.query(
-              `INSERT INTO inventories (product_id, warehouse_id, on_hand, allocated)
-               VALUES ($1, $2::uuid, $3, 0)
-               ON CONFLICT (warehouse_id, product_id)
-               DO UPDATE SET on_hand = EXCLUDED.on_hand, updated_at = CURRENT_TIMESTAMP`,
-              [prod.id, whId, qty],
-            );
-            await this.databaseService.query(
-              `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-               VALUES ($1, $2::uuid, $3)
-               ON CONFLICT (product_sku, warehouse_id)
-               DO UPDATE SET physical_quantity = EXCLUDED.physical_quantity, updated_at = CURRENT_TIMESTAMP`,
-              [prod.sku.toUpperCase(), whId, qty],
-            );
-          }
-        }
-      }
+      await this.databaseService.query(`
+        INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
+        SELECT UPPER(p.sku), w.id, 0
+        FROM warehouses w
+        CROSS JOIN products p
+        WHERE (w.status IS NULL OR w.status = 'ACTIVE')
+        ON CONFLICT (product_sku, warehouse_id) DO NOTHING;
+      `);
     } catch (err) {
-      console.warn('[INVENTORY_SERVICE] Lỗi đảm bảo tồn 4 kho:', err);
+      console.warn('[INVENTORY_SERVICE] Lỗi đồng bộ cơ sở dữ liệu tồn kho các kho:', err);
     }
   }
 
@@ -295,9 +396,10 @@ export class InventoryService implements OnModuleInit {
     if (warehouseId === 'ALL') {
       try {
         const rows = await this.databaseService.query<{ product_sku: string; total_quantity: string }>(
-          `SELECT UPPER(p.sku) as product_sku, COALESCE(SUM(i.on_hand), 0)::text as total_quantity
+          `SELECT UPPER(p.sku) as product_sku, COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN i.on_hand ELSE 0 END), 0)::text as total_quantity
            FROM products p
            LEFT JOIN inventories i ON i.product_id = p.id
+           LEFT JOIN warehouses w ON w.id = i.warehouse_id AND (w.status IS NULL OR w.status = 'ACTIVE')
            WHERE UPPER(p.sku) = ANY($1::text[])
            GROUP BY p.sku;`,
           [products.map((p) => p.sku.toUpperCase())],
@@ -308,33 +410,19 @@ export class InventoryService implements OnModuleInit {
       }
     }
 
-    await this.databaseService.query(
-      `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity)
-       SELECT UPPER(sku), $3::uuid, quantity
-       FROM UNNEST($1::text[], $2::numeric[]) AS seed(sku, quantity)
-       ON CONFLICT (product_sku, warehouse_id) DO NOTHING`,
-      [products.map((product) => product.sku), products.map((product) => product.stockQuantity || 100), warehouseId],
-    );
     try {
-      await this.databaseService.query(
-        `UPDATE app_inventory_stock_balances b
-         SET physical_quantity = i.on_hand
+      const rows = await this.databaseService.query<{ product_sku: string; physical_quantity: string }>(
+        `SELECT UPPER(p.sku) as product_sku, COALESCE(i.on_hand, 0)::text as physical_quantity
          FROM inventories i
          JOIN products p ON i.product_id = p.id
-         WHERE b.warehouse_id = i.warehouse_id
-           AND UPPER(b.product_sku) = UPPER(p.sku)
-           AND b.warehouse_id = $1::uuid
-           AND i.on_hand >= 0`,
-        [warehouseId],
+         WHERE i.warehouse_id = $1::uuid
+           AND UPPER(p.sku) = ANY($2::text[])`,
+        [warehouseId, products.map((p) => p.sku.toUpperCase())],
       );
-    } catch {}
-    const rows = await this.databaseService.query<{ product_sku: string; physical_quantity: string }>(
-      `SELECT product_sku, physical_quantity::text
-       FROM app_inventory_stock_balances
-       WHERE product_sku = ANY($1::text[]) AND warehouse_id = $2::uuid`,
-      [products.map((product) => product.sku.toUpperCase()), warehouseId],
-    );
-    return new Map(rows.map((row) => [row.product_sku, Number(row.physical_quantity)]));
+      return new Map(rows.map((row) => [row.product_sku, Number(row.physical_quantity)]));
+    } catch {
+      return new Map();
+    }
   }
 
   async getStockBalanceForUpdate(
@@ -372,12 +460,53 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Helper: ghi một giao dịch vào sổ ledger (theo productId bucket)
+   * Helper: ghi một giao dịch vào sổ ledger (cả in-memory và bảng app_inventory_transactions trong PostgreSQL)
    */
   public writeLedger(tx: InventoryTransactionEntity): void {
     const bucket = this.ledger.get(tx.productId) ?? [];
     bucket.unshift(tx); // mới nhất lên đầu
     this.ledger.set(tx.productId, bucket);
+
+    if (this.databaseService?.isConnected()) {
+      this.saveTransactionToDb(tx).catch((err) => {
+        console.warn('[INVENTORY_SERVICE] Lỗi lưu giao dịch thẻ kho vào PostgreSQL:', err?.message);
+      });
+    }
+  }
+
+  private async saveTransactionToDb(tx: InventoryTransactionEntity): Promise<void> {
+    try {
+      await this.ensureStockTransactionsTable();
+      await this.databaseService.query(
+        `INSERT INTO app_inventory_transactions (
+          id, product_id, sku, product_name, transaction_type,
+          input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+          previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          tx.id,
+          tx.productId,
+          tx.sku,
+          tx.productName,
+          tx.transactionType,
+          tx.inputQuantity,
+          tx.inputUnit,
+          tx.conversionRate,
+          tx.baseQuantityChange,
+          tx.baseUnit,
+          tx.previousStock,
+          tx.newStock,
+          tx.reason,
+          tx.referenceCode,
+          tx.warehouse,
+          tx.performedBy,
+          tx.createdAt,
+        ],
+      );
+    } catch (err: any) {
+      console.warn('[INVENTORY_SERVICE] Không thể ghi thẻ kho vào PostgreSQL:', err?.message);
+    }
   }
 
   /**
@@ -405,53 +534,276 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Khởi tạo một số giao dịch sổ kho mẫu lưu vết quy đổi (SN-23)
+   * Khởi tạo các giao dịch sổ kho mẫu phong phú phục vụ Thẻ kho (SN-185 & SN-23)
    */
   private seedInitialTransactions(): void {
     const now = Date.now();
+    const day = 86400000;
+    const hour = 3600000;
+    const minute = 60000;
 
-    const seedTx1 = new InventoryTransactionEntity({
-      id: 'tx-seed-001',
-      productId: 'prod-001',
-      sku: 'LH-MILK-900G',
-      productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
-      transactionType: 'IMPORT',
-      inputQuantity: 10,
-      inputUnit: 'Thùng',
-      conversionRate: 24, // Snapshot: 1 Thùng = 24 Lon
-      baseQuantityChange: 240, // 10 * 24 = 240 Lon
-      baseUnit: 'Lon',
-      previousStock: 100,
-      newStock: 1500,
-      reason: 'Nhập lô hàng mới từ Nhà máy Dược Loha',
-      referenceCode: 'PNK-2026-0891',
-      warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-      performedBy: 'usr-wh-keeper',
-      createdAt: new Date(now - 86400000 * 2),
-    });
+    const transactions: InventoryTransactionEntity[] = [
+      // 1. LH-MILK-900G (Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-01',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'IMPORT',
+        inputQuantity: 10,
+        inputUnit: 'Thùng',
+        conversionRate: 24,
+        baseQuantityChange: 240,
+        baseUnit: 'Lon',
+        previousStock: 100,
+        newStock: 340,
+        reason: 'Nhập lô hàng mới từ Nhà máy Dược Loha',
+        referenceCode: 'PNK-2026-0891',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 6 - hour * 2 - minute * 15),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-02',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'ORDER',
+        inputQuantity: -50,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: -50,
+        baseUnit: 'Lon',
+        previousStock: 340,
+        newStock: 290,
+        reason: 'Xuất bán đơn hàng đại lý #DH-2026-1002 (Đại lý Sữa Miền Nam)',
+        referenceCode: 'DH-2026-1002',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 4 - hour * 5 - minute * 40),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-03',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'TRANSFER',
+        inputQuantity: -30,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: -30,
+        baseUnit: 'Lon',
+        previousStock: 290,
+        newStock: 260,
+        reason: 'Điều chuyển nội bộ sang Kho Vận Hà Nội phục vụ thị trường phía Bắc',
+        referenceCode: 'PCK-2026-0045',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Quản lý kho Đỗ Quốc Bảo',
+        createdAt: new Date(now - day * 3 - hour * 1 - minute * 10),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-04',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'ADJUSTMENT',
+        inputQuantity: -2,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: -2,
+        baseUnit: 'Lon',
+        previousStock: 260,
+        newStock: 258,
+        reason: 'Điều chỉnh kiểm kê định kỳ: Hao hụt 2 lon do móp méo khi bốc xếp',
+        referenceCode: 'PKK-20261008-001',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Quản lý kho Đỗ Quốc Bảo',
+        createdAt: new Date(now - day * 2 - hour * 3 - minute * 25),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-milk-05',
+        productId: 'prod-001',
+        sku: 'LH-MILK-900G',
+        productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+        transactionType: 'IMPORT',
+        inputQuantity: 1242,
+        inputUnit: 'Lon',
+        conversionRate: 1,
+        baseQuantityChange: 1242,
+        baseUnit: 'Lon',
+        previousStock: 258,
+        newStock: 1500,
+        reason: 'Nhập bổ sung lượng lớn theo hợp đồng cung ứng số HD-2026-44',
+        referenceCode: 'PNK-2026-0905',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 1 - hour * 4 - minute * 5),
+      }),
 
-    const seedTx2 = new InventoryTransactionEntity({
-      id: 'tx-seed-002',
-      productId: 'prod-002',
-      sku: 'LH-NUT-180ML',
-      productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
-      transactionType: 'IMPORT',
-      inputQuantity: 25,
-      inputUnit: 'Thùng',
-      conversionRate: 48, // Snapshot: 1 Thùng = 48 Hộp
-      baseQuantityChange: 1200, // 25 * 48 = 1200 Hộp
-      baseUnit: 'Hộp',
-      previousStock: 0,
-      newStock: 1200,
-      reason: 'Nhập kho thành phẩm theo lệnh sản xuất #LSX-1102',
-      referenceCode: 'PNK-2026-0892',
-      warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
-      performedBy: 'usr-wh-keeper',
-      createdAt: new Date(now - 86400000),
-    });
+      // 2. LH-NUT-180ML (Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-nut-01',
+        productId: 'prod-002',
+        sku: 'LH-NUT-180ML',
+        productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        transactionType: 'IMPORT',
+        inputQuantity: 25,
+        inputUnit: 'Thùng',
+        conversionRate: 48,
+        baseQuantityChange: 1200,
+        baseUnit: 'Hộp',
+        previousStock: 0,
+        newStock: 1200,
+        reason: 'Nhập kho thành phẩm theo lệnh sản xuất #LSX-1102',
+        referenceCode: 'PNK-2026-0892',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 5 - hour * 2 - minute * 20),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-nut-02',
+        productId: 'prod-002',
+        sku: 'LH-NUT-180ML',
+        productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        transactionType: 'ORDER',
+        inputQuantity: -120,
+        inputUnit: 'Hộp',
+        conversionRate: 1,
+        baseQuantityChange: -120,
+        baseUnit: 'Hộp',
+        previousStock: 1200,
+        newStock: 1080,
+        reason: 'Xuất bán theo đơn hàng #DH-2026-1008 cho Chuỗi siêu thị Loha Mart',
+        referenceCode: 'DH-2026-1008',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 3 - hour * 4 - minute * 45),
+      }),
 
-    this.writeLedger(seedTx1);
-    this.writeLedger(seedTx2);
+      // 3. LH-BIRD-NEST (Yến Sào & Thực Phẩm Bổ Dưỡng)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-bird-01',
+        productId: 'prod-003',
+        sku: 'LH-BIRD-NEST',
+        productName: 'Tổ Yến Chưng Đông Trùng Hạ Thảo Cao Cấp 70ml',
+        transactionType: 'IMPORT',
+        inputQuantity: 600,
+        inputUnit: 'Hũ',
+        conversionRate: 1,
+        baseQuantityChange: 600,
+        baseUnit: 'Hũ',
+        previousStock: 0,
+        newStock: 600,
+        reason: 'Nhập kho thành phẩm cao cấp từ Xưởng Yến Sào Nha Trang',
+        referenceCode: 'PNK-2026-0895',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 4 - hour * 1 - minute * 30),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-bird-02',
+        productId: 'prod-003',
+        sku: 'LH-BIRD-NEST',
+        productName: 'Tổ Yến Chưng Đông Trùng Hạ Thảo Cao Cấp 70ml',
+        transactionType: 'ORDER',
+        inputQuantity: -20,
+        inputUnit: 'Hũ',
+        conversionRate: 1,
+        baseQuantityChange: -20,
+        baseUnit: 'Hũ',
+        previousStock: 600,
+        newStock: 580,
+        reason: 'Xuất giao hàng đơn VIP #DH-2026-1015 (Đại lý Dinh Dưỡng An Tâm)',
+        referenceCode: 'DH-2026-1015',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 2 - hour * 5 - minute * 15),
+      }),
+
+      // 4. LH-COFFEE-250G (Cà Phê Rang Xay)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-coffee-01',
+        productId: 'prod-004',
+        sku: 'LH-COFFEE-250G',
+        productName: 'Cà Phê Rang Xay Nguyên Chất Robusta & Arabica 250g',
+        transactionType: 'IMPORT',
+        inputQuantity: 500,
+        inputUnit: 'Gói',
+        conversionRate: 1,
+        baseQuantityChange: 500,
+        baseUnit: 'Gói',
+        previousStock: 0,
+        newStock: 500,
+        reason: 'Nhập lô cà phê thu hoạch mới từ Nông trại Buôn Ma Thuột',
+        referenceCode: 'PNK-2026-0898',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 5 - hour * 3 - minute * 10),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-coffee-02',
+        productId: 'prod-004',
+        sku: 'LH-COFFEE-250G',
+        productName: 'Cà Phê Rang Xay Nguyên Chất Robusta & Arabica 250g',
+        transactionType: 'TRANSFER',
+        inputQuantity: -90,
+        inputUnit: 'Gói',
+        conversionRate: 1,
+        baseQuantityChange: -90,
+        baseUnit: 'Gói',
+        previousStock: 500,
+        newStock: 410,
+        reason: 'Điều chuyển kho nội bộ sang Kho Trung Chuyển Đà Nẵng',
+        referenceCode: 'PCK-2026-0048',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Quản lý kho Đỗ Quốc Bảo',
+        createdAt: new Date(now - day * 2 - hour * 2 - minute * 50),
+      }),
+
+      // 5. LH-TEA-350ML (Trà Thảo Mộc)
+      new InventoryTransactionEntity({
+        id: 'tx-seed-tea-01',
+        productId: 'prod-005',
+        sku: 'LH-TEA-350ML',
+        productName: 'Trà Thảo Mộc Hoa Cúc & Kỷ Tử Thanh Nhiệt 350ml',
+        transactionType: 'IMPORT',
+        inputQuantity: 300,
+        inputUnit: 'Chai',
+        conversionRate: 1,
+        baseQuantityChange: 300,
+        baseUnit: 'Chai',
+        previousStock: 0,
+        newStock: 300,
+        reason: 'Nhập hàng đợt 1 từ Công ty Trà Thảo Dược Thiên Nhiên',
+        referenceCode: 'PNK-2026-0901',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Thủ kho Nguyễn Văn Kho',
+        createdAt: new Date(now - day * 4 - hour * 1 - minute * 35),
+      }),
+      new InventoryTransactionEntity({
+        id: 'tx-seed-tea-02',
+        productId: 'prod-005',
+        sku: 'LH-TEA-350ML',
+        productName: 'Trà Thảo Mộc Hoa Cúc & Kỷ Tử Thanh Nhiệt 350ml',
+        transactionType: 'EXPORT',
+        inputQuantity: -40,
+        inputUnit: 'Chai',
+        conversionRate: 1,
+        baseQuantityChange: -40,
+        baseUnit: 'Chai',
+        previousStock: 300,
+        newStock: 260,
+        reason: 'Xuất mẫu thử nghiệm và giới thiệu sản phẩm tại Hội chợ Thương mại',
+        referenceCode: 'PXK-2026-0015',
+        warehouse: 'Kho Tổng Miền Nam - LOHA WH01',
+        performedBy: 'Nhân viên kho Trần Văn Kho',
+        createdAt: new Date(now - day * 1 - hour * 5 - minute * 20),
+      }),
+    ];
+
+    for (const tx of transactions) {
+      this.writeLedger(tx);
+    }
   }
 
   /**
@@ -474,15 +826,27 @@ export class InventoryService implements OnModuleInit {
 
     const roles = currentUser?.roles || [];
     const isAdmin = roles.includes(UserRole.ADMIN);
-    const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isAdmin;
-    const isManager = (roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any)) && !isAdmin;
+    const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+    const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
 
     let warehouseId = 'ALL';
     let warehouseName = 'Tất cả kho hàng';
 
     if (isKeeper) {
-      // 1. THỦ KHO (1 - 1): Chỉ được xem DUY NHẤT kho mình được phân công tác nghiệp
-      const myWhId = currentUser?.warehouseId || currentUser?.warehouseCode || currentUser?.assignedWarehouse;
+      // 1. THỦ KHO / NHÂN VIÊN KHO (1 - 1): Chỉ được xem DUY NHẤT kho mình được phân công tác nghiệp
+      let myWhId = currentUser?.warehouseId || currentUser?.warehouseCode || currentUser?.assignedWarehouse;
+      if (!myWhId && currentUser?.userId && this.databaseService?.isConnected()) {
+        try {
+          const userWhRow = await this.databaseService.query<{ id: string }>(
+            `SELECT id FROM warehouses WHERE manager_id = $1::uuid
+             UNION
+             SELECT warehouse_id FROM user_warehouses WHERE user_id = $1::uuid LIMIT 1`,
+            [currentUser.userId],
+          );
+          if (userWhRow[0]?.id) myWhId = userWhRow[0].id;
+        } catch {}
+      }
+
       const resolved = myWhId ? await this.resolveWarehouseId(myWhId) : null;
       if (resolved) {
         warehouseId = resolved.id;
@@ -491,28 +855,8 @@ export class InventoryService implements OnModuleInit {
         warehouseId = DEFAULT_WAREHOUSE_ID;
         warehouseName = DEFAULT_WAREHOUSE_NAME;
       }
-    } else if (isManager) {
-      // 2. QUẢN LÝ KHO (N - N): Có thể lọc xem từng kho trong danh sách phụ trách, hoặc xem 'ALL'
-      const managerWhIds =
-        currentUser?.warehouseIds ||
-        (currentUser?.warehouses && currentUser.warehouses.map((w) => w.id)) ||
-        (currentUser?.warehouseId ? [currentUser.warehouseId] : []);
-
-      if (rawWh && rawWh !== 'ALL') {
-        const resolved = await this.resolveWarehouseId(rawWh);
-        if (resolved && (managerWhIds.length === 0 || managerWhIds.includes(resolved.id))) {
-          warehouseId = resolved.id;
-          warehouseName = `${resolved.name} - ${resolved.code}`;
-        } else if (resolved) {
-          warehouseId = resolved.id;
-          warehouseName = `${resolved.name} - ${resolved.code}`;
-        }
-      } else {
-        warehouseId = 'ALL';
-        warehouseName = 'Tất cả kho quản lý';
-      }
     } else {
-      // 3. ADMIN / KINH DOANH: Hỗ trợ 'ALL' hoặc bất kỳ kho nào trong 4 kho
+      // 2. QUẢN LÝ KHO VÀ ADMIN: TOÀN QUYỀN XEM TẤT CẢ CÁC BỘ LỌC KHO HÀNG ('ALL' hoặc bất kỳ kho nào)
       if (rawWh && rawWh !== 'ALL') {
         const resolved = await this.resolveWarehouseId(rawWh);
         if (resolved) {
@@ -558,6 +902,8 @@ export class InventoryService implements OnModuleInit {
           : `SELECT UPPER(p.sku) as sku, COALESCE(SUM(i.allocated), 0)::text as allocated
              FROM inventories i
              JOIN products p ON i.product_id = p.id
+             JOIN warehouses w ON w.id = i.warehouse_id
+             WHERE (w.status IS NULL OR w.status = 'ACTIVE')
              GROUP BY p.sku`;
         const invAllocRows = await this.databaseService.query<{ sku: string; allocated: string }>(
           invAllocQuery,
@@ -658,7 +1004,7 @@ export class InventoryService implements OnModuleInit {
           });
         }
 
-        // Bổ sung các đơn hàng APPROVED/PROCESSING từ app_order_records nếu chưa có trong stock_reservations
+        // Bổ sung các đơn hàng APPROVED/PROCESSING/PACKED từ app_order_records nếu chưa có trong stock_reservations
         const orderQuery = warehouseId !== 'ALL'
           ? `SELECT id, order_code,
                   COALESCE(payload->>'status', 'APPROVED') as order_status,
@@ -667,7 +1013,7 @@ export class InventoryService implements OnModuleInit {
                   payload->>'reservedUntil' as reserved_until,
                   created_at::text
            FROM app_order_records
-           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING')
+           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING', 'PACKED')
              AND (payload->>'warehouseId' = $1 OR payload->>'warehouse_id' = $1)`
           : `SELECT id, order_code,
                   COALESCE(payload->>'status', 'APPROVED') as order_status,
@@ -676,7 +1022,7 @@ export class InventoryService implements OnModuleInit {
                   payload->>'reservedUntil' as reserved_until,
                   created_at::text
            FROM app_order_records
-           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING')`;
+           WHERE payload->>'status' IN ('APPROVED', 'PROCESSING', 'PACKED')`;
 
         const activeOrderRows = await this.databaseService.query<{
           id: string;
@@ -789,10 +1135,15 @@ export class InventoryService implements OnModuleInit {
       }
     }
 
-    let items: StockOverviewItem[] = products.map((p) => {
+    // Toàn bộ sản phẩm trong danh mục luôn hiển thị cho kho được chọn (kho mới tạo hiển thị tồn = 0)
+    const targetProducts = products;
+
+    let items: StockOverviewItem[] = targetProducts.map((p) => {
       const pSkuUpper = p.sku.toUpperCase();
       const aliasSku = pSkuUpper === 'LH-MILK-POWDER-900G' ? 'LH-MILK-900G' : pSkuUpper === 'LH-MILK-900G' ? 'LH-MILK-POWDER-900G' : '';
-      const physicalStockQuantity = physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0;
+      const physicalStockQuantity = warehouseId === 'ALL'
+        ? (physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? p.stockQuantity ?? 0)
+        : (physicalBalances.get(pSkuUpper) ?? (aliasSku ? physicalBalances.get(aliasSku) : undefined) ?? 0);
       const dbReserved = reservations.get(pSkuUpper) ?? (aliasSku ? reservations.get(aliasSku) : undefined) ?? 0;
       const invAllocated = invAllocatedBySku.get(pSkuUpper) ?? (aliasSku ? invAllocatedBySku.get(aliasSku) : undefined) ?? 0;
 
@@ -864,7 +1215,96 @@ export class InventoryService implements OnModuleInit {
     }
 
     if (q?.status && q.status !== 'ALL') {
-      if (q.status === 'BELOW_MIN_STOCK') {
+      if (q.status === 'DAMAGED' || q.status === 'DAMAGED_STOCK') {
+        // Chỉ hiển thị các sản phẩm lỗi tồn kho riêng (damaged_stock_balances)
+        let damagedRows: any[] = [];
+        if (this.databaseService?.isConnected()) {
+          try {
+            const sql = `
+              SELECT d.id, d.warehouse_id, d.product_id, d.product_sku, d.batch_number,
+                     d.quantity as damaged_quantity, d.updated_at,
+                     w.name as warehouse_name, w.code as warehouse_code,
+                     p.name as product_name, p.base_unit as unit, c.name as category, p.image_url,
+                     b.expiry_date, b.mfg_date
+              FROM damaged_stock_balances d
+              LEFT JOIN warehouses w ON (w.id::text = d.warehouse_id OR w.code = d.warehouse_id)
+              LEFT JOIN products p ON (p.id::text = d.product_id OR UPPER(p.sku) = UPPER(d.product_sku))
+              LEFT JOIN categories c ON c.id = p.category_id
+              LEFT JOIN LATERAL (
+                SELECT expiry_date, mfg_date
+                FROM inventory_batches ib
+                WHERE (ib.batch_number = d.batch_number OR ib.batch_no = d.batch_number)
+                  AND d.batch_number IS NOT NULL AND d.batch_number <> ''
+                ORDER BY ib.created_at DESC
+                LIMIT 1
+              ) b ON true
+              WHERE d.quantity > 0;
+            `;
+            damagedRows = await this.databaseService.query<any>(sql);
+          } catch (e: any) {
+            this.logger.warn(`Lỗi query damaged_stock_balances: ${e.message}`);
+          }
+        }
+
+        let damagedItems: StockOverviewItem[] = damagedRows.map((r) => {
+          const qty = Number(r.damaged_quantity || 0);
+          return {
+            id: `damaged-${r.id || r.product_sku}-${r.warehouse_id}`,
+            productId: r.product_id,
+            sku: r.product_sku,
+            name: r.product_name || r.product_sku,
+            productName: r.product_name || r.product_sku,
+            category: r.category || 'Hàng lỗi',
+            parentCategory: 'Hàng lỗi',
+            subCategory: '',
+            warehouse: r.warehouse_name || 'Kho hàng',
+            warehouseId: r.warehouse_id,
+            warehouseCode: r.warehouse_code,
+            physicalStock: qty,
+            physicalStockQuantity: qty,
+            physicalQuantity: qty,
+            stockQuantity: qty,
+            reservedStock: 0,
+            reservedQuantity: 0,
+            availableStock: 0,
+            availableQuantity: 0,
+            status: 'DAMAGED' as any,
+            damagedStock: qty,
+            damagedQuantity: qty,
+            batchNumber: r.batch_number || '',
+            expiryDate: r.expiry_date ? new Date(r.expiry_date).toISOString() : undefined,
+            mfgDate: r.mfg_date ? new Date(r.mfg_date).toISOString() : undefined,
+            baseUnit: r.unit || 'Chai',
+            unit: r.unit || 'Chai',
+            units: [{ unitName: r.unit || 'Chai', conversionRate: 1, isBaseUnit: true }],
+            activeReservations: [],
+            minStockLevel: 0,
+            updatedAt: r.updated_at ? new Date(r.updated_at) : new Date(),
+          };
+        });
+
+        // Lọc theo kho hàng nếu có
+        if (warehouseId !== 'ALL' || (q?.warehouse && q.warehouse !== 'ALL')) {
+          const targetWh = (warehouseId !== 'ALL' ? warehouseId : q?.warehouse || '').toLowerCase();
+          damagedItems = damagedItems.filter((i) => {
+            return (
+              i.warehouseId?.toLowerCase() === targetWh ||
+              i.warehouseCode?.toLowerCase() === targetWh ||
+              i.warehouse?.toLowerCase().includes(targetWh)
+            );
+          });
+        }
+
+        // Lọc theo tìm kiếm
+        if (q?.search && q.search.trim()) {
+          const s = q.search.trim().toLowerCase();
+          damagedItems = damagedItems.filter(
+            (i) => i.sku.toLowerCase().includes(s) || i.name.toLowerCase().includes(s),
+          );
+        }
+
+        return damagedItems;
+      } else if (q.status === 'BELOW_MIN_STOCK') {
         if (warehouseId === 'ALL') {
           // Khi cùng chọn bộ lọc "Tất cả kho hàng" và "Dưới tồn tối thiểu":
           // Hiển thị toàn bộ các sản phẩm đang bị cảnh báo được cộng dồn từ tất cả các kho khác đang có trên hệ thống!
@@ -1231,29 +1671,27 @@ export class InventoryService implements OnModuleInit {
       const roles = user.roles || [];
       const isAdmin = roles.includes(UserRole.ADMIN);
 
-      if (!isAdmin) {
-        const isKeeper = roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any);
-        const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any);
+      const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+      const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
 
-        if (isKeeper) {
-          // QUAN HỆ 1 - 1: Thủ kho chỉ được tác nghiệp điều chỉnh tồn kho đúng kho của mình
-          const userWhId = user.warehouseId || user.warehouseCode;
-          if (userWhId && warehouseId !== userWhId && warehouseCode !== userWhId) {
-            throw new ForbiddenException(
-              `Thủ kho chỉ có quyền tác nghiệp điều chỉnh tồn kho tại kho được phân công trực tiếp (${user.warehouseCode || user.warehouseId}).`,
+      if (isKeeper) {
+        // QUAN HỆ 1 - 1: Thủ kho chỉ được tác nghiệp điều chỉnh tồn kho đúng kho của mình
+        let userWhId = user.warehouseId || user.warehouseCode;
+        if (!userWhId && user.userId && this.databaseService?.isConnected()) {
+          try {
+            const row = await this.databaseService.query<{ id: string }>(
+              `SELECT id FROM warehouses WHERE manager_id = $1::uuid
+               UNION
+               SELECT warehouse_id FROM user_warehouses WHERE user_id = $1::uuid LIMIT 1`,
+              [user.userId],
             );
-          }
-        } else if (isManager) {
-          // QUAN HỆ N - N: Quản lý kho được tác nghiệp điều chỉnh tồn kho tại các kho được phân công quản lý
-          const managerWhIds =
-            user.warehouseIds ||
-            (user.warehouses && user.warehouses.map((w) => w.id)) ||
-            (user.warehouseId ? [user.warehouseId] : []);
-          if (managerWhIds.length > 0 && !managerWhIds.includes(warehouseId)) {
-            throw new ForbiddenException(
-              'Quản lý kho chỉ có quyền tác nghiệp điều chỉnh tồn kho tại các kho được phân công giám sát.',
-            );
-          }
+            if (row[0]?.id) userWhId = row[0].id;
+          } catch {}
+        }
+        if (userWhId && warehouseId !== userWhId && warehouseCode !== userWhId) {
+          throw new ForbiddenException(
+            `Thủ kho chỉ có quyền tác nghiệp điều chỉnh tồn kho tại kho được phân công trực tiếp (${user.warehouseCode || user.warehouseId}).`,
+          );
         }
       }
     }
@@ -1337,9 +1775,12 @@ export class InventoryService implements OnModuleInit {
         );
       }
 
-      // 5. Cập nhật lại tổng tồn chung của sản phẩm trên toàn bộ các kho
+      // 5. Cập nhật lại tổng tồn chung của sản phẩm trên toàn bộ các kho đang hoạt động
       const totalRes = await client.query<{ total: string }>(
-        `SELECT COALESCE(SUM(on_hand), 0)::text as total FROM inventories WHERE product_id = $1`,
+        `SELECT COALESCE(SUM(i.on_hand), 0)::text as total
+         FROM inventories i
+         JOIN warehouses w ON w.id = i.warehouse_id
+         WHERE i.product_id = $1 AND (w.status IS NULL OR w.status = 'ACTIVE')`,
         [product.id],
       );
       const totalOverallStock = Number(totalRes.rows[0]?.total ?? newQuantity);
@@ -1528,20 +1969,153 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Truy vấn sổ kho và lịch sử biến động giao dịch (Fix #4: đọc từ ledger Map)
+   * Truy vấn sổ kho và lịch sử biến động giao dịch (SN-185: Thẻ kho hàng hóa)
    */
   async getTransactions(
-    sku?: string,
-    limit?: number,
+    queryOrSku?: string | {
+      sku?: string;
+      warehouse?: string;
+      startDate?: string;
+      endDate?: string;
+      type?: string;
+      search?: string;
+      limit?: number;
+    },
+    limitParam?: number,
   ): Promise<InventoryTransactionEntity[]> {
-    // Gom toàn bộ giao dịch từ tất cả bucket, sắp xếp mới nhất lên đầu
+    const q = typeof queryOrSku === 'string' ? { sku: queryOrSku, limit: limitParam } : (queryOrSku || {});
+    const sku = q.sku;
+    const warehouse = q.warehouse;
+    const startDate = q.startDate;
+    const endDate = q.endDate;
+    const type = q.type;
+    const search = q.search;
+    const limit = q.limit;
+
+    // Ưu tiên 1: Đọc dữ liệu thật từ bảng app_inventory_transactions trong PostgreSQL nếu DB kết nối
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.ensureStockTransactionsTable();
+        const conditions: string[] = [];
+        const params: any[] = [];
+        let paramIdx = 1;
+
+        if (sku && sku.trim() !== '') {
+          const cleanSku = sku.trim().toUpperCase();
+          if (cleanSku === 'LH-MILK-900G') {
+            conditions.push(`(UPPER(sku) = $${paramIdx} OR UPPER(sku) = 'LH-MILK-POWDER-900G')`);
+          } else if (cleanSku === 'LH-TEA-240ML') {
+            conditions.push(`(UPPER(sku) = $${paramIdx} OR UPPER(sku) = 'LH-TEA-350ML')`);
+          } else {
+            conditions.push(`UPPER(sku) = $${paramIdx}`);
+          }
+          params.push(cleanSku);
+          paramIdx++;
+        }
+
+        if (warehouse && warehouse.trim() !== '' && warehouse.toUpperCase() !== 'ALL') {
+          const cleanWh = warehouse.trim().toLowerCase();
+          if (cleanWh.includes('nam') || cleanWh.includes('mn') || cleanWh.includes('wh01') || cleanWh.includes('hồ chí minh')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%nam%' OR LOWER(warehouse) LIKE '%wh01%' OR LOWER(warehouse) LIKE '%hồ chí minh%')`);
+          } else if (cleanWh.includes('bắc') || cleanWh.includes('bac') || cleanWh.includes('mb') || cleanWh.includes('wh02') || cleanWh.includes('hà nội')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%bắc%' OR LOWER(warehouse) LIKE '%wh02%' OR LOWER(warehouse) LIKE '%hà nội%')`);
+          } else if (cleanWh.includes('trung') || cleanWh.includes('mt') || cleanWh.includes('wh03') || cleanWh.includes('đà nẵng')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%trung%' OR LOWER(warehouse) LIKE '%wh03%' OR LOWER(warehouse) LIKE '%đà nẵng%')`);
+          } else if (cleanWh.includes('tây') || cleanWh.includes('tay') || cleanWh.includes('west') || cleanWh.includes('cần thơ')) {
+            conditions.push(`(LOWER(warehouse) LIKE '%tây%' OR LOWER(warehouse) LIKE '%west%' OR LOWER(warehouse) LIKE '%cần thơ%')`);
+          } else {
+            conditions.push(`LOWER(warehouse) LIKE $${paramIdx}`);
+            params.push(`%${cleanWh}%`);
+            paramIdx++;
+          }
+        }
+
+        if (type && type.trim() !== '' && type.toUpperCase() !== 'ALL') {
+          conditions.push(`UPPER(transaction_type) = $${paramIdx}`);
+          params.push(type.trim().toUpperCase());
+          paramIdx++;
+        }
+
+        if (startDate && startDate.trim() !== '') {
+          const start = new Date(startDate);
+          if (!isNaN(start.getTime())) {
+            start.setHours(0, 0, 0, 0);
+            conditions.push(`created_at >= $${paramIdx}`);
+            params.push(start);
+            paramIdx++;
+          }
+        }
+
+        if (endDate && endDate.trim() !== '') {
+          const end = new Date(endDate);
+          if (!isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            conditions.push(`created_at <= $${paramIdx}`);
+            params.push(end);
+            paramIdx++;
+          }
+        }
+
+        if (search && search.trim() !== '') {
+          const s = `%${search.trim().toLowerCase()}%`;
+          conditions.push(`(
+            LOWER(reference_code) LIKE $${paramIdx} OR
+            LOWER(product_name) LIKE $${paramIdx} OR
+            LOWER(sku) LIKE $${paramIdx} OR
+            LOWER(reason) LIKE $${paramIdx} OR
+            LOWER(performed_by) LIKE $${paramIdx}
+          )`);
+          params.push(s);
+          paramIdx++;
+        }
+
+        const max = limit && limit > 0 ? Number(limit) : 500;
+        const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+        const sql = `
+          SELECT id, product_id, sku, product_name, transaction_type,
+                 input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+                 previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+          FROM app_inventory_transactions
+          ${whereClause}
+          ORDER BY created_at DESC
+          LIMIT ${max}
+        `;
+
+        const rows = await this.databaseService.query<any>(sql, params);
+        if (rows && rows.length > 0) {
+          return rows.map((r) => new InventoryTransactionEntity({
+            id: r.id,
+            productId: r.product_id,
+            sku: r.sku,
+            productName: r.product_name,
+            transactionType: r.transaction_type,
+            inputQuantity: Number(r.input_quantity),
+            inputUnit: r.input_unit,
+            conversionRate: Number(r.conversion_rate),
+            baseQuantityChange: Number(r.base_quantity_change),
+            baseUnit: r.base_unit,
+            previousStock: Number(r.previous_stock),
+            newStock: Number(r.new_stock),
+            reason: r.reason,
+            referenceCode: r.reference_code,
+            warehouse: r.warehouse,
+            performedBy: r.performed_by,
+            createdAt: new Date(r.created_at),
+          }));
+        }
+      } catch (err: any) {
+        console.warn(`[INVENTORY_SERVICE] Query app_inventory_transactions thất bại, fallback in-memory: ${err?.message}`);
+      }
+    }
+
+    // Ưu tiên 2: Fallback in-memory an toàn khi DB chưa có hoặc đang khởi động
     let list: InventoryTransactionEntity[] = [];
     for (const bucket of this.ledger.values()) {
       list = list.concat(bucket);
     }
     list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    if (sku) {
+    if (sku && sku.trim() !== '') {
       const cleanSku = sku.trim().toUpperCase();
       list = list.filter((t) => {
         const tSku = t.sku.toUpperCase();
@@ -1552,7 +2126,56 @@ export class InventoryService implements OnModuleInit {
       });
     }
 
-    const max = limit && limit > 0 ? Number(limit) : 100;
+    if (warehouse && warehouse.trim() !== '' && warehouse.toUpperCase() !== 'ALL') {
+      const cleanWh = warehouse.trim().toLowerCase();
+      list = list.filter((t) => {
+        const tWh = (t.warehouse || '').toLowerCase();
+        if (tWh.includes(cleanWh) || cleanWh.includes(tWh)) return true;
+        const isSouth = (s: string) => s.includes('nam') || s.includes('mn') || s.includes('wh01') || s.includes('hồ chí minh');
+        const isNorth = (s: string) => s.includes('bắc') || s.includes('bac') || s.includes('mb') || s.includes('wh02') || s.includes('hà nội');
+        const isCentral = (s: string) => s.includes('trung') || s.includes('mt') || s.includes('wh03') || s.includes('đà nẵng');
+        const isWest = (s: string) => s.includes('tây') || s.includes('tay') || s.includes('west') || s.includes('cần thơ');
+        if (isSouth(cleanWh) && isSouth(tWh)) return true;
+        if (isNorth(cleanWh) && isNorth(tWh)) return true;
+        if (isCentral(cleanWh) && isCentral(tWh)) return true;
+        if (isWest(cleanWh) && isWest(tWh)) return true;
+        return false;
+      });
+    }
+
+    if (type && type.trim() !== '' && type.toUpperCase() !== 'ALL') {
+      const cleanType = type.trim().toUpperCase();
+      list = list.filter((t) => (t.transactionType || t.type) === cleanType);
+    }
+
+    if (startDate && startDate.trim() !== '') {
+      const start = new Date(startDate);
+      if (!isNaN(start.getTime())) {
+        start.setHours(0, 0, 0, 0);
+        list = list.filter((t) => new Date(t.createdAt).getTime() >= start.getTime());
+      }
+    }
+
+    if (endDate && endDate.trim() !== '') {
+      const end = new Date(endDate);
+      if (!isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        list = list.filter((t) => new Date(t.createdAt).getTime() <= end.getTime());
+      }
+    }
+
+    if (search && search.trim() !== '') {
+      const s = search.trim().toLowerCase();
+      list = list.filter((t) =>
+        (t.referenceCode || '').toLowerCase().includes(s) ||
+        (t.productName || '').toLowerCase().includes(s) ||
+        (t.sku || '').toLowerCase().includes(s) ||
+        (t.reason || '').toLowerCase().includes(s) ||
+        (t.performedBy || '').toLowerCase().includes(s)
+      );
+    }
+
+    const max = limit && limit > 0 ? Number(limit) : 500;
     return list.slice(0, max);
   }
 
@@ -1973,5 +2596,1874 @@ export class InventoryService implements OnModuleInit {
 
     return audit;
   }
+
+  // =========================================================================
+  // QUẢN LÝ LÔ HÀNG & HẠN SỬ DỤNG THEO CHUẨN FEFO (SN-184 / EP-SN-229)
+  // =========================================================================
+
+  /**
+   * Khởi tạo dữ liệu mẫu các lô hàng với nhiều trạng thái:
+   * Hợp lệ, Sắp hết hạn (cận hạn), Đã quá hạn để phục vụ kiểm thử và offline fallback
+   */
+  private seedInitialBatches(): void {
+    const addDays = (days: number): string => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return d.toISOString().split('T')[0];
+    };
+
+    const initialBatches: Array<Partial<InventoryBatchEntity> & Record<string, unknown>> = [
+      {
+        id: '66666666-0000-0000-0000-000000000001',
+        batchNumber: 'LOT-COLA-2026A',
+        productId: '33333333-0000-0000-0000-000000000001',
+        productSku: 'LH-COLA-CAN-330ML',
+        productName: 'Nước Ngọt Có Ga Loha Cola Lon 330ml',
+        categoryName: 'Nước giải khát & Nước ngọt',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Lon',
+        mfgDate: addDays(-180),
+        expiryDate: addDays(45), // Cận hạn nếu threshold >= 45
+        quantity: 9600,
+        allocatedQuantity: 2400,
+        costPrice: 6500,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000002',
+        batchNumber: 'LOT-COLA-2026B',
+        productId: '33333333-0000-0000-0000-000000000001',
+        productSku: 'LH-COLA-CAN-330ML',
+        productName: 'Nước Ngọt Có Ga Loha Cola Lon 330ml',
+        categoryName: 'Nước giải khát & Nước ngọt',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Lon',
+        mfgDate: addDays(-30),
+        expiryDate: addDays(210), // Hợp lệ / an toàn
+        quantity: 14400,
+        allocatedQuantity: 0,
+        costPrice: 6500,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000003',
+        batchNumber: 'LOT-MILK-2026-NEAR',
+        productId: '33333333-0000-0000-0000-000000000008',
+        productSku: 'LH-FRESH-MILK-1L',
+        productName: 'Sữa Tươi Thanh Trùng Nguyên Chất Loha Farm 1L',
+        categoryName: 'Sữa tươi & Tiệt trùng',
+        warehouseId: '11111111-0000-0000-0000-000000000002',
+        warehouseName: 'Kho Miền Bắc (Hà Nội)',
+        baseUnit: 'Chai',
+        mfgDate: addDays(-75),
+        expiryDate: addDays(15), // Cận hạn < 30 ngày (EXPIRING_SOON)
+        quantity: 520,
+        allocatedQuantity: 50,
+        costPrice: 26000,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000004',
+        batchNumber: 'LOT-MILK-2026-SAFE',
+        productId: '33333333-0000-0000-0000-000000000008',
+        productSku: 'LH-FRESH-MILK-1L',
+        productName: 'Sữa Tươi Thanh Trùng Nguyên Chất Loha Farm 1L',
+        categoryName: 'Sữa tươi & Tiệt trùng',
+        warehouseId: '11111111-0000-0000-0000-000000000002',
+        warehouseName: 'Kho Miền Bắc (Hà Nội)',
+        baseUnit: 'Chai',
+        mfgDate: addDays(-10),
+        expiryDate: addDays(180), // Hợp lệ (VALID)
+        quantity: 1200,
+        allocatedQuantity: 0,
+        costPrice: 26000,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000005',
+        batchNumber: 'LOT-TEA-2026-EXP',
+        productId: '33333333-0000-0000-0000-000000000004',
+        productSku: 'LH-TEA-PEACH-450',
+        productName: 'Trà Đào Hạt Chia Loha Tea Chai 450ml',
+        categoryName: 'Nước giải khát & Trà',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Chai',
+        mfgDate: addDays(-190),
+        expiryDate: addDays(-6), // Đã hết hạn (EXPIRED)
+        quantity: 350,
+        allocatedQuantity: 0,
+        costPrice: 8500,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000006',
+        batchNumber: 'LOT-NRG-2026-NEAR',
+        productId: '33333333-0000-0000-0000-000000000003',
+        productSku: 'LH-ENERGY-BULL-250',
+        productName: 'Nước Tăng Lực Loha Red Bull Lon 250ml',
+        categoryName: 'Nước tăng lực & Thể thao',
+        warehouseId: '11111111-0000-0000-0000-000000000004',
+        warehouseName: 'Kho Miền Trung (Đà Nẵng)',
+        baseUnit: 'Lon',
+        mfgDate: addDays(-160),
+        expiryDate: addDays(20), // Cận hạn < 30 ngày (EXPIRING_SOON)
+        quantity: 800,
+        allocatedQuantity: 100,
+        costPrice: 7800,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000007',
+        batchNumber: 'LOT-NEST-2026-SAFE',
+        productId: '33333333-0000-0000-0000-000000000009',
+        productSku: 'LH-NEST-PREM-100G',
+        productName: 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g',
+        categoryName: 'Nước yến & Bổ dưỡng',
+        warehouseId: '11111111-0000-0000-0000-000000000001',
+        warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
+        baseUnit: 'Hộp',
+        mfgDate: addDays(-40),
+        expiryDate: addDays(320), // Hợp lệ (VALID)
+        quantity: 45,
+        allocatedQuantity: 5,
+        costPrice: 3100000,
+      },
+      {
+        id: '66666666-0000-0000-0000-000000000008',
+        batchNumber: 'LOT-NUTS-2026-EXP',
+        productId: '33333333-0000-0000-0000-000000000010',
+        productSku: 'LH-NUTS-MIX-250G',
+        productName: 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g',
+        categoryName: 'Ngũ cốc & Hạt dinh dưỡng',
+        warehouseId: '11111111-0000-0000-0000-000000000003',
+        warehouseName: 'Kho Miền Tây (Cần Thơ)',
+        baseUnit: 'Hũ',
+        mfgDate: addDays(-200),
+        expiryDate: addDays(-14), // Đã hết hạn (EXPIRED)
+        quantity: 120,
+        allocatedQuantity: 0,
+        costPrice: 88000,
+      },
+    ];
+
+    for (const b of initialBatches) {
+      const entity = new InventoryBatchEntity(b);
+      this.batches.set(entity.id, entity);
+    }
+  }
+
+  /**
+   * Đồng bộ lô hàng từ cơ sở dữ liệu PostgreSQL
+   */
+  private async syncBatchesFromDatabase(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      const rows = await this.databaseService.query<{
+        id: string;
+        batch_number: string;
+        product_id: string;
+        warehouse_id: string;
+        location_id?: string;
+        mfg_date?: string;
+        expiry_date: string;
+        quantity: string | number;
+        allocated_quantity: string | number;
+        cost_price: string | number;
+        product_sku?: string;
+        product_name?: string;
+        category_name?: string;
+        base_unit?: string;
+        warehouse_name?: string;
+      }>(
+        `SELECT b.id, b.batch_number, b.product_id, b.warehouse_id, b.location_id,
+                b.mfg_date, b.expiry_date, b.quantity, b.allocated_quantity, b.cost_price,
+                p.sku as product_sku, p.name as product_name, p.base_unit,
+                c.name as category_name,
+                w.name as warehouse_name
+         FROM inventory_batches b
+         LEFT JOIN products p ON b.product_id = p.id
+         LEFT JOIN categories c ON p.category_id = c.id
+         LEFT JOIN warehouses w ON b.warehouse_id = w.id
+         WHERE b.quantity > 0 OR b.status = 'ACTIVE';`
+      );
+
+      if (rows && rows.length > 0) {
+        for (const r of rows) {
+          const entity = new InventoryBatchEntity({
+            id: r.id,
+            batchNumber: r.batch_number,
+            productId: r.product_id,
+            warehouseId: r.warehouse_id,
+            locationId: r.location_id,
+            mfgDate: r.mfg_date,
+            expiryDate: r.expiry_date,
+            quantity: Number(r.quantity) || 0,
+            allocatedQuantity: Number(r.allocated_quantity) || 0,
+            costPrice: Number(r.cost_price) || 0,
+            productSku: r.product_sku || '',
+            productName: r.product_name || '',
+            categoryName: r.category_name,
+            baseUnit: r.base_unit || 'Đơn vị',
+            warehouseName: r.warehouse_name || DEFAULT_WAREHOUSE_NAME,
+          });
+          this.batches.set(entity.id, entity);
+        }
+      }
+    } catch {
+      // Fallback êm ái
+    }
+  }
+
+  /**
+   * Truy vấn danh sách lô hàng kèm tính toán trạng thái theo ngưỡng cảnh báo cận hạn (SN-184 AC-2 & AC-3)
+   */
+  async getBatches(
+    query: QueryBatchesDto = {},
+    user?: ICurrentUser,
+  ): Promise<PaginatedBatchesResponse> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+
+    const threshold = query.expiryThresholdDays && query.expiryThresholdDays > 0 ? query.expiryThresholdDays : 30;
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 20;
+
+    let items = Array.from(this.batches.values()).map(
+      (b) => new InventoryBatchEntity(b, threshold),
+    );
+
+    // 1. Phân quyền Data Scope: Thủ kho chỉ thấy lô hàng của kho mình quản lý (nếu có assignedWarehouse)
+    const userWhId = (user as any)?.assignedWarehouseId || (user as any)?.warehouseId;
+    if (userWhId && user?.roles && !user.roles.includes(UserRole.ADMIN) && !user.roles.includes(UserRole.SALES_MANAGER)) {
+      items = items.filter((b) => b.warehouseId === userWhId);
+    }
+
+    // 2. Lọc theo kho (warehouseId)
+    if (query.warehouseId && query.warehouseId !== 'ALL') {
+      const targetWh = query.warehouseId.toLowerCase().trim();
+      items = items.filter(
+        (b) =>
+          b.warehouseId.toLowerCase() === targetWh ||
+          b.warehouseName.toLowerCase().includes(targetWh),
+      );
+    }
+
+    // 3. Lọc theo sản phẩm (productId hoặc sku)
+    if (query.productId && query.productId !== 'ALL') {
+      const pid = query.productId.toLowerCase().trim();
+      items = items.filter((b) => b.productId.toLowerCase() === pid);
+    }
+    if (query.sku && query.sku !== 'ALL') {
+      const skuLower = query.sku.toLowerCase().trim();
+      items = items.filter((b) => b.productSku.toLowerCase() === skuLower);
+    }
+
+    // 4. Tìm kiếm từ khóa (Số lô, SKU, Tên sản phẩm, Tên kho)
+    if (query.search && query.search.trim()) {
+      const q = query.search.toLowerCase().trim();
+      items = items.filter(
+        (b) =>
+          b.batchNumber.toLowerCase().includes(q) ||
+          b.productSku.toLowerCase().includes(q) ||
+          b.productName.toLowerCase().includes(q) ||
+          b.warehouseName.toLowerCase().includes(q),
+      );
+    }
+
+    // 5. Lọc theo trạng thái lô (VALID, EXPIRING_SOON, EXPIRED)
+    if (query.status && query.status !== BatchStatusFilter.ALL) {
+      items = items.filter((b) => b.status === query.status);
+    }
+
+    // 6. Sắp xếp theo chuẩn FEFO (First Expired, First Out)
+    items.sort((a, b) => {
+      const tA = new Date(a.expiryDate).getTime();
+      const tB = new Date(b.expiryDate).getTime();
+      return tA - tB;
+    });
+
+    const total = items.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const startIndex = (page - 1) * limit;
+    const paginated = items.slice(startIndex, startIndex + limit);
+
+    return {
+      data: paginated,
+      total,
+      page,
+      limit,
+      totalPages,
+      thresholdDays: threshold,
+    };
+  }
+
+  /**
+   * Thống kê tổng số lượng lô, số lô hợp lệ, sắp hết hạn và đã hết hạn (SN-184 AC-3)
+   */
+  async getBatchStats(
+    warehouseId?: string,
+    thresholdDays = 30,
+    user?: ICurrentUser,
+  ): Promise<BatchStatsResponse> {
+    const listRes = await this.getBatches(
+      {
+        warehouseId,
+        expiryThresholdDays: thresholdDays,
+        limit: 10000,
+        page: 1,
+      },
+      user,
+    );
+
+    const all = listRes.data;
+    const validCount = all.filter((b) => b.status === 'VALID').length;
+    const expiringSoonCount = all.filter((b) => b.status === 'EXPIRING_SOON').length;
+    const expiredCount = all.filter((b) => b.status === 'EXPIRED').length;
+    const totalQuantity = all.reduce((sum, b) => sum + b.quantity, 0);
+
+    return {
+      totalBatches: all.length,
+      validCount,
+      expiringSoonCount,
+      expiredCount,
+      totalQuantity,
+      thresholdDays,
+    };
+  }
+
+  /**
+   * Tự sinh số lô hàng kết nối hệ thống ngẫu nhiên, không trùng lặp theo chuẩn LOT-YYMMDD-XXXX (SN-178 / SN-184)
+   */
+  async generateBatchNumber(
+    productId?: string,
+    sku?: string,
+    dateStr?: string,
+  ): Promise<{ batchNumber: string; success: boolean }> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    const now = dateStr ? new Date(dateStr) : new Date();
+    const targetDate = isNaN(now.getTime()) ? new Date() : now;
+    const yy = String(targetDate.getFullYear()).slice(-2);
+    const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(targetDate.getDate()).padStart(2, '0');
+    const datePart = `${yy}${mm}${dd}`;
+
+    // Bảng ký tự Crockford Base32: 32 ký tự tránh nhầm lẫn (không có I, L, O, U)
+    const charset = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    const existingBatches = new Set(
+      Array.from(this.batches.values()).map((b) => b.batchNumber),
+    );
+
+    let batchNumber = '';
+    let attempts = 0;
+    do {
+      let randPart = '';
+      for (let i = 0; i < 4; i++) {
+        const randIndex = Math.floor(Math.random() * charset.length);
+        randPart += charset[randIndex];
+      }
+      batchNumber = `LOT-${datePart}-${randPart}`;
+      attempts++;
+    } while (existingBatches.has(batchNumber) && attempts < 100);
+
+    return {
+      batchNumber,
+      success: true,
+    };
+  }
+
+  /**
+   * Kiểm tra điều kiện xuất kho của lô hàng và cơ chế Ghi Đè Quản Lý Kho (SN-184 AC-4)
+   * Không cho xuất lô đã quá hạn, trừ khi Quản lý kho xác nhận ghi đè kèm lý do
+   */
+  async checkBatchDispatch(
+    dto: CheckBatchDispatchDto,
+    user?: ICurrentUser,
+  ): Promise<{
+    allowed: boolean;
+    isOverridden: boolean;
+    warning?: string;
+    batch: Record<string, unknown>;
+    overrideReason?: string;
+    overriddenBy?: string;
+    overriddenAt?: Date;
+    status?: string;
+  }> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+
+    let batch: InventoryBatchEntity | undefined;
+    if (dto.batchId) {
+      batch = this.batches.get(dto.batchId);
+    }
+    if (!batch && dto.batchNumber) {
+      const bNum = dto.batchNumber.toLowerCase().trim();
+      batch = Array.from(this.batches.values()).find(
+        (b) =>
+          b.batchNumber.toLowerCase() === bNum &&
+          (!dto.warehouseId || b.warehouseId === dto.warehouseId),
+      );
+    }
+
+    if (!batch) {
+      throw new NotFoundException(
+        `Không tìm thấy lô hàng với mã/số lô: ${dto.batchId || dto.batchNumber || 'chưa xác định'}`,
+      );
+    }
+
+    // Kiểm tra số lượng tồn khả dụng
+    if (batch.availableQuantity < dto.quantity) {
+      throw new BadRequestException(
+        `Số lượng xuất (${dto.quantity} ${batch.baseUnit}) vượt quá tồn khả dụng của lô ${batch.batchNumber} (còn ${batch.availableQuantity} ${batch.baseUnit}).`,
+      );
+    }
+
+    // Tiêu chí 4: Kiểm tra hạn sử dụng của lô
+    const isExpired = batch.daysRemaining < 0;
+    if (isExpired) {
+      // Nếu không có lý do ghi đè -> Chặn ngay lập tức
+      if (!dto.managerOverrideReason || !dto.managerOverrideReason.trim()) {
+        throw new BadRequestException(
+          `Lô hàng "${batch.batchNumber}" đã QUÁ HẠN SỬ DỤNG từ ngày ${batch.expiryDate} (quá hạn ${Math.abs(batch.daysRemaining)} ngày). ` +
+          `Quy chuẩn quản lý kho chặn xuất lô đã quá hạn cho đại lý. ` +
+          `Chỉ Quản lý kho mới có thẩm quyền xác nhận ghi đè kèm lý do cụ thể để xuất lô này.`,
+        );
+      }
+
+      // Có lý do ghi đè -> Kiểm tra quyền của người dùng (Warehouse Manager hoặc Admin)
+      const roles = (user?.roles || []).map((r) => String(r));
+      const isManagerOrAdmin =
+        roles.includes(UserRole.ADMIN) ||
+        roles.includes(UserRole.WAREHOUSE_MANAGER) ||
+        roles.includes(UserRole.WH_MANAGER);
+
+      if (!isManagerOrAdmin) {
+        throw new ForbiddenException(
+          `Bạn không có quyền xác nhận ghi đè xuất lô quá hạn. Chỉ Quản lý kho (Warehouse Manager) hoặc Quản trị viên (Admin) mới có thẩm quyền này.`,
+        );
+      }
+
+      const overrideReason = dto.managerOverrideReason.trim();
+      if (overrideReason.length < 5) {
+        throw new BadRequestException('Lý do ghi đè của Quản lý kho phải có tối thiểu 5 ký tự.');
+      }
+
+      return {
+        allowed: true,
+        isOverridden: true,
+        warning: `Lô hàng quá hạn đã được Quản lý kho xác nhận ghi đè thành công.`,
+        batch: batch.toJSON(),
+        overrideReason,
+        overriddenBy: (user as any)?.fullName || user?.username || 'Quản lý kho',
+        overriddenAt: new Date(),
+        status: 'EXPIRED',
+      };
+    }
+
+    return {
+      allowed: true,
+      isOverridden: false,
+      batch: batch.toJSON(),
+      status: batch.status,
+    };
+  }
+
+  /**
+   * Xóa sản phẩm khỏi kho hàng:
+   * - Chỉ xóa được khi tất cả các loại tồn (thực tế, tạm giữ, khả dụng) đều bằng 0
+   * - Xóa bản ghi trong inventories và app_inventory_stock_balances của kho đó
+   */
+  async removeProductFromWarehouse(
+    warehouseId: string,
+    sku: string,
+    productId?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    if (!this.databaseService?.isConnected()) {
+      await this.databaseService?.ensureConnection?.();
+    }
+
+    if (!warehouseId) {
+      throw new BadRequestException('Vui lòng cung cấp mã ID kho hàng cần xóa sản phẩm');
+    }
+
+    // 1. Tìm thông tin sản phẩm
+    let prod: { id: string; sku: string; name: string } | null = null;
+    if (productId) {
+      const rows = await this.databaseService.query<{ id: string; sku: string; name: string }>(
+        `SELECT id, sku, name FROM products WHERE id = $1::uuid`,
+        [productId],
+      );
+      prod = rows[0] || null;
+    }
+    if (!prod && sku) {
+      const rows = await this.databaseService.query<{ id: string; sku: string; name: string }>(
+        `SELECT id, sku, name FROM products WHERE UPPER(TRIM(sku)) = UPPER(TRIM($1))`,
+        [sku],
+      );
+      prod = rows[0] || null;
+    }
+
+    const resolvedSku = prod?.sku || sku;
+    const resolvedProdId = prod?.id || productId;
+
+    // 2. Kiểm tra các loại tồn kho của sản phẩm tại kho này
+    let onHand = 0;
+    let allocated = 0;
+    if (resolvedProdId) {
+      const invRows = await this.databaseService.query<{ on_hand: number; allocated: number }>(
+        `SELECT on_hand, allocated FROM inventories WHERE warehouse_id = $1::uuid AND product_id = $2::uuid`,
+        [warehouseId, resolvedProdId],
+      );
+      if (invRows[0]) {
+        onHand = Number(invRows[0].on_hand || 0);
+        allocated = Number(invRows[0].allocated || 0);
+      }
+    }
+
+    let physicalQuantity = 0;
+    if (resolvedSku) {
+      const balRows = await this.databaseService.query<{ physical_quantity: number }>(
+        `SELECT physical_quantity FROM app_inventory_stock_balances WHERE warehouse_id = $1::uuid AND UPPER(TRIM(product_sku)) = UPPER(TRIM($2))`,
+        [warehouseId, resolvedSku],
+      );
+      if (balRows[0]) {
+        physicalQuantity = Number(balRows[0].physical_quantity || 0);
+      }
+    }
+
+    let reservedQuantity = 0;
+    if (resolvedSku) {
+      const resRows = await this.databaseService.query<{ total_res: string }>(
+        `SELECT COALESCE(SUM(base_quantity), 0)::text as total_res FROM app_order_inventory_reservations WHERE warehouse_id = $1::uuid AND UPPER(TRIM(product_sku)) = UPPER(TRIM($2)) AND status = 'RESERVED' AND base_quantity > 0`,
+        [warehouseId, resolvedSku],
+      );
+      reservedQuantity = Number(resRows[0]?.total_res || 0);
+    }
+
+    const totalActual = Math.max(onHand, physicalQuantity);
+    const totalHolding = Math.max(allocated, reservedQuantity);
+
+    // Ràng buộc nghiêm ngặt: Phải hết mọi loại tồn, không giữ tồn khách
+    if (totalActual > 0 || totalHolding > 0) {
+      throw new BadRequestException(
+        `Sản phẩm "${prod?.name || resolvedSku}" vẫn còn số lượng trong kho (Tồn thực tế: ${totalActual}, Đang giữ cho khách: ${totalHolding}). Không thể xóa sản phẩm khỏi kho! Bạn cần xuất kho hoặc điều chỉnh hết tồn về 0 trước khi xóa.`,
+      );
+    }
+
+    // 3. Tiến hành xóa sản phẩm khỏi kho trong database
+    if (resolvedProdId) {
+      await this.databaseService.query(
+        `DELETE FROM inventories WHERE warehouse_id = $1::uuid AND product_id = $2::uuid`,
+        [warehouseId, resolvedProdId],
+      );
+    }
+    if (resolvedSku) {
+      await this.databaseService.query(
+        `DELETE FROM app_inventory_stock_balances WHERE warehouse_id = $1::uuid AND UPPER(TRIM(product_sku)) = UPPER(TRIM($2))`,
+        [warehouseId, resolvedSku],
+      );
+    }
+
+    return {
+      success: true,
+      message: `Đã xóa sản phẩm "${prod?.name || resolvedSku}" khỏi kho thành công!`,
+    };
+  }
+
+  /**
+   * SN-188: Gợi ý lô xuất kho theo nguyên tắc FEFO (Hạn dùng gần nhất xuất trước)
+   * GET /api/inventory/batches/suggest-fefo?skuCode=...&quantity=...&warehouseId=...
+   */
+  async suggestFefoBatch(params: {
+    skuCode?: string;
+    sku?: string;
+    productId?: string;
+    quantity?: number;
+    warehouseId?: string;
+  }): Promise<{
+    suggestedBatch: any;
+    allBatches: any[];
+    isSufficient: boolean;
+    requiredQuantity: number;
+  }> {
+    if (this.databaseService?.isConnected()) {
+      await this.syncBatchesFromDatabase();
+    }
+    if (this.batches.size === 0) {
+      this.seedInitialBatches();
+    }
+
+    const targetSku = (params.skuCode || params.sku || '').trim().toLowerCase();
+    const targetPid = (params.productId || '').trim().toLowerCase();
+    const targetWh = (params.warehouseId || '').trim().toLowerCase();
+    const requiredQty = Number(params.quantity) || 1;
+
+    // Lọc các lô của sản phẩm tại kho
+    let candidates = Array.from(this.batches.values()).map(
+      (b) => new InventoryBatchEntity(b),
+    );
+
+    candidates = candidates.filter((b) => {
+      // Khớp sản phẩm theo SKU hoặc ProductId
+      const matchProduct =
+        (targetSku && b.productSku.toLowerCase() === targetSku) ||
+        (targetPid && b.productId.toLowerCase() === targetPid);
+
+      if (!matchProduct) return false;
+
+      // Khớp kho nếu có truyền
+      if (targetWh && targetWh !== 'all') {
+        const matchWh =
+          b.warehouseId.toLowerCase() === targetWh ||
+          b.warehouseName.toLowerCase().includes(targetWh);
+        if (!matchWh) return false;
+      }
+
+      // Chỉ lấy lô còn hạn và còn tồn khả dụng > 0
+      return b.status !== 'EXPIRED' && b.availableQuantity > 0;
+    });
+
+    // Sắp xếp theo chuẩn FEFO: ExpiryDate tăng dần (hạn gần nhất xếp trước)
+    candidates.sort((a, b) => {
+      const getExpMs = (dateStr: string): number => {
+        if (!dateStr) return Infinity;
+        const d = new Date(dateStr);
+        return isNaN(d.getTime()) ? Infinity : d.getTime();
+      };
+      const timeA = getExpMs(a.expiryDate);
+      const timeB = getExpMs(b.expiryDate);
+      if (timeA !== timeB) return timeA - timeB;
+      const createdA = a.createdAt instanceof Date && !isNaN(a.createdAt.getTime()) ? a.createdAt.getTime() : 0;
+      const createdB = b.createdAt instanceof Date && !isNaN(b.createdAt.getTime()) ? b.createdAt.getTime() : 0;
+      return createdA - createdB;
+    });
+
+    if (candidates.length === 0) {
+      return {
+        suggestedBatch: null,
+        allBatches: [],
+        isSufficient: false,
+        requiredQuantity: requiredQty,
+      };
+    }
+
+    // Ưu tiên lô cận date nhất còn đủ số lượng yêu cầu
+    let chosen = candidates.find((b) => b.availableQuantity >= requiredQty);
+    // Nếu không có lô đơn lẻ nào đủ, chọn lô cận date nhất đầu tiên
+    if (!chosen) {
+      chosen = candidates[0];
+    }
+
+    return {
+      suggestedBatch: chosen.toJSON(),
+      allBatches: candidates.map((c, idx) => ({
+        ...c.toJSON(),
+        isFefoRecommended: idx === 0,
+      })),
+      isSufficient: chosen.availableQuantity >= requiredQty,
+      requiredQuantity: requiredQty,
+    };
+  }
+
+  /**
+   * SN-188: Lấy danh sách tất cả các lô khả dụng của một SKU tại kho (phục vụ Popup Đổi Lô)
+   * GET /api/inventory/batches/by-sku?skuCode=...&warehouseId=...
+   */
+  async getBatchesBySku(params: {
+    skuCode?: string;
+    sku?: string;
+    productId?: string;
+    warehouseId?: string;
+  }): Promise<{
+    skuCode: string;
+    fefoSuggestedBatchNo: string | null;
+    batches: any[];
+  }> {
+    const res = await this.suggestFefoBatch({
+      ...params,
+      quantity: 1,
+    });
+
+    return {
+      skuCode: params.skuCode || params.sku || '',
+      fefoSuggestedBatchNo: res.suggestedBatch
+        ? res.suggestedBatch.batchNumber || res.suggestedBatch.batch_number
+        : null,
+      batches: res.allBatches,
+    };
+  }
+
+  // =========================================================================
+  // SN-214: QUẢN LÝ PHIẾU ĐIỀU CHỈNH TỒN KHO CÓ PHÊ DUYỆT (Hàng hỏng, mất, huỷ)
+  // =========================================================================
+
+  async ensureStockAdjustmentsTable(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    if (!this.stockAdjustmentsSchemaPromise) {
+      this.stockAdjustmentsSchemaPromise = (async () => {
+        await this.databaseService.query(`
+          CREATE TABLE IF NOT EXISTS app_stock_adjustments (
+            id TEXT PRIMARY KEY,
+            adjustment_code TEXT NOT NULL UNIQUE,
+            warehouse_id TEXT NOT NULL,
+            warehouse_name TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            reason_detail TEXT,
+            total_loss_value NUMERIC(15, 2) NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            items JSONB NOT NULL DEFAULT '[]'::jsonb,
+            creator_id TEXT NOT NULL,
+            creator_name TEXT NOT NULL,
+            creator_role TEXT,
+            approver_id TEXT,
+            approver_name TEXT,
+            approved_at TIMESTAMPTZ,
+            reject_reason TEXT,
+            note TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_stock_adj_code ON app_stock_adjustments(adjustment_code);
+          CREATE INDEX IF NOT EXISTS idx_stock_adj_status ON app_stock_adjustments(status);
+          CREATE INDEX IF NOT EXISTS idx_stock_adj_created ON app_stock_adjustments(created_at DESC);
+        `);
+
+        try {
+          const countRes = await this.databaseService.query<{ count: string }>(
+            `SELECT count(*)::text as count FROM app_stock_adjustments`,
+          );
+          const count = Number(countRes[0]?.count ?? 0);
+          if (count === 0 && this.adjustments.size > 0) {
+            for (const adj of this.adjustments.values()) {
+              await this.databaseService.query(
+                `INSERT INTO app_stock_adjustments (
+                  id, adjustment_code, warehouse_id, warehouse_name, reason,
+                  reason_detail, total_loss_value, status, items,
+                  creator_id, creator_name, creator_role, approver_id, approver_name,
+                  approved_at, reject_reason, note, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                ON CONFLICT (id) DO NOTHING`,
+                [
+                  adj.id,
+                  adj.adjustmentCode,
+                  adj.warehouseId,
+                  adj.warehouseName,
+                  adj.reason,
+                  adj.reasonDetail || '',
+                  adj.totalLossValue,
+                  adj.status,
+                  JSON.stringify(adj.items || []),
+                  adj.creatorId,
+                  adj.creatorName,
+                  adj.creatorRole || 'WAREHOUSE_KEEPER',
+                  adj.approverId || null,
+                  adj.approverName || null,
+                  adj.approvedAt || null,
+                  adj.rejectReason || null,
+                  adj.note || null,
+                  adj.createdAt,
+                  adj.updatedAt,
+                ],
+              );
+            }
+          }
+        } catch (seedErr: any) {
+          console.warn('[INVENTORY_SERVICE] Không thể nạp khởi tạo app_stock_adjustments:', seedErr?.message);
+        }
+      })().catch((err: unknown) => {
+        console.warn('[INVENTORY_SERVICE] Lỗi tạo bảng app_stock_adjustments:', (err as any)?.message);
+      });
+    }
+    return this.stockAdjustmentsSchemaPromise;
+  }
+
+  private async syncAdjustmentsFromDatabase(): Promise<void> {
+    if (!this.databaseService?.isConnected()) return;
+    try {
+      const rows = await this.databaseService.query<any>(
+        `SELECT * FROM app_stock_adjustments ORDER BY created_at DESC`,
+      );
+      for (const r of rows) {
+        const items = Array.isArray(r.items) ? r.items : JSON.parse(r.items || '[]');
+        const adj = new StockAdjustmentEntity({
+          id: r.id,
+          adjustmentCode: r.adjustment_code,
+          warehouseId: r.warehouse_id,
+          warehouseName: r.warehouse_name,
+          reason: r.reason,
+          reasonDetail: r.reason_detail,
+          totalLossValue: Number(r.total_loss_value || 0),
+          status: r.status,
+          items,
+          creatorId: r.creator_id,
+          creatorName: r.creator_name,
+          creatorRole: r.creator_role,
+          approverId: r.approver_id,
+          approverName: r.approver_name,
+          approvedAt: r.approved_at ? new Date(r.approved_at) : undefined,
+          rejectReason: r.reject_reason,
+          note: r.note,
+          createdAt: new Date(r.created_at),
+          updatedAt: new Date(r.updated_at),
+        });
+        this.adjustments.set(adj.id, adj);
+      }
+    } catch (err: any) {
+      console.warn('[INVENTORY_SERVICE] Lỗi đồng bộ app_stock_adjustments từ DB:', err?.message);
+    }
+  }
+
+  private seedInitialAdjustments(): void {
+    const now = Date.now();
+    const seed1 = new StockAdjustmentEntity({
+      id: 'adj-seed-001',
+      adjustmentCode: 'PDC-20261018-001',
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouseName: DEFAULT_WAREHOUSE_NAME,
+      reason: 'DAMAGED',
+      reasonDetail: 'Hàng bị móp vỏ thùng và bể vỡ trong lúc dỡ hàng từ xe tải',
+      totalLossValue: 1100000,
+      status: 'APPROVED',
+      creatorId: 'usr-wh-keeper',
+      creatorName: 'Thủ kho Nguyễn Văn Kho',
+      creatorRole: 'WAREHOUSE_KEEPER',
+      approverId: 'usr-wh-manager',
+      approverName: 'Quản lý kho Trần Văn Quản',
+      approvedAt: new Date(now - 86400000 * 2),
+      note: 'Đã lập biên bản sự việc và xử lý tồn kho',
+      createdAt: new Date(now - 86400000 * 2 - 3600000),
+      updatedAt: new Date(now - 86400000 * 2),
+      items: [
+        {
+          id: 'adj-item-001',
+          productId: 'prod-001',
+          productSku: 'LH-MILK-900G',
+          productName: 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g',
+          unit: 'Lon',
+          currentStock: 340,
+          adjustedQuantity: 2,
+          unitPrice: 550000,
+          lossValue: 1100000,
+          reason: 'DAMAGED',
+          note: 'Móp méo 2 lon',
+        },
+      ],
+    });
+
+    const seed2 = new StockAdjustmentEntity({
+      id: 'adj-seed-002',
+      adjustmentCode: 'PDC-20261020-002',
+      warehouseId: DEFAULT_WAREHOUSE_ID,
+      warehouseName: DEFAULT_WAREHOUSE_NAME,
+      reason: 'EXPIRED',
+      reasonDetail: 'Sản phẩm cận date hỏng màng co và quá hạn sử dụng tại kệ B-02',
+      totalLossValue: 560000,
+      status: 'PENDING',
+      creatorId: 'usr-wh-keeper',
+      creatorName: 'Thủ kho Nguyễn Văn Kho',
+      creatorRole: 'WAREHOUSE_KEEPER',
+      note: 'Đề nghị duyệt huỷ để dọn dẹp kệ kho',
+      createdAt: new Date(now - 3600000 * 4),
+      updatedAt: new Date(now - 3600000 * 4),
+      items: [
+        {
+          id: 'adj-item-002',
+          productId: 'prod-002',
+          productSku: 'LH-NUT-180ML',
+          productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+          unit: 'Hộp',
+          currentStock: 1200,
+          adjustedQuantity: 20,
+          unitPrice: 28000,
+          lossValue: 560000,
+          reason: 'EXPIRED',
+          note: 'Hết hạn sử dụng lô EXP-202610',
+        },
+      ],
+    });
+
+    this.adjustments.set(seed1.id, seed1);
+    this.adjustments.set(seed2.id, seed2);
+  }
+
+  /**
+   * SN-214: Lấy danh sách phiếu điều chỉnh tồn kho có lọc
+   */
+  async getStockAdjustments(
+    query?: QueryStockAdjustmentsDto,
+    currentUser?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity[]> {
+    let list = Array.from(this.adjustments.values());
+
+    const roles = currentUser?.roles || [];
+    const isWarehouseStaff =
+      roles.some((r) =>
+        ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
+      ) && !roles.includes(UserRole.ADMIN);
+
+    if (isWarehouseStaff) {
+      const staffWhId = currentUser?.warehouseId;
+      const staffWhName = (currentUser?.assignedWarehouse || currentUser?.warehouseName || '').toLowerCase();
+      list = list.filter((a) => {
+        if (staffWhId && a.warehouseId && a.warehouseId.toLowerCase() === staffWhId.toLowerCase()) {
+          return true;
+        }
+        if (staffWhName) {
+          const aWhName = (a.warehouseName || '').toLowerCase();
+          return (
+            aWhName.includes(staffWhName) ||
+            staffWhName.includes(aWhName) ||
+            (a.warehouseId && staffWhName.includes(a.warehouseId.toLowerCase()))
+          );
+        }
+        return true;
+      });
+    }
+
+    if (query?.status && query.status !== 'ALL') {
+      const statusUpper = query.status.trim().toUpperCase();
+      list = list.filter((a) => a.status.toUpperCase() === statusUpper);
+    }
+
+    if (query?.reason && query.reason !== 'ALL') {
+      const reasonUpper = query.reason.trim().toUpperCase();
+      list = list.filter((a) => a.reason.toUpperCase() === reasonUpper);
+    }
+
+    if (query?.warehouseId && query.warehouseId !== 'ALL' && !isWarehouseStaff) {
+      const whId = query.warehouseId.trim().toUpperCase();
+      list = list.filter((a) => a.warehouseId.toUpperCase() === whId);
+    }
+
+    if (query?.search) {
+      const s = query.search.trim().toLowerCase();
+      list = list.filter(
+        (a) =>
+          a.adjustmentCode.toLowerCase().includes(s) ||
+          (a.note && a.note.toLowerCase().includes(s)) ||
+          a.creatorName.toLowerCase().includes(s) ||
+          (a.approverName && a.approverName.toLowerCase().includes(s)) ||
+          (a.reasonDetail && a.reasonDetail.toLowerCase().includes(s)),
+      );
+    }
+
+    if (query?.fromDate) {
+      const from = new Date(query.fromDate);
+      if (!isNaN(from.getTime())) {
+        list = list.filter((a) => new Date(a.createdAt).getTime() >= from.getTime());
+      }
+    }
+
+    if (query?.toDate) {
+      const to = new Date(query.toDate);
+      if (!isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        list = list.filter((a) => new Date(a.createdAt).getTime() <= to.getTime());
+      }
+    }
+
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  /**
+   * SN-214: Xem chi tiết phiếu điều chỉnh tồn kho
+   */
+  async getStockAdjustmentById(id: string): Promise<StockAdjustmentEntity> {
+    const adj =
+      this.adjustments.get(id) ||
+      Array.from(this.adjustments.values()).find(
+        (a) => a.adjustmentCode === id || a.id === id,
+      );
+    if (!adj) {
+      throw new NotFoundException(`Không tìm thấy phiếu điều chỉnh tồn kho ${id}`);
+    }
+    return adj;
+  }
+
+  /**
+   * SN-214: Lập phiếu điều chỉnh tồn kho (Chờ duyệt)
+   * - Bắt buộc chọn lý do: DAMAGED, LOST, EXPIRED, OTHER (AC-1 & AC-2)
+   * - Bắt buộc ghi rõ giá trị tổn thất (VNĐ) (AC-2)
+   */
+  async createStockAdjustment(
+    dto: CreateStockAdjustmentDto,
+    creator?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    if (!dto.reason || !['DAMAGED', 'LOST', 'EXPIRED', 'OTHER'].includes(dto.reason)) {
+      throw new BadRequestException('Bắt buộc chọn lý do hợp lệ (Hàng hỏng, Hàng mất, Hàng hết hạn).');
+    }
+
+    if (!dto.items || dto.items.length === 0) {
+      throw new BadRequestException('Phiếu điều chỉnh phải chứa ít nhất một sản phẩm.');
+    }
+
+    let calculatedLoss = 0;
+    for (const item of dto.items) {
+      if (!item.adjustedQuantity || item.adjustedQuantity <= 0) {
+        throw new BadRequestException(
+          `Số lượng điều chỉnh của sản phẩm ${item.productName || item.productSku} phải lớn hơn 0.`,
+        );
+      }
+      calculatedLoss += Number(item.lossValue || item.adjustedQuantity * item.unitPrice || 0);
+    }
+
+    const totalLossValue = Number(dto.totalLossValue ?? calculatedLoss);
+    if (totalLossValue < 0) {
+      throw new BadRequestException('Giá trị tổn thất (VNĐ) không được âm.');
+    }
+
+    const warehouseId = dto.warehouseId || DEFAULT_WAREHOUSE_ID;
+    const warehouseName = dto.warehouseName || DEFAULT_WAREHOUSE_NAME;
+
+    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const randCode = Math.floor(1000 + Math.random() * 9000);
+    const adjustmentCode = `PDC-${dateStr}-${randCode}`;
+    const id = `adj-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+    const creatorId = creator?.userId || creator?.username || 'usr-wh-keeper';
+    const creatorName = (creator as any)?.fullName || creator?.username || 'Thủ kho';
+    const creatorRoles = creator?.roles || [];
+    const creatorRole = creatorRoles.length > 0 ? String(creatorRoles[0]) : 'WAREHOUSE_KEEPER';
+
+    const items: StockAdjustmentItemEntity[] = dto.items.map((item, idx) => ({
+      id: `adj-item-${Date.now()}-${idx + 1}`,
+      productId: item.productId,
+      productSku: item.productSku,
+      productName: item.productName,
+      unit: item.unit,
+      currentStock: Number(item.currentStock ?? 0),
+      adjustedQuantity: Number(item.adjustedQuantity),
+      unitPrice: Number(item.unitPrice ?? 0),
+      lossValue: Number(item.lossValue ?? item.adjustedQuantity * item.unitPrice),
+      reason: item.reason || dto.reason,
+      note: item.note?.trim(),
+    }));
+
+    const adjustment = new StockAdjustmentEntity({
+      id,
+      adjustmentCode,
+      warehouseId,
+      warehouseName,
+      reason: dto.reason,
+      reasonDetail: dto.reasonDetail?.trim(),
+      totalLossValue,
+      status: 'PENDING',
+      items,
+      creatorId,
+      creatorName,
+      creatorRole,
+      note: dto.note?.trim(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    this.adjustments.set(adjustment.id, adjustment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.ensureStockAdjustmentsTable();
+        await this.databaseService.query(
+          `INSERT INTO app_stock_adjustments (
+            id, adjustment_code, warehouse_id, warehouse_name, reason,
+            reason_detail, total_loss_value, status, items,
+            creator_id, creator_name, creator_role, approver_id, approver_name,
+            approved_at, reject_reason, note, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            adjustment.id,
+            adjustment.adjustmentCode,
+            adjustment.warehouseId,
+            adjustment.warehouseName,
+            adjustment.reason,
+            adjustment.reasonDetail || '',
+            adjustment.totalLossValue,
+            adjustment.status,
+            JSON.stringify(adjustment.items),
+            adjustment.creatorId,
+            adjustment.creatorName,
+            adjustment.creatorRole,
+            null,
+            null,
+            null,
+            null,
+            adjustment.note || null,
+            adjustment.createdAt,
+            adjustment.updatedAt,
+          ],
+        );
+      } catch (err: any) {
+        console.warn('[INVENTORY_SERVICE] Lỗi lưu phiếu điều chỉnh vào DB:', err?.message);
+      }
+    }
+
+    return adjustment;
+  }
+
+  /**
+   * SN-214: Phê duyệt phiếu điều chỉnh tồn kho
+   * - Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN) được duyệt (AC-3)
+   * - Người lập và người duyệt KHÔNG ĐƯỢC là một (creatorId !== approverId) (AC-3)
+   * - Ghi nhận Thẻ kho với transactionType: 'ADJUSTMENT' (AC-4)
+   * - Khấu trừ tồn kho thực tế
+   */
+  async approveStockAdjustment(
+    id: string,
+    approver?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    const adjustment =
+      this.adjustments.get(id) ||
+      Array.from(this.adjustments.values()).find(
+        (a) => a.adjustmentCode === id || a.id === id,
+      );
+
+    if (!adjustment) {
+      throw new NotFoundException(`Không tìm thấy phiếu điều chỉnh tồn kho ${id}`);
+    }
+
+    if (adjustment.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Phiếu điều chỉnh đã ở trạng thái ${adjustment.status}, không thể phê duyệt lại.`,
+      );
+    }
+
+    // Kiểm tra quyền Quản lý kho / Admin
+    const approverRoles = (approver?.roles || []).map((r) => String(r).toUpperCase());
+    const isManagerOrAdmin =
+      approverRoles.some((r) =>
+        ['ADMIN', 'WAREHOUSE_MANAGER', 'WH_MANAGER'].includes(r),
+      ) || (approver as any)?.role === 'ADMIN' || (approver as any)?.role === 'WAREHOUSE_MANAGER';
+
+    if (!isManagerOrAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản lý kho hoặc Quản trị viên mới có quyền phê duyệt phiếu điều chỉnh tồn kho.',
+      );
+    }
+
+    // Kiểm tra quy tắc SN-214: creatorId !== approverId
+    const approverUserId = approver?.userId;
+    const approverUsername = approver?.username;
+
+    const isSamePerson =
+      Boolean(approverUserId && adjustment.creatorId && approverUserId === adjustment.creatorId) ||
+      Boolean(
+        approverUsername &&
+          adjustment.creatorName &&
+          approverUsername.toLowerCase() === adjustment.creatorName.toLowerCase(),
+      );
+
+    if (isSamePerson) {
+      throw new BadRequestException(
+        'Chỉ Quản lý kho được duyệt và người lập với người duyệt không được là một người (Quy tắc SN-214: creatorId !== approverId).',
+      );
+    }
+
+    const reasonMap: Record<string, string> = {
+      DAMAGED: 'Hàng hỏng hóc, bể vỡ',
+      LOST: 'Hàng thất thoát, mất',
+      EXPIRED: 'Hàng hết hạn sử dụng',
+      OTHER: 'Khác',
+    };
+    const reasonText = reasonMap[adjustment.reason] || adjustment.reason;
+
+    // Tiến hành trừ tồn kho và ghi nhận Thẻ kho (AC-4)
+    for (const item of adjustment.items) {
+      const currentBook = item.currentStock;
+      const newStock = Math.max(0, currentBook - item.adjustedQuantity);
+
+      // 1. Cập nhật productsService stock
+      try {
+        await this.productsService.setStockQuantity(item.productId, newStock);
+      } catch (e) {
+        try {
+          const p = await this.productsService.findById(item.productSku);
+          if (p) {
+            await this.productsService.setStockQuantity(p.id, newStock);
+          }
+        } catch {}
+      }
+
+      // 2. Cập nhật DB inventories & app_inventory_stock_balances nếu có DB
+      if (this.databaseService?.isConnected()) {
+        try {
+          await this.databaseService.query(
+            `UPDATE app_inventory_stock_balances
+             SET physical_quantity = GREATEST(0, physical_quantity - $2), updated_at = CURRENT_TIMESTAMP
+             WHERE product_sku = UPPER($1)`,
+            [item.productSku, item.adjustedQuantity],
+          );
+          await this.databaseService.query(
+            `UPDATE inventories
+             SET on_hand = GREATEST(0, on_hand - $2), updated_at = CURRENT_TIMESTAMP
+             WHERE product_id = $1`,
+            [item.productId, item.adjustedQuantity],
+          );
+        } catch (e) {
+          // Fallback handled in-memory
+        }
+      }
+
+      // 3. Ghi Thẻ kho với transactionType = 'ADJUSTMENT' (AC-4)
+      const tx = new InventoryTransactionEntity({
+        productId: item.productId,
+        sku: item.productSku,
+        productName: item.productName,
+        transactionType: 'ADJUSTMENT',
+        inputQuantity: item.adjustedQuantity,
+        inputUnit: item.unit,
+        conversionRate: 1,
+        baseQuantityChange: -item.adjustedQuantity,
+        baseUnit: item.unit,
+        previousStock: currentBook,
+        newStock: newStock,
+        reason: `Điều chỉnh tồn kho [${adjustment.adjustmentCode}] - Lý do: ${reasonText}. Giá trị tổn thất: ${Number(adjustment.totalLossValue).toLocaleString('vi-VN')} đ${item.note ? ` (${item.note})` : ''}`,
+        referenceCode: adjustment.adjustmentCode,
+        warehouse: adjustment.warehouseName,
+        performedBy: (approver as any)?.fullName || approver?.username || 'Quản lý kho',
+        createdAt: new Date(),
+      });
+
+      this.writeLedger(tx);
+    }
+
+    // Cập nhật trạng thái phiếu
+    adjustment.status = 'APPROVED';
+    adjustment.approverId = approverUserId || 'usr-approver';
+    adjustment.approverName = (approver as any)?.fullName || approverUsername || 'Quản lý kho';
+    adjustment.approvedAt = new Date();
+    adjustment.updatedAt = new Date();
+
+    this.adjustments.set(adjustment.id, adjustment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE app_stock_adjustments
+           SET status = $1, approver_id = $2, approver_name = $3, approved_at = $4, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5`,
+          [
+            adjustment.status,
+            adjustment.approverId,
+            adjustment.approverName,
+            adjustment.approvedAt,
+            adjustment.id,
+          ],
+        );
+      } catch (err: any) {
+        console.warn('[INVENTORY_SERVICE] Lỗi cập nhật trạng thái duyệt vào DB:', err?.message);
+      }
+    }
+
+    return adjustment;
+  }
+
+  /**
+   * SN-214: Từ chối phiếu điều chỉnh tồn kho
+   * - Chỉ Quản lý kho (WAREHOUSE_MANAGER, WH_MANAGER, ADMIN)
+   * - Ghi rõ lý do từ chối
+   */
+  async rejectStockAdjustment(
+    id: string,
+    dto: RejectStockAdjustmentDto,
+    approver?: ICurrentUser,
+  ): Promise<StockAdjustmentEntity> {
+    const adjustment =
+      this.adjustments.get(id) ||
+      Array.from(this.adjustments.values()).find(
+        (a) => a.adjustmentCode === id || a.id === id,
+      );
+
+    if (!adjustment) {
+      throw new NotFoundException(`Không tìm thấy phiếu điều chỉnh tồn kho ${id}`);
+    }
+
+    if (adjustment.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Phiếu điều chỉnh đã ở trạng thái ${adjustment.status}, không thể từ chối.`,
+      );
+    }
+
+    if (!dto?.rejectReason?.trim()) {
+      throw new BadRequestException('Bắt buộc ghi rõ lý do từ chối phiếu điều chỉnh.');
+    }
+
+    const approverRoles = (approver?.roles || []).map((r) => String(r).toUpperCase());
+    const isManagerOrAdmin =
+      approverRoles.some((r) =>
+        ['ADMIN', 'WAREHOUSE_MANAGER', 'WH_MANAGER'].includes(r),
+      ) || (approver as any)?.role === 'ADMIN' || (approver as any)?.role === 'WAREHOUSE_MANAGER';
+
+    if (!isManagerOrAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản lý kho hoặc Quản trị viên mới có quyền từ chối phiếu điều chỉnh tồn kho.',
+      );
+    }
+
+    adjustment.status = 'REJECTED';
+    adjustment.rejectReason = dto.rejectReason.trim();
+    adjustment.approverId = approver?.userId || 'usr-approver';
+    adjustment.approverName = (approver as any)?.fullName || approver?.username || 'Quản lý kho';
+    adjustment.updatedAt = new Date();
+
+    this.adjustments.set(adjustment.id, adjustment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE app_stock_adjustments
+           SET status = $1, reject_reason = $2, approver_id = $3, approver_name = $4, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5`,
+          [
+            adjustment.status,
+            adjustment.rejectReason,
+            adjustment.approverId,
+            adjustment.approverName,
+            adjustment.id,
+          ],
+        );
+      } catch (err: any) {
+        console.warn('[INVENTORY_SERVICE] Lỗi cập nhật từ chối phiếu vào DB:', err?.message);
+      }
+    }
+
+    return adjustment;
+  }
+
+
+  /**
+   * SN-229 / SN-220: Xuất báo cáo tồn kho ra tệp Excel (.xlsx) gửi Kế toán
+   * Giữ nguyên ba cột tồn: Tồn Thực Tế, Tồn Tạm Giữ, Tồn Khả Dụng
+   * Tên tệp chứa mã kho và ngày xuất theo múi giờ hệ thống (vi-VN): TonKho_KHO01_YYYY-MM-DD.xlsx
+   */
+  async exportStockExcel(
+    query?: {
+      warehouse?: string;
+      warehouseId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<{ buffer: Buffer; fileName: string; totalItems: number }> {
+    const rawWh = query?.warehouseId || query?.warehouse;
+
+    // 1. Lấy toàn bộ dữ liệu thỏa mãn bộ lọc (bao gồm tất cả các trang)
+    const items = await this.getStockOverview(query, currentUser);
+
+    if (!items || items.length === 0) {
+      throw new BadRequestException('Không tìm thấy dữ liệu tồn kho nào phù hợp với bộ lọc để xuất Excel');
+    }
+
+    // 2. Xác định mã kho và tên kho
+    let warehouseCode = 'ALL';
+    let warehouseName = 'Tất cả kho hàng';
+
+    if (rawWh && rawWh !== 'ALL') {
+      const resolved = await this.resolveWarehouseId(rawWh);
+      if (resolved) {
+        warehouseCode = resolved.code || 'KHO01';
+        warehouseName = resolved.name || 'Kho hàng';
+      } else {
+        const stdWh = STANDARD_WAREHOUSES.find(
+          (w) => w.id === rawWh || w.code === rawWh || w.name === rawWh,
+        );
+        if (stdWh) {
+          warehouseCode = stdWh.code;
+          warehouseName = stdWh.name;
+        } else {
+          warehouseCode = rawWh;
+        }
+      }
+    } else {
+      const roles = currentUser?.roles || [];
+      const isAdmin = roles.includes(UserRole.ADMIN);
+      const isManager = roles.includes(UserRole.WAREHOUSE_MANAGER) || roles.includes(UserRole.WH_MANAGER as any) || isAdmin;
+      const isKeeper = (roles.includes(UserRole.WAREHOUSE_KEEPER) || roles.includes(UserRole.WAREHOUSE as any)) && !isManager;
+      if (isKeeper) {
+        const myWhId = currentUser?.warehouseId || currentUser?.warehouseCode || currentUser?.assignedWarehouse;
+        if (myWhId) {
+          const resolved = await this.resolveWarehouseId(myWhId);
+          if (resolved) {
+            warehouseCode = resolved.code;
+            warehouseName = resolved.name;
+          }
+        }
+      }
+    }
+
+    // 3. Thời gian xuất theo múi giờ Việt Nam (UTC+7)
+    const now = new Date();
+    const utcTime = now.getTime() + now.getTimezoneOffset() * 60000;
+    const vnTime = new Date(utcTime + 7 * 3600000);
+    const yyyy = vnTime.getFullYear();
+    const mm = String(vnTime.getMonth() + 1).padStart(2, '0');
+    const dd = String(vnTime.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+    const timeFormatted = `${dd}/${mm}/${yyyy} ${String(vnTime.getHours()).padStart(2, '0')}:${String(vnTime.getMinutes()).padStart(2, '0')}:${String(vnTime.getSeconds()).padStart(2, '0')}`;
+
+    const cleanWhCode = warehouseCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `TonKho_${cleanWhCode}_${dateStr}.xlsx`;
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'LOHA SALES & WAREHOUSE SYSTEM';
+    workbook.lastModifiedBy = currentUser?.username || 'Quản lý kho';
+    workbook.created = vnTime;
+    workbook.modified = vnTime;
+
+    const ws = workbook.addWorksheet('Bao_Cao_Ton_Kho', {
+      views: [{ showGridLines: true, state: 'frozen', ySplit: 5 }],
+    });
+
+    // 4. Thiết lập độ rộng 11 cột
+    ws.columns = [
+      { key: 'stt', width: 8 },
+      { key: 'sku', width: 18 },
+      { key: 'productName', width: 44 },
+      { key: 'category', width: 22 },
+      { key: 'baseUnit', width: 14 },
+      { key: 'warehouse', width: 28 },
+      { key: 'physicalStock', width: 16 },
+      { key: 'reservedStock', width: 16 },
+      { key: 'availableStock', width: 16 },
+      { key: 'minStock', width: 16 },
+      { key: 'status', width: 20 },
+    ];
+
+    // Hàng 1: Tên đơn vị / Doanh nghiệp
+    ws.mergeCells('A1:K1');
+    const row1 = ws.getCell('A1');
+    row1.value = 'HỆ THỐNG QUẢN LÝ BÁN HÀNG & PHÂN PHỐI B2B LOHA';
+    row1.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FF1E3A8A' } };
+    row1.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(1).height = 24;
+
+    // Hàng 2: Tiêu đề báo cáo
+    ws.mergeCells('A2:K2');
+    const row2 = ws.getCell('A2');
+    row2.value = 'BÁO CÁO TỒN KHO HÀNG HÓA';
+    row2.font = { name: 'Arial', size: 15, bold: true, color: { argb: 'FF0F172A' } };
+    row2.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(2).height = 28;
+
+    // Hàng 3: Metadata kho & thời điểm xuất
+    ws.mergeCells('A3:K3');
+    const row3 = ws.getCell('A3');
+    const exporterName = currentUser?.username || 'Quản lý kho';
+    row3.value = `Kho hàng: ${warehouseName} (${warehouseCode}) | Thời điểm xuất: ${timeFormatted} | Người lập: ${exporterName}`;
+    row3.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FF475569' } };
+    row3.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(3).height = 20;
+
+    // Hàng 4: Bộ lọc áp dụng
+    ws.mergeCells('A4:K4');
+    const row4 = ws.getCell('A4');
+    let statusText = 'Tất cả trạng thái';
+    if (query?.status === 'BELOW_MIN_STOCK') statusText = 'Dưới tồn tối thiểu';
+    else if (query?.status === 'IN_STOCK') statusText = 'Còn hàng';
+    else if (query?.status === 'OUT_OF_STOCK') statusText = 'Hết hàng (Tồn khả dụng = 0)';
+    const filterCat = query?.category && query.category !== 'ALL' ? `Nhóm hàng: ${query.category}` : 'Tất cả nhóm hàng';
+    const filterSearch = query?.search?.trim() ? `Từ khóa: "${query.search.trim()}"` : 'Tất cả sản phẩm';
+    row4.value = `Phạm vi bộ lọc: [ ${filterCat} ] • [ Trạng thái: ${statusText} ] • [ ${filterSearch} ] • [ Tổng cộng: ${items.length} mặt hàng ] • [ Mẫu tồn kho chuẩn hệ thống ]`;
+    row4.font = { name: 'Arial', size: 9.5, italic: true, color: { argb: 'FF64748B' } };
+    row4.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(4).height = 20;
+
+    // Hàng 5: Tiêu đề các cột chuẩn hóa
+    const headers = [
+      'STT',
+      'Mã SKU',
+      'Tên sản phẩm',
+      'Nhóm ngành hàng',
+      'ĐVT cơ sở',
+      'Kho hàng',
+      'Tồn Thực Tế',
+      'Tồn Tạm Giữ',
+      'Tồn Khả Dụng',
+      'Tồn Tối Thiểu',
+      'Tình Trạng',
+    ];
+
+    const headerRow = ws.addRow(headers);
+    headerRow.height = 28;
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' },
+      };
+      cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        right: { style: 'thin', color: { argb: 'FF94A3B8' } },
+      };
+    });
+
+    let sumPhysical = 0;
+    let sumReserved = 0;
+    let sumAvailable = 0;
+
+    // 5. Đổ dữ liệu các dòng
+    items.forEach((item, index) => {
+      const physical = Number(item.physicalStock ?? item.physicalStockQuantity ?? item.physicalQuantity ?? 0);
+      const reserved = Number(item.reservedStock ?? item.reservedQuantity ?? 0);
+      const available = Number(item.availableStock ?? item.availableQuantity ?? item.stockQuantity ?? (physical - reserved));
+      const minStock = Number(item.minStockLevel || 0);
+
+      sumPhysical += physical;
+      sumReserved += reserved;
+      sumAvailable += available;
+
+      let statusStr = 'Còn hàng';
+      if (available <= 0) {
+        statusStr = 'Hết hàng';
+      } else if (item.isBelowMinStock || (minStock > 0 && available <= minStock)) {
+        statusStr = 'Dưới tồn tối thiểu';
+      }
+
+      const dataRow = ws.addRow([
+        index + 1,
+        String(item.sku || ''),
+        item.name || item.productName || item.sku,
+        item.category || item.parentCategory || 'Chung',
+        item.baseUnit || 'Đơn vị',
+        item.warehouse || warehouseName,
+        physical,
+        reserved,
+        available,
+        minStock,
+        statusStr,
+      ]);
+
+      dataRow.height = 22;
+
+      // Căn chỉnh và định dạng số
+      dataRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' }; // STT
+      dataRow.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' }; // SKU
+      dataRow.getCell(2).numFmt = '@'; // Định dạng text để giữ nguyên số 0 đầu
+      dataRow.getCell(3).alignment = { horizontal: 'left', vertical: 'middle' }; // Tên SP
+      dataRow.getCell(4).alignment = { horizontal: 'left', vertical: 'middle' }; // Ngành hàng
+      dataRow.getCell(5).alignment = { horizontal: 'center', vertical: 'middle' }; // ĐVT
+      dataRow.getCell(6).alignment = { horizontal: 'left', vertical: 'middle' }; // Kho
+
+      // 3 CỘT TỒN ĐỊNH DẠNG SỐ #,##0
+      dataRow.getCell(7).numFmt = '#,##0';
+      dataRow.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(8).numFmt = '#,##0';
+      dataRow.getCell(8).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(9).numFmt = '#,##0';
+      dataRow.getCell(9).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(10).numFmt = '#,##0';
+      dataRow.getCell(10).alignment = { horizontal: 'right', vertical: 'middle' };
+      dataRow.getCell(11).alignment = { horizontal: 'center', vertical: 'middle' };
+
+      // Border mờ
+      dataRow.eachCell((cell) => {
+        cell.font = { name: 'Arial', size: 10 };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        };
+      });
+
+      // Highlight nếu dưới tồn tối thiểu hoặc hết hàng
+      if (statusStr === 'Hết hàng') {
+        dataRow.getCell(11).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFE11D48' } };
+      } else if (statusStr === 'Dưới tồn tối thiểu') {
+        dataRow.getCell(11).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFD97706' } };
+      }
+    });
+
+    // 6. DÒNG TỔNG CỘNG (TOTAL ROW)
+    const totalRowIndex = 5 + items.length + 1;
+    ws.mergeCells(`A${totalRowIndex}:F${totalRowIndex}`);
+    const totalLabelCell = ws.getCell(`A${totalRowIndex}`);
+    totalLabelCell.value = `TỔNG CỘNG (${items.length} mặt hàng)`;
+    totalLabelCell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF0F172A' } };
+    totalLabelCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const totalRow = ws.getRow(totalRowIndex);
+    totalRow.height = 26;
+
+    // Gán giá trị tổng cộng cho 3 cột tồn (Công thức SUM kết hợp giá trị tính sẵn)
+    const startDataRow = 6;
+    const endDataRow = 5 + items.length;
+
+    const cellPhys = ws.getCell(`G${totalRowIndex}`);
+    cellPhys.value = {
+      formula: `SUM(G${startDataRow}:G${endDataRow})`,
+      result: sumPhysical,
+    };
+    cellPhys.numFmt = '#,##0';
+    cellPhys.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF1E40AF' } };
+    cellPhys.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    const cellRes = ws.getCell(`H${totalRowIndex}`);
+    cellRes.value = {
+      formula: `SUM(H${startDataRow}:H${endDataRow})`,
+      result: sumReserved,
+    };
+    cellRes.numFmt = '#,##0';
+    cellRes.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFB45309' } };
+    cellRes.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    const cellAvail = ws.getCell(`I${totalRowIndex}`);
+    cellAvail.value = {
+      formula: `SUM(I${startDataRow}:I${endDataRow})`,
+      result: sumAvailable,
+    };
+    cellAvail.numFmt = '#,##0';
+    cellAvail.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF047857' } };
+    cellAvail.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    totalRow.eachCell({ includeEmpty: true }, (cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF1F5F9' },
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF0F172A' } },
+        bottom: { style: 'double', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      };
+    });
+
+    // Kích hoạt bộ lọc AutoFilter
+    ws.autoFilter = {
+      from: { row: 5, column: 1 },
+      to: { row: 5 + items.length, column: 11 },
+    };
+
+    const uint8Array = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.from(uint8Array);
+
+    return {
+      buffer,
+      fileName,
+      totalItems: items.length,
+    };
+  }
+
+  /**
+   * Xử lý sản phẩm lỗi (Đưa sang tồn kho bán hàng hoặc Tiêu hủy)
+   */
+  async processDamagedStock(
+    dto: {
+      warehouseId: string;
+      productId: string;
+      productSku: string;
+      batchNumber?: string;
+      expiryDate?: string;
+      action: 'TO_STOCK' | 'DESTROY';
+      quantity: number;
+      reason: string;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<{ success: boolean; message: string; remainingQuantity: number }> {
+    const qty = Number(dto.quantity);
+    if (isNaN(qty) || qty <= 0) {
+      throw new BadRequestException('Số lượng xử lý phải lớn hơn 0');
+    }
+    if (!dto.reason || !dto.reason.trim()) {
+      throw new BadRequestException('Vui lòng nhập lý do xử lý');
+    }
+
+    const batch = dto.batchNumber ? dto.batchNumber.trim() : '';
+    const sku = dto.productSku.toUpperCase().trim();
+    let remaining = 0;
+
+    if (this.databaseService?.isConnected()) {
+      const client = await this.databaseService.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // 1. Tìm bản ghi hàng lỗi trong damaged_stock_balances
+        const checkSql = `
+          SELECT id, quantity, warehouse_id, product_id, product_sku, batch_number
+          FROM damaged_stock_balances
+          WHERE (warehouse_id = $1 OR warehouse_id::text = $1)
+            AND (UPPER(product_sku) = $2 OR product_id = $3)
+            AND (batch_number = $4 OR ($4 = '' AND (batch_number IS NULL OR batch_number = '')))
+          LIMIT 1 FOR UPDATE;
+        `;
+        const checkRes = await client.query(checkSql, [dto.warehouseId, sku, dto.productId, batch]);
+
+        if (!checkRes.rows[0]) {
+          throw new NotFoundException('Không tìm thấy sản phẩm lỗi này tại kho đã chọn');
+        }
+
+        const currentDamaged = Number(checkRes.rows[0].quantity || 0);
+        if (qty > currentDamaged) {
+          throw new BadRequestException(
+            `Số lượng xử lý (${qty}) vượt quá số lượng lỗi hiện có (${currentDamaged})`,
+          );
+        }
+
+        remaining = Math.max(0, currentDamaged - qty);
+
+        // 2. Trừ số lượng khỏi damaged_stock_balances
+        await client.query(
+          `UPDATE damaged_stock_balances
+           SET quantity = $1, updated_at = NOW()
+           WHERE id = $2;`,
+          [remaining, checkRes.rows[0].id],
+        );
+
+        const performedBy = currentUser?.username || (currentUser as any)?.fullName || 'Quản lý kho';
+
+        // 3. Thực hiện nghiệp vụ được chọn
+        if (dto.action === 'TO_STOCK') {
+          // A. Cộng vào inventories (kho bán hàng)
+          const targetProdId = checkRes.rows[0].product_id || dto.productId;
+          await client.query(
+            `INSERT INTO inventories (warehouse_id, product_id, on_hand, created_at, updated_at)
+             VALUES ($1::uuid, $2::uuid, $3, NOW(), NOW())
+             ON CONFLICT (warehouse_id, product_id)
+             DO UPDATE SET on_hand = inventories.on_hand + $3, updated_at = NOW();`,
+            [dto.warehouseId, targetProdId, qty],
+          );
+
+          // B. Cộng vào app_inventory_stock_balances
+          await client.query(
+            `INSERT INTO app_inventory_stock_balances (product_sku, warehouse_id, physical_quantity, updated_at)
+             VALUES ($1, $2::uuid, $3, NOW())
+             ON CONFLICT (product_sku, warehouse_id)
+             DO UPDATE SET physical_quantity = app_inventory_stock_balances.physical_quantity + $3, updated_at = NOW();`,
+            [sku, dto.warehouseId, qty],
+          );
+
+          // C. Nếu có số lô, cộng vào inventory_batches với đầy đủ expiry_date
+          if (batch) {
+            // Tìm thông tin hạn sử dụng và ngày sản xuất gốc của lô nếu có
+            let resolvedExpiryDate: any = dto.expiryDate || null;
+            let resolvedMfgDate: any = null;
+            let resolvedCost: number = 0;
+
+            const existingBatchRes = await client.query(
+              `SELECT expiry_date, mfg_date, cost_price
+               FROM inventory_batches
+               WHERE (batch_number = $1 OR batch_no = $1)
+               ORDER BY created_at DESC LIMIT 1;`,
+              [batch],
+            );
+            if (existingBatchRes.rows[0]) {
+              const fb = existingBatchRes.rows[0];
+              if (!resolvedExpiryDate && fb.expiry_date) {
+                resolvedExpiryDate = fb.expiry_date;
+              }
+              resolvedMfgDate = fb.mfg_date || null;
+              resolvedCost = Number(fb.cost_price || 0);
+            }
+
+            // Nếu vẫn chưa có expiry_date, gán mặc định 1 năm để FEFO luôn hoạt động chính xác
+            if (!resolvedExpiryDate) {
+              const d = new Date();
+              d.setFullYear(d.getFullYear() + 1);
+              resolvedExpiryDate = d.toISOString().split('T')[0];
+            }
+
+            await client.query(
+              `INSERT INTO inventory_batches (
+                 warehouse_id, product_id, batch_number, batch_no, sku_code,
+                 expiry_date, mfg_date, cost_price, quantity, status, created_at, updated_at
+               )
+               VALUES (
+                 $1::uuid, $2::uuid, $3, $3, $4,
+                 $5, $6, $7, $8, 'ACTIVE', NOW(), NOW()
+               )
+               ON CONFLICT (warehouse_id, product_id, batch_number)
+               DO UPDATE SET
+                 quantity = inventory_batches.quantity + $8,
+                 expiry_date = COALESCE(inventory_batches.expiry_date, EXCLUDED.expiry_date),
+                 updated_at = NOW();`,
+              [
+                dto.warehouseId,
+                targetProdId,
+                batch,
+                sku,
+                resolvedExpiryDate,
+                resolvedMfgDate,
+                resolvedCost,
+                qty,
+              ],
+            );
+          }
+
+          // D. Ghi thẻ kho giao dịch
+          await client.query(
+            `INSERT INTO app_inventory_transactions (
+               id, product_id, sku, product_name, transaction_type,
+               input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+               previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+             ) VALUES ($1, $2, $3, $4, 'IMPORT', $5, $6, 1, $5, $6, 0, $5, $7, $8, $9, $10, NOW());`,
+            [
+              `tx-dmg-restore-${Date.now()}`,
+              targetProdId,
+              sku,
+              sku,
+              qty,
+              'Cơ sở',
+              `Chuyển từ kho hàng lỗi sang tồn kho bán hàng: ${dto.reason.trim()}`,
+              `DAMAGED-RESTORE`,
+              dto.warehouseId,
+              performedBy,
+            ],
+          );
+        } else {
+          // B. Tiêu hủy (DESTROY): Ghi thẻ kho xuất hủy
+          const targetProdId = checkRes.rows[0].product_id || dto.productId;
+          await client.query(
+            `INSERT INTO app_inventory_transactions (
+               id, product_id, sku, product_name, transaction_type,
+               input_quantity, input_unit, conversion_rate, base_quantity_change, base_unit,
+               previous_stock, new_stock, reason, reference_code, warehouse, performed_by, created_at
+             ) VALUES ($1, $2, $3, $4, 'DISCARD', $5, $6, 1, (-1 * $5::numeric), $6, $5, 0, $7, $8, $9, $10, NOW());`,
+            [
+              `tx-dmg-destroy-${Date.now()}`,
+              targetProdId,
+              sku,
+              sku,
+              qty,
+              'Cơ sở',
+              `Tiêu hủy hàng lỗi: ${dto.reason.trim()}`,
+              `DAMAGED-DESTROY`,
+              dto.warehouseId,
+              performedBy,
+            ],
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (err: any) {
+        await client.query('ROLLBACK');
+        this.logger.error(`Lỗi processDamagedStock: ${err.message}`);
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    return {
+      success: true,
+      message:
+        dto.action === 'TO_STOCK'
+          ? `Đã chuyển ${qty} sản phẩm sang tồn kho bán hàng thành công.`
+          : `Đã hoàn tất tiêu hủy ${qty} sản phẩm lỗi.`,
+      remainingQuantity: remaining,
+    };
+  }
 }
+
 
