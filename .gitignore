@@ -30,3 +30,8 @@ uploads/*
 *.tsbuildinfo
 tsconfig.tsbuildinfo
 
+# Test build outputs
+test/**/*.d.ts
+test/**/*.js
+test/**/*.js.map
+
