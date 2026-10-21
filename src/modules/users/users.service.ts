@@ -1050,11 +1050,17 @@ export class UsersService implements OnModuleInit {
 
   private static readonly EMAIL_ALIASES: Record<string, string> = {
     'quantrihethong@loha.vn': 'admin@loha.vn',
+    'quantrihethong': 'admin',
     'nhanvienkinhdoanh@loha.vn': 'sales@loha.vn',
+    'nhanvienkinhdoanh': 'sales',
     'quanlykinhdoanh@loha.vn': 'salesmanager@loha.vn',
+    'quanlykinhdoanh': 'salesmanager',
     'thukho@loha.vn': 'warehouse@loha.vn',
+    'thukho': 'warehouse',
     'quanlykho@loha.vn': 'warehousemanager@loha.vn',
+    'quanlykho': 'warehousemanager',
     'ketoan@loha.vn': 'accountant@loha.vn',
+    'ketoan': 'accountant',
     'ketoancongno@loha.vn': 'accountant@loha.vn',
   };
 
@@ -1532,6 +1538,8 @@ export class UsersService implements OnModuleInit {
 
     if (dto.password) {
       user.passwordHash = bcrypt.hashSync(dto.password.trim(), BCRYPT_SALT_ROUNDS);
+      user.failedAttempts = 0;
+      user.lockedUntil = null;
     }
 
     user.updatedAt = new Date();
