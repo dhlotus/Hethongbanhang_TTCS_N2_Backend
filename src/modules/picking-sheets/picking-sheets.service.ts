@@ -172,7 +172,8 @@ export class PickingSheetsService implements OnModuleInit {
           `SELECT wl.zone, wl.aisle, wl.rack, wl.shelf, wl.bin, wl.code
            FROM inventory_batches ib
            JOIN warehouse_locations wl ON wl.id = ib.location_id
-           WHERE ib.warehouse_id = $1 AND (ib.product_id = $2 OR ib.batch_number ILIKE $3)
+           LEFT JOIN products p ON p.id = ib.product_id
+           WHERE ib.warehouse_id::text = $1 AND (ib.product_id::text = $2 OR p.sku ILIKE $3 OR ib.batch_number ILIKE $3)
            LIMIT 1`,
           [warehouseId, productId || '', `%${normalizedSku}%`],
         );
