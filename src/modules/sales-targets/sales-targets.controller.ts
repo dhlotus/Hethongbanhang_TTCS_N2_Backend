@@ -67,6 +67,18 @@ export class SalesTargetsController {
   }
 
   /**
+   * Lấy chi tiết một chỉ tiêu doanh số và các đơn hàng ghi nhận thực tế
+   */
+  @Get(':id')
+  @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER, UserRole.SALES_REP)
+  async findOne(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: ICurrentUser,
+  ) {
+    return this.salesTargetsService.findOne(id, currentUser);
+  }
+
+  /**
    * Đặt chỉ tiêu mới theo tháng (Chỉ Quản lý kinh doanh & Admin)
    */
   @Post()

@@ -59,4 +59,10 @@ export class QuerySalesTargetDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  page?: number;
+
+  @IsOptional()
+  limit?: number;
 }

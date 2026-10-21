@@ -594,9 +594,16 @@ export class UsersService implements OnModuleInit {
             ...item,
             createdAt: item.createdAt ? new Date(item.createdAt) : existing.createdAt,
             updatedAt: item.updatedAt ? new Date(item.updatedAt) : existing.updatedAt,
+            lockedUntil: item.lockedUntil ? new Date(item.lockedUntil) : null,
           });
         } else {
-          this.users.set(item.id, new UserEntity(item));
+          this.users.set(
+            item.id,
+            new UserEntity({
+              ...item,
+              lockedUntil: item.lockedUntil ? new Date(item.lockedUntil) : null,
+            }),
+          );
         }
       }
     } catch (err) {
@@ -615,7 +622,10 @@ export class UsersService implements OnModuleInit {
   }
 
   public async loadUsersFromDatabase(): Promise<void> {
-    if (!this.dbService?.isConnected()) return;
+    if (!this.dbService?.isConnected()) {
+      this.loadUsersFromDisk();
+      return;
+    }
     try {
       // 1. Nạp danh sách quan hệ phân quyền kho từ user_warehouses kèm thông tin kho
       const uwRows = await this.dbService.query<{

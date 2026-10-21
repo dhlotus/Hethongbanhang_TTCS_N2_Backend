@@ -319,6 +319,10 @@ export class SalesTargetsService implements OnModuleInit {
    */
   async findAll(query: QuerySalesTargetDto, currentUser: ICurrentUser): Promise<{
     items: SalesTargetProgressItem[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
     summary: {
       totalEmployeeTarget: number;
       totalEmployeeActual: number;
@@ -446,8 +450,18 @@ export class SalesTargetsService implements OnModuleInit {
         ? Number(((totalRegionActual / totalRegionTarget) * 100).toFixed(1))
         : null;
 
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Math.min(100, Number(query.limit) || 10));
+    const total = items.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const paginatedItems = items.slice((page - 1) * limit, page * limit);
+
     return {
-      items,
+      items: paginatedItems,
+      total,
+      page,
+      limit,
+      totalPages,
       summary: {
         totalEmployeeTarget,
         totalEmployeeActual,
@@ -459,6 +473,126 @@ export class SalesTargetsService implements OnModuleInit {
         isPeriodLocked: isLocked,
       },
       lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Lấy chi tiết một chỉ tiêu cùng danh sách đơn hàng ghi nhận và lịch sử điều chỉnh
+   */
+  async findOne(id: string, currentUser: ICurrentUser): Promise<{
+    item: SalesTargetProgressItem;
+    contributingOrders: Array<{
+      id: string;
+      orderCode: string;
+      customerName: string;
+      createdAt: string;
+      grandTotal: number;
+      status: string;
+    }>;
+    logs: SalesTargetAdjustmentLogEntity[];
+  }> {
+    const roles = currentUser.roles || [];
+    const isManager = roles.some((r) => r === UserRole.ADMIN || r === UserRole.SALES_MANAGER);
+    const isSalesRep = roles.includes(UserRole.SALES_REP);
+
+    const target = this.targets.get(id);
+    if (!target) {
+      throw new NotFoundException(`Không tìm thấy chỉ tiêu doanh số với mã ${id}`);
+    }
+
+    if (isSalesRep && !isManager && target.targetType === 'EMPLOYEE' && target.targetId !== currentUser.userId) {
+      throw new ForbiddenException('Bạn không có quyền xem chỉ tiêu của nhân viên khác');
+    }
+
+    const { data: allOrders } = await this.ordersService.findAllOrders({ limit: 10000 });
+    const [yearStr, monthStr] = target.period.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const startOfPeriod = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const endOfPeriod = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const contributingOrders: Array<{
+      id: string;
+      orderCode: string;
+      customerName: string;
+      createdAt: string;
+      grandTotal: number;
+      status: string;
+    }> = [];
+
+    let actualSales = 0;
+
+    for (const order of allOrders) {
+      if (!isRecognizedSalesStatus(order.status)) continue;
+      const orderDate = new Date(order.createdAt);
+      if (orderDate < startOfPeriod || orderDate > endOfPeriod) continue;
+
+      let isMatch = false;
+      if (target.targetType === 'EMPLOYEE') {
+        const orderRepId = order.salesRepId || '';
+        const orderRepName = (order.salesRepName || '').toLowerCase();
+        const targetIdLower = target.targetId.toLowerCase();
+        if (orderRepId === target.targetId || (orderRepName && targetIdLower && orderRepName.includes(targetIdLower))) {
+          isMatch = true;
+        }
+      } else if (target.targetType === 'REGION') {
+        const orderRegion = (order.region || '').trim().toLowerCase();
+        const targetRegion = target.targetId.trim().toLowerCase();
+        if (orderRegion === targetRegion || orderRegion.includes(targetRegion) || targetRegion.includes(orderRegion)) {
+          isMatch = true;
+        }
+      }
+
+      if (isMatch) {
+        actualSales += order.grandTotal || 0;
+        contributingOrders.push({
+          id: order.id,
+          orderCode: order.orderCode || order.id.slice(0, 8),
+          customerName: order.customerName || 'Khách hàng',
+          createdAt: order.createdAt instanceof Date ? order.createdAt.toISOString() : String(order.createdAt),
+          grandTotal: order.grandTotal || 0,
+          status: order.status,
+        });
+      }
+    }
+
+    const targetAmt = Number(target.targetAmount);
+    let completionRate: number | null = null;
+    if (targetAmt > 0) {
+      completionRate = Number(((actualSales / targetAmt) * 100).toFixed(1));
+    }
+    const shortageOrExcess = actualSales - targetAmt;
+    const isExceeded = shortageOrExcess > 0;
+    const effectiveLocked = target.isLocked || this.isPeriodLocked(target.period);
+
+    let statusLabel = 'Đang diễn ra';
+    if (effectiveLocked) {
+      statusLabel = 'Đã khóa';
+    } else if (targetAmt <= 0) {
+      statusLabel = 'Chưa giao';
+    } else if (isExceeded) {
+      statusLabel = 'Vượt mục tiêu';
+    } else if (completionRate && completionRate >= 80) {
+      statusLabel = 'Tiến độ tốt';
+    }
+
+    const progressItem: SalesTargetProgressItem = {
+      ...target,
+      isLocked: effectiveLocked,
+      actualAmount: actualSales,
+      completionRate,
+      shortageOrExcess,
+      isExceeded,
+      ordersCount: contributingOrders.length,
+      statusLabel,
+    };
+
+    const logs = this.adjustmentLogs.get(target.id) || [];
+
+    return {
+      item: progressItem,
+      contributingOrders,
+      logs,
     };
   }
 
