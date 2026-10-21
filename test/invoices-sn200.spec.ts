@@ -135,13 +135,15 @@ describe('[SN-200] Nghiệp vụ Phát hành Hoá đơn từ Phiếu Thực Giao
     recordDebtIncrease: jest.fn().mockResolvedValue(true),
   };
 
+  let module: TestingModule;
+
   beforeEach(async () => {
     delete mockShipment1.invoiceId;
     delete mockShipment1.invoiceCode;
     delete mockShipment2.invoiceId;
     delete mockShipment2.invoiceCode;
 
-    const module: TestingModule = await Test.createTestingModule({
+    module = await Test.createTestingModule({
       controllers: [InvoicesController],
       providers: [
         InvoicesService,
@@ -156,6 +158,12 @@ describe('[SN-200] Nghiệp vụ Phát hành Hoá đơn từ Phiếu Thực Giao
 
     invoicesService = module.get<InvoicesService>(InvoicesService);
     invoicesController = module.get<InvoicesController>(InvoicesController);
+  });
+
+  afterEach(async () => {
+    if (module) {
+      await module.close();
+    }
   });
 
   describe('Ràng buộc 1 & 3: Tính theo số lượng thực giao và gộp nhiều phiếu giao cùng đại lý', () => {
