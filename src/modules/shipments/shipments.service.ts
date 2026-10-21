@@ -177,6 +177,13 @@ export class ShipmentsService implements OnModuleInit {
             warehouseId: r.warehouse_id,
             warehouseName: r.warehouse_name,
             status: r.status,
+            isConfirmed: r.is_confirmed !== undefined && r.is_confirmed !== null ? Boolean(r.is_confirmed) : Boolean(existing?.isConfirmed),
+            confirmedAt: r.confirmed_at ? new Date(r.confirmed_at) : existing?.confirmedAt,
+            confirmedBy: r.confirmed_by || existing?.confirmedBy,
+            hasShortDelivery: r.has_short_delivery !== undefined && r.has_short_delivery !== null
+              ? Boolean(r.has_short_delivery)
+              : Boolean(existing?.hasShortDelivery || (existing?.lines && existing.lines.some((l) => (l.remainingQuantity || 0) > 0 || l.isShortDelivery))),
+            lines: existing?.lines || [],
             deliveryAddress: r.delivery_address,
             receiverName: r.receiver_name,
             phone: r.phone,
@@ -223,7 +230,7 @@ export class ShipmentsService implements OnModuleInit {
           phone VARCHAR(50),
           carrier_name VARCHAR(100),
           tracking_number VARCHAR(100),
-          proof_of_delivery_url TEXT,
+          proofOfDeliveryUrl TEXT,
           delivery_note TEXT,
           failure_reason TEXT,
           trip_id VARCHAR(100),
@@ -237,9 +244,14 @@ export class ShipmentsService implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- Đảm bảo cột invoice_id và invoice_code tồn tại nếu bảng đã được tạo trước đó
+        -- Đảm bảo các cột mở rộng SN-195 và invoice tồn tại nếu bảng đã được tạo trước đó
         ALTER TABLE shipments ADD COLUMN IF NOT EXISTS invoice_id VARCHAR(100);
         ALTER TABLE shipments ADD COLUMN IF NOT EXISTS invoice_code VARCHAR(100);
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS is_confirmed BOOLEAN DEFAULT FALSE;
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS has_short_delivery BOOLEAN DEFAULT FALSE;
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(100);
+        ALTER TABLE shipments ADD COLUMN IF NOT EXISTS note TEXT;
 
         CREATE TABLE IF NOT EXISTS shipment_items (
           id BIGSERIAL PRIMARY KEY,
@@ -544,10 +556,19 @@ export class ShipmentsService implements OnModuleInit {
       const qCode = String(query.orderCode).toLowerCase().trim();
       list = list.filter((s) => s.orderCode?.toLowerCase().trim() === qCode);
     }
-    if (query?.hasShortDelivery === 'true' || (query as any)?.hasShortDelivery === true) {
-      list = list.filter((s: any) => s.hasShortDelivery === true || (s.lines && s.lines.some((l: any) => l.isShortDelivery)));
-    }
-    if (query?.status && query.status !== 'ALL') {
+    const isBackorderQuery =
+      query?.hasShortDelivery === 'true' ||
+      (query as any)?.hasShortDelivery === true ||
+      query?.status === 'BACKORDERS' ||
+      query?.status === 'SHORT_DELIVERY';
+
+    if (isBackorderQuery) {
+      list = list.filter(
+        (s: any) =>
+          s.hasShortDelivery === true ||
+          (s.lines && s.lines.some((l: any) => l.isShortDelivery || (l.remainingQuantity || 0) > 0)),
+      );
+    } else if (query?.status && query.status !== 'ALL') {
       list = list.filter((s) => s.status === query.status);
     }
 
@@ -1332,8 +1353,37 @@ export class ShipmentsService implements OnModuleInit {
     if (payload.note) {
       shipment.deliveryNote = payload.note;
     }
+    if (shipment.lines && shipment.lines.some((l) => (l.remainingQuantity || 0) > 0 || l.isShortDelivery)) {
+      shipment.hasShortDelivery = true;
+    }
     shipment.updatedAt = new Date();
     this.shipments.set(id, shipment);
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE shipments 
+           SET status = 'DELIVERED', 
+               receiver_name = $1, 
+               delivered_at = $2, 
+               proof_of_delivery_url = $3, 
+               delivery_note = $4, 
+               has_short_delivery = $5,
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $6;`,
+          [
+            payload.receiverName.trim(),
+            shipment.deliveredAt,
+            shipment.proofOfDeliveryUrl || null,
+            shipment.deliveryNote || null,
+            Boolean(shipment.hasShortDelivery),
+            id,
+          ],
+        );
+      } catch (dbErr) {
+        this.logger.warn(`Lỗi cập nhật confirmDelivery vào database: ${dbErr}`);
+      }
+    }
 
     if (shipment.orderCode || shipment.orderId) {
       await this.syncOrder(shipment.orderCode || shipment.orderId, 'DELIVERED');
