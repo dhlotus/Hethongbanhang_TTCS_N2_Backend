@@ -67,6 +67,30 @@ export class CollectionsController {
   }
 
   /**
+   * 1b. Lấy danh sách đơn hàng đã giao / đang giao đủ điều kiện thu tiền theo tuyến (GET /api/collections/eligible-orders)
+   * Phải đặt trước GET :id để tránh conflict route param
+   */
+  @Get('eligible-orders')
+  @Roles(
+    UserRole.SALES_REP,
+    UserRole.SALES_MANAGER,
+    UserRole.BUSINESS_MANAGER,
+    UserRole.ADMIN,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+  )
+  async getEligibleOrders(
+    @Query('agency_id') agencyId: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    const data = await this.collectionsService.getEligibleOrders(agencyId, currentUser);
+    return {
+      success: true,
+      data,
+    };
+  }
+
+  /**
    * 2. Lấy dữ liệu Bảng đối chiếu tổng hợp (GET /api/collections/reconciliation)
    * Phải đặt trước GET :id để tránh conflict route param
    */
