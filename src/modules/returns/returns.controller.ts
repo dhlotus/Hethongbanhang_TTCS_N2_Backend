@@ -90,9 +90,17 @@ export class ReturnsController {
     UserRole.ADMIN,
   )
   async findAll(
-    @Query() query: { status?: string; search?: string; agencyId?: string },
+    @Query()
+    query: {
+      status?: string;
+      search?: string;
+      agencyId?: string;
+      warehouseId?: string;
+      page?: string | number;
+      limit?: string | number;
+    },
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ReturnReceiptEntity[]> {
+  ): Promise<any> {
     return this.returnsService.findAllReturnReceipts(query, currentUser);
   }
 

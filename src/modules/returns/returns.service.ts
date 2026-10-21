@@ -1244,16 +1244,73 @@ export class ReturnsService implements OnModuleInit {
   }
 
   /**
-   * Danh sách phiếu trả hàng (hỗ trợ lọc status, search, agency)
+   * Danh sách phiếu trả hàng (hỗ trợ phân trang, lọc status, search, warehouse, agency)
    */
   async findAllReturnReceipts(
-    query?: { status?: string; search?: string; agencyId?: string },
+    query?: {
+      status?: string;
+      search?: string;
+      agencyId?: string;
+      warehouseId?: string;
+      page?: string | number;
+      limit?: string | number;
+    },
     currentUser?: ICurrentUser,
-  ): Promise<ReturnReceiptEntity[]> {
+  ): Promise<any> {
     await this.ensureTables();
+
+    const page = Math.max(1, parseInt(String(query?.page || '1'), 10) || 1);
+    const limit = Math.max(1, parseInt(String(query?.limit || '10'), 10) || 10);
+    const offset = (page - 1) * limit;
+    const isPaginated = query?.page !== undefined || query?.limit !== undefined;
 
     if (this.databaseService?.isConnected()) {
       try {
+        const conditions: string[] = ['1=1'];
+        const params: any[] = [];
+
+        if (query?.status && query.status !== 'ALL') {
+          params.push(query.status.toUpperCase());
+          conditions.push(`rr.status = $${params.length}`);
+        }
+
+        if (query?.warehouseId && query.warehouseId !== 'ALL') {
+          params.push(query.warehouseId);
+          conditions.push(`(rr.warehouse_id = $${params.length} OR w.code = $${params.length})`);
+        }
+
+        if (query?.agencyId) {
+          params.push(query.agencyId);
+          conditions.push(`(rr.agency_id = $${params.length} OR c.code = $${params.length})`);
+        }
+
+        if (query?.search && query.search.trim()) {
+          params.push(`%${query.search.trim().toLowerCase()}%`);
+          conditions.push(
+            `(LOWER(rr.code) LIKE $${params.length} OR LOWER(rr.original_invoice_id) LIKE $${params.length} OR LOWER(c.name) LIKE $${params.length} OR LOWER(c.code) LIKE $${params.length} OR LOWER(rr.reason) LIKE $${params.length} OR LOWER(w.name) LIKE $${params.length})`,
+          );
+        }
+
+        const whereSql = conditions.join(' AND ');
+
+        // Query tổng và thống kê
+        const countSql = `
+          SELECT 
+            COUNT(*)::int as total,
+            COUNT(CASE WHEN rr.status = 'PENDING' THEN 1 END)::int as total_pending,
+            COUNT(CASE WHEN rr.status = 'APPROVED' THEN 1 END)::int as total_approved,
+            COALESCE(SUM(CASE WHEN rr.status = 'APPROVED' THEN rr.total_refund_amount ELSE 0 END), 0)::numeric as total_refund_amount
+          FROM return_receipts rr
+          LEFT JOIN customers c ON c.id::text = rr.agency_id OR c.code = rr.agency_id
+          LEFT JOIN warehouses w ON w.id::text = rr.warehouse_id OR w.code = rr.warehouse_id
+          WHERE ${whereSql};
+        `;
+        const countRows = await this.databaseService.query<any>(countSql, params);
+        const total = Number(countRows[0]?.total || 0);
+        const totalPending = Number(countRows[0]?.total_pending || 0);
+        const totalApproved = Number(countRows[0]?.total_approved || 0);
+        const totalRefundAmount = Number(countRows[0]?.total_refund_amount || 0);
+
         let sql = `
           SELECT rr.*, c.name as agency_name, c.code as agency_code,
                  w.name as warehouse_name, w.code as warehouse_code,
@@ -1265,28 +1322,21 @@ export class ReturnsService implements OnModuleInit {
           LEFT JOIN users u ON u.id::text = rr.created_by
           LEFT JOIN users wm ON wm.id::text = rr.warehouse_manager_id
           LEFT JOIN debt_adjustment_vouchers dav ON dav.return_receipt_id = rr.id OR dav.return_receipt_code = rr.code
-          WHERE 1=1
+          WHERE ${whereSql}
+          ORDER BY rr.created_at DESC
         `;
-        const params: any[] = [];
 
-        if (query?.status && query.status !== 'ALL') {
-          params.push(query.status.toUpperCase());
-          sql += ` AND rr.status = $${params.length}`;
+        const queryParams = [...params];
+        if (isPaginated) {
+          const limitIdx = queryParams.length + 1;
+          const offsetIdx = queryParams.length + 2;
+          sql += ` LIMIT $${limitIdx} OFFSET $${offsetIdx};`;
+          queryParams.push(limit, offset);
+        } else {
+          sql += `;`;
         }
 
-        if (query?.agencyId) {
-          params.push(query.agencyId);
-          sql += ` AND (rr.agency_id = $${params.length} OR c.code = $${params.length})`;
-        }
-
-        if (query?.search && query.search.trim()) {
-          params.push(`%${query.search.trim().toLowerCase()}%`);
-          sql += ` AND (LOWER(rr.code) LIKE $${params.length} OR LOWER(rr.original_invoice_id) LIKE $${params.length} OR LOWER(c.name) LIKE $${params.length} OR LOWER(rr.reason) LIKE $${params.length})`;
-        }
-
-        sql += ` ORDER BY rr.created_at DESC;`;
-
-        const rows = await this.databaseService.query<any>(sql, params);
+        const rows = await this.databaseService.query<any>(sql, queryParams);
         const results: ReturnReceiptEntity[] = [];
 
         for (const r of rows) {
@@ -1334,13 +1384,69 @@ export class ReturnsService implements OnModuleInit {
             })),
           });
         }
+
+        if (isPaginated) {
+          return {
+            data: results,
+            total,
+            page,
+            limit,
+            totalPages: Math.max(1, Math.ceil(total / limit)),
+            summary: {
+              totalReceipts: total,
+              totalPending,
+              totalApproved,
+              totalRefundAmount,
+            },
+          };
+        }
+
         return results;
       } catch (err) {
         this.logger.warn(`Lỗi query danh sách return_receipts: ${(err as Error).message}`);
       }
     }
 
-    return Array.from(new Set(this.fallbackReceipts.values()));
+    // In-memory fallback
+    const all = Array.from(new Set(this.fallbackReceipts.values()));
+    const filtered = all.filter((r) => {
+      const matchStatus = !query?.status || query.status === 'ALL' || r.status === query.status;
+      const matchWarehouse = !query?.warehouseId || query.warehouseId === 'ALL' || r.warehouseId === query.warehouseId;
+      const s = query?.search?.trim()?.toLowerCase();
+      const matchSearch =
+        !s ||
+        r.code?.toLowerCase()?.includes(s) ||
+        r.originalInvoiceId?.toLowerCase()?.includes(s) ||
+        r.agencyName?.toLowerCase()?.includes(s) ||
+        r.reason?.toLowerCase()?.includes(s);
+      return matchStatus && matchWarehouse && matchSearch;
+    });
+    filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    if (isPaginated) {
+      const total = filtered.length;
+      const totalPending = filtered.filter((r) => r.status === 'PENDING').length;
+      const totalApproved = filtered.filter((r) => r.status === 'APPROVED').length;
+      const totalRefundAmount = filtered
+        .filter((r) => r.status === 'APPROVED')
+        .reduce((sum, r) => sum + (r.totalRefundAmount || 0), 0);
+      const data = filtered.slice(offset, offset + limit);
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        summary: {
+          totalReceipts: total,
+          totalPending,
+          totalApproved,
+          totalRefundAmount,
+        },
+      };
+    }
+
+    return filtered;
   }
 
   /**
@@ -1348,7 +1454,7 @@ export class ReturnsService implements OnModuleInit {
    */
   async getAllReturns(): Promise<ReturnRequestItem[]> {
     const list = await this.findAllReturnReceipts();
-    return list.map((r) => ({
+    return (list as ReturnReceiptEntity[]).map((r: ReturnReceiptEntity) => ({
       id: r.id,
       requestCode: r.code,
       orderId: r.originalInvoiceId,
