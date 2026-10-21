@@ -20,6 +20,8 @@ import { ICurrentUser } from '../auth/interfaces/current-user.interface';
   UserRole.ACCOUNTANT_DEBT,
   UserRole.WH_MANAGER,
   UserRole.WAREHOUSE_MANAGER,
+  UserRole.WAREHOUSE_KEEPER,
+  UserRole.WAREHOUSE,
   UserRole.SALES_REP,
 )
 export class DashboardController {

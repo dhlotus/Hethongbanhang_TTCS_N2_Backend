@@ -1142,6 +1142,11 @@ export class OrdersService implements OnModuleInit {
           return false;
         }
 
+        // 3. Nếu chưa có cấu hình phân kho đại lý (hoặc offline memory mode), cho phép hiển thị
+        if (assignedAgencies.size === 0 && otherWarehouseAgencies.size === 0) {
+          return true;
+        }
+
         return false;
       });
     }
@@ -3050,7 +3055,7 @@ async findOrdersByCustomer(
 
     if (this.databaseService && this.databaseService.isConnected()) {
       await this.databaseService.query(
-        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id::text = $2 OR code = $2`,
         [status, id],
       );
     }

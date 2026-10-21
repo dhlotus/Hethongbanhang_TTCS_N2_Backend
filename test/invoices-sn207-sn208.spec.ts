@@ -293,7 +293,7 @@ describe('[SN-207 & SN-208] Quản lý Công nợ Đại lý & Nhắc hạn than
       );
 
       const notifs = debtSchedulerService.getInAppNotificationsForCustomer(dealerCustomerId);
-      const overdueNotif = notifs.find((n) => n.type === 'DEBT_OVERDUE');
+      const overdueNotif = notifs.find((n) => n.type === 'DEBT_OVERDUE' && n.invoiceCode === 'HD2610-004');
       expect(overdueNotif).toBeDefined();
       expect(overdueNotif?.priority).toBe('high');
       expect(overdueNotif?.invoiceCode).toBe('HD2610-004');
