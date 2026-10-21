@@ -38,4 +38,13 @@ export class CreateCollectionDto {
   @IsOptional()
   @IsString()
   receipt_image_url?: string;
+
+  @IsOptional()
+  order_ids?: any;
+
+  @IsOptional()
+  order_codes?: any;
+
+  @IsOptional()
+  order_details?: any;
 }

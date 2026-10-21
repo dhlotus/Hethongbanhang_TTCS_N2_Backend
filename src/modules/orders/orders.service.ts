@@ -3055,7 +3055,7 @@ async findOrdersByCustomer(
 
     if (this.databaseService && this.databaseService.isConnected()) {
       await this.databaseService.query(
-        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id::text = $2 OR code = $2`,
         [status, id],
       );
     }

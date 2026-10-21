@@ -95,11 +95,64 @@ export class CollectionsService implements OnModuleInit {
         CREATE INDEX IF NOT EXISTS idx_route_collections_agency ON route_collections(agency_id);
         CREATE INDEX IF NOT EXISTS idx_route_collections_status ON route_collections(status);
         CREATE INDEX IF NOT EXISTS idx_route_collections_date ON route_collections(collection_date);
+
+        ALTER TABLE route_collections ADD COLUMN IF NOT EXISTS order_codes JSONB;
+        ALTER TABLE route_collections ADD COLUMN IF NOT EXISTS order_details JSONB;
       `);
       this.logger.log('Đã kiểm tra và đồng bộ cấu trúc bảng route_collections');
     } catch (err) {
       this.logger.warn(`Lỗi khởi tạo bảng route_collections: ${err}`);
     }
+  }
+
+  /**
+   * Helper ánh xạ dữ liệu DB row sang RouteCollectionEntity
+   */
+  private mapDbRowToEntity(r: any): RouteCollectionEntity {
+    let orderCodes: string[] = [];
+    if (Array.isArray(r.order_codes)) {
+      orderCodes = r.order_codes;
+    } else if (typeof r.order_codes === 'string') {
+      try {
+        orderCodes = JSON.parse(r.order_codes);
+      } catch {
+        orderCodes = [];
+      }
+    }
+
+    let orderDetails: any[] = [];
+    if (Array.isArray(r.order_details)) {
+      orderDetails = r.order_details;
+    } else if (typeof r.order_details === 'string') {
+      try {
+        orderDetails = JSON.parse(r.order_details);
+      } catch {
+        orderDetails = [];
+      }
+    }
+
+    return new RouteCollectionEntity({
+      id: r.id,
+      code: r.code,
+      agencyId: r.agency_id,
+      agencyName: r.agency_name,
+      salesRepId: r.sales_rep_id,
+      salesRepName: r.sales_rep_name,
+      amount: Number(r.amount),
+      paymentMethod: r.payment_method,
+      receiptImageUrl: r.receipt_image_url,
+      status: r.status,
+      collectionDate: new Date(r.collection_date),
+      note: r.note,
+      approvedBy: r.approved_by,
+      approvedByName: r.approved_by_name,
+      approvedAt: r.approved_at ? new Date(r.approved_at) : undefined,
+      rejectionReason: r.rejection_reason,
+      orderCodes,
+      orderDetails,
+      createdAt: new Date(r.created_at),
+      updatedAt: new Date(r.updated_at),
+    });
   }
 
   /**
@@ -276,6 +329,40 @@ export class CollectionsService implements OnModuleInit {
 
     const collectionDate = dto.collection_date ? new Date(dto.collection_date) : now;
 
+    // Bóc tách danh sách đơn hàng được gán kèm phiếu thu
+    let orderCodes: string[] = [];
+    if (Array.isArray(dto.order_codes)) {
+      orderCodes = dto.order_codes;
+    } else if (typeof dto.order_codes === 'string') {
+      try {
+        orderCodes = JSON.parse(dto.order_codes);
+      } catch {
+        orderCodes = dto.order_codes ? [dto.order_codes] : [];
+      }
+    }
+
+    let orderDetails: any[] = [];
+    if (Array.isArray(dto.order_details)) {
+      orderDetails = dto.order_details;
+    } else if (typeof dto.order_details === 'string') {
+      try {
+        orderDetails = JSON.parse(dto.order_details);
+      } catch {
+        orderDetails = [];
+      }
+    }
+
+    let orderIds: string[] = [];
+    if (Array.isArray(dto.order_ids)) {
+      orderIds = dto.order_ids;
+    } else if (typeof dto.order_ids === 'string') {
+      try {
+        orderIds = JSON.parse(dto.order_ids);
+      } catch {
+        orderIds = dto.order_ids ? [dto.order_ids] : [];
+      }
+    }
+
     const newRecord = new RouteCollectionEntity({
       id,
       code,
@@ -289,6 +376,9 @@ export class CollectionsService implements OnModuleInit {
       status: 'PENDING',
       collectionDate,
       note: dto.note || '',
+      orderCodes,
+      orderIds,
+      orderDetails,
       createdAt: now,
       updatedAt: now,
     });
@@ -298,8 +388,8 @@ export class CollectionsService implements OnModuleInit {
         `INSERT INTO route_collections (
           id, code, agency_id, agency_name, sales_rep_id, sales_rep_name,
           amount, payment_method, receipt_image_url, status, collection_date,
-          note, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);`,
+          note, order_codes, order_details, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16);`,
         [
           newRecord.id,
           newRecord.code,
@@ -313,6 +403,8 @@ export class CollectionsService implements OnModuleInit {
           newRecord.status,
           newRecord.collectionDate,
           newRecord.note || null,
+          JSON.stringify(orderCodes),
+          JSON.stringify(orderDetails),
           newRecord.createdAt,
           newRecord.updatedAt,
         ],
@@ -356,29 +448,7 @@ export class CollectionsService implements OnModuleInit {
       const rows = await this.databaseService.query<any>(
         `SELECT * FROM route_collections ORDER BY collection_date DESC, created_at DESC;`,
       );
-      records = (rows || []).map(
-        (r) =>
-          new RouteCollectionEntity({
-            id: r.id,
-            code: r.code,
-            agencyId: r.agency_id,
-            agencyName: r.agency_name,
-            salesRepId: r.sales_rep_id,
-            salesRepName: r.sales_rep_name,
-            amount: Number(r.amount),
-            paymentMethod: r.payment_method,
-            receiptImageUrl: r.receipt_image_url,
-            status: r.status,
-            collectionDate: new Date(r.collection_date),
-            note: r.note,
-            approvedBy: r.approved_by,
-            approvedByName: r.approved_by_name,
-            approvedAt: r.approved_at ? new Date(r.approved_at) : undefined,
-            rejectionReason: r.rejection_reason,
-            createdAt: new Date(r.created_at),
-            updatedAt: new Date(r.updated_at),
-          }),
-      );
+      records = (rows || []).map((r) => this.mapDbRowToEntity(r));
     } else {
       records = Array.from(this.inMemoryCollections.values());
     }
@@ -463,27 +533,7 @@ export class CollectionsService implements OnModuleInit {
         [id],
       );
       if (rows && rows.length > 0) {
-        const r = rows[0];
-        return new RouteCollectionEntity({
-          id: r.id,
-          code: r.code,
-          agencyId: r.agency_id,
-          agencyName: r.agency_name,
-          salesRepId: r.sales_rep_id,
-          salesRepName: r.sales_rep_name,
-          amount: Number(r.amount),
-          paymentMethod: r.payment_method,
-          receiptImageUrl: r.receipt_image_url,
-          status: r.status,
-          collectionDate: new Date(r.collection_date),
-          note: r.note,
-          approvedBy: r.approved_by,
-          approvedByName: r.approved_by_name,
-          approvedAt: r.approved_at ? new Date(r.approved_at) : undefined,
-          rejectionReason: r.rejection_reason,
-          createdAt: new Date(r.created_at),
-          updatedAt: new Date(r.updated_at),
-        });
+        return this.mapDbRowToEntity(rows[0]);
       }
     } else {
       const found = this.inMemoryCollections.get(id);
@@ -549,14 +599,92 @@ export class CollectionsService implements OnModuleInit {
     }
 
     // 2. Nghiệp vụ ERP quan trọng: Gạch nợ tự động cho đại lý khi duyệt thành công
-    if (dto.status === 'APPROVED' && this.customersService && collection.agencyId) {
-      try {
-        await this.customersService.adjustCustomerDebt(collection.agencyId, -Number(collection.amount));
-        this.logger.log(
-          `[Gạch nợ tự động] Đã giảm ${collection.amount.toLocaleString('vi-VN')} đ cho đại lý ${collection.agencyName} (${collection.agencyId}) từ phiếu thu ${collection.code}`,
-        );
-      } catch (err) {
-        this.logger.warn(`Lỗi khi tự động gạch nợ đại lý ${collection.agencyId}: ${err}`);
+    if (dto.status === 'APPROVED') {
+      if (this.customersService && collection.agencyId) {
+        try {
+          await this.customersService.adjustCustomerDebt(collection.agencyId, -Number(collection.amount));
+          this.logger.log(
+            `[Gạch nợ tự động] Đã giảm ${collection.amount.toLocaleString('vi-VN')} đ cho đại lý ${collection.agencyName} (${collection.agencyId}) từ phiếu thu ${collection.code}`,
+          );
+        } catch (err) {
+          this.logger.warn(`Lỗi khi tự động gạch nợ đại lý ${collection.agencyId}: ${err}`);
+        }
+      }
+
+      // 2b. Ghi nhận giao dịch vào Sổ cái công nợ đại lý (customer_debt_ledger)
+      if (this.databaseService?.isConnected()) {
+        try {
+          await this.databaseService.query(
+            `INSERT INTO customer_debt_ledger (
+               customer_id, transaction_type, reference_type, reference_id,
+               credit_amount, debit_amount, notes, created_by, created_at
+             ) VALUES (
+               $1, 'ROUTE_COLLECTION', 'ROUTE_COLLECTION', $2,
+               $3, 0, $4, $5, NOW()
+             );`,
+            [
+              collection.agencyId,
+              collection.code,
+              collection.amount,
+              `Thu tiền theo tuyến qua phiếu ${collection.code} (NVKD: ${collection.salesRepName})`,
+              collection.approvedBy || 'accountant',
+            ],
+          );
+        } catch (e: any) {
+          this.logger.warn(`Lỗi ghi sổ cái công nợ: ${e.message}`);
+        }
+
+        // 2c. Cấn trừ nợ vào các đơn hàng đã được chọn (nếu có)
+        const orderCodes = collection.orderCodes || [];
+        if (orderCodes.length > 0) {
+          try {
+            let remainingToAllocate = Number(collection.amount);
+            for (const ordCode of orderCodes) {
+              if (remainingToAllocate <= 0) break;
+
+              // Cập nhật app_order_records
+              const appRes = await this.databaseService.query<any>(
+                `SELECT id, payload FROM app_order_records WHERE order_code = $1 LIMIT 1;`,
+                [ordCode],
+              );
+              if (appRes && appRes[0]) {
+                const p = appRes[0].payload || {};
+                const grandTotal = Number(p.grandTotal || p.totalAmount || 0);
+                const prevPaid = Number(p.paidAmount || 0);
+                const curRemaining = Math.max(0, grandTotal - prevPaid);
+                const allocated = Math.min(curRemaining, remainingToAllocate);
+
+                const newPaid = prevPaid + allocated;
+                const newRemaining = Math.max(0, grandTotal - newPaid);
+                const paymentStatus = newRemaining <= 0 ? 'PAID' : 'PARTIAL';
+
+                p.paidAmount = newPaid;
+                p.remainingAmount = newRemaining;
+                p.paymentStatus = paymentStatus;
+                p.lastCollectionCode = collection.code;
+
+                await this.databaseService.query(
+                  `UPDATE app_order_records SET payload = $1, updated_at = NOW() WHERE order_code = $2;`,
+                  [JSON.stringify(p), ordCode],
+                );
+                remainingToAllocate -= allocated;
+              }
+
+              // Cập nhật invoices nếu có
+              await this.databaseService.query(
+                `UPDATE invoices 
+                 SET paid_amount = paid_amount + $1,
+                     remaining_amount = GREATEST(0, remaining_amount - $1),
+                     payment_status = CASE WHEN remaining_amount - $1 <= 0 THEN 'PAID' ELSE 'PARTIAL' END,
+                     updated_at = NOW()
+                 WHERE code = $2 OR order_id = (SELECT id::text FROM orders WHERE code = $2 LIMIT 1);`,
+                [Number(collection.amount), ordCode],
+              ).catch(() => {});
+            }
+          } catch (err: any) {
+            this.logger.warn(`Lỗi cấn trừ đơn hàng khi duyệt phiếu thu: ${err.message}`);
+          }
+        }
       }
     }
 
@@ -582,6 +710,232 @@ export class CollectionsService implements OnModuleInit {
     }
 
     return collection;
+  }
+
+  /**
+   * Lấy danh sách các đơn hàng đủ điều kiện thu tiền theo tuyến của đại lý (SN-205)
+   * Trạng thái: Đã giao (DELIVERED) hoặc Đang đi giao (SHIPPED / DELIVERING)
+   */
+  async getEligibleOrders(
+    agencyId?: string,
+    currentUser?: ICurrentUser,
+  ): Promise<any[]> {
+    if (!agencyId) return [];
+
+    const ordersMap = new Map<string, any>();
+
+    // 1. Phân giải các alias của đại lý
+    const aliases = [agencyId];
+    if (agencyId.startsWith('cust-dl-')) {
+      aliases.push('DL-' + agencyId.replace('cust-dl-', ''));
+    } else if (agencyId.startsWith('cust-')) {
+      aliases.push('DL-' + agencyId.replace('cust-', ''));
+    }
+    if (agencyId === 'cust-dl-0001' || agencyId === 'DL-0001') {
+      aliases.push('cust-001', 'DL-MK-001', '55555555-0000-0000-0000-000000000001');
+    } else if (agencyId === 'cust-dl-0002' || agencyId === 'DL-0002') {
+      aliases.push('cust-002', 'DL-AB-002', '55555555-0000-0000-0000-000000000002');
+    } else if (agencyId === 'cust-dl-0003' || agencyId === 'DL-0003') {
+      aliases.push('cust-003', 'DL-HT-003', '55555555-0000-0000-0000-000000000003');
+    }
+
+    if (this.databaseService?.isConnected()) {
+      try {
+        // 2. Thu thập danh sách các đơn hàng ĐÃ TẠO PHIẾU THU (ở trạng thái PENDING hoặc APPROVED)
+        const collectedCodes = new Set<string>();
+        const collectedIds = new Set<string>();
+
+        const existingCols = await this.databaseService.query<any>(
+          `SELECT order_codes, order_details FROM route_collections WHERE status IN ('PENDING', 'APPROVED');`,
+        );
+        for (const col of existingCols || []) {
+          let codes: string[] = [];
+          if (Array.isArray(col.order_codes)) {
+            codes = col.order_codes;
+          } else if (typeof col.order_codes === 'string') {
+            try {
+              codes = JSON.parse(col.order_codes);
+            } catch {
+              codes = [];
+            }
+          }
+          codes.forEach((c) => c && collectedCodes.add(String(c).trim().toUpperCase()));
+
+          let details: any[] = [];
+          if (Array.isArray(col.order_details)) {
+            details = col.order_details;
+          } else if (typeof col.order_details === 'string') {
+            try {
+              details = JSON.parse(col.order_details);
+            } catch {
+              details = [];
+            }
+          }
+          details.forEach((d: any) => {
+            if (d?.orderCode) collectedCodes.add(String(d.orderCode).trim().toUpperCase());
+            if (d?.order_code) collectedCodes.add(String(d.order_code).trim().toUpperCase());
+            if (d?.orderId) collectedIds.add(String(d.orderId).trim());
+            if (d?.order_id) collectedIds.add(String(d.order_id).trim());
+          });
+        }
+
+        // Bổ sung từ memory cache
+        for (const col of this.inMemoryCollections.values()) {
+          if (col.status === 'PENDING' || col.status === 'APPROVED') {
+            col.orderCodes?.forEach((c: string) => c && collectedCodes.add(String(c).trim().toUpperCase()));
+            col.orderIds?.forEach((id: string) => id && collectedIds.add(String(id).trim()));
+            col.orderDetails?.forEach((d: any) => {
+              if (d?.orderCode) collectedCodes.add(String(d.orderCode).trim().toUpperCase());
+              if (d?.orderId) collectedIds.add(String(d.orderId).trim());
+            });
+          }
+        }
+
+        // Nguồn 1: app_order_records
+        const appOrdersRes = await this.databaseService.query<any>(
+          `SELECT id, order_code, payload, created_at
+           FROM app_order_records
+           WHERE (
+             payload->>'customerId' = ANY($1)
+             OR payload->>'customerId' ILIKE $2
+           )
+           AND UPPER(COALESCE(payload->>'status', '')) IN ('DELIVERED', 'SHIPPED', 'COMPLETED', 'DELIVERING')
+           ORDER BY created_at DESC;`,
+          [aliases, `%${agencyId}%`],
+        );
+
+        for (const row of appOrdersRes || []) {
+          const p = row.payload || {};
+          const code = row.order_code || p.orderCode || p.code || row.id;
+          const total = Number(p.grandTotal ?? p.totalAmount ?? p.subtotal ?? 0);
+          const rawStatus = (p.status || 'DELIVERED').toUpperCase();
+          const status = rawStatus === 'SHIPPED' ? 'SHIPPED' : 'DELIVERED';
+          const statusLabel = status === 'DELIVERED' ? 'Đã giao hàng' : 'Đang đi giao';
+          const paid = Number(p.paidAmount ?? 0);
+          const remaining = Math.max(0, total - paid);
+
+          const upperCode = code ? String(code).trim().toUpperCase() : '';
+          const upperRowCode = row.order_code ? String(row.order_code).trim().toUpperCase() : '';
+          const upperPayloadCode = p.orderCode ? String(p.orderCode).trim().toUpperCase() : '';
+          const rowId = String(row.id).trim();
+
+          // LOẠI BỎ: Nếu đơn hàng đã tạo phiếu thu rồi (PENDING hoặc APPROVED) hoặc đã thu đủ tiền
+          if (
+            collectedCodes.has(upperCode) ||
+            (upperRowCode && collectedCodes.has(upperRowCode)) ||
+            (upperPayloadCode && collectedCodes.has(upperPayloadCode)) ||
+            collectedIds.has(rowId) ||
+            p.lastCollectionCode ||
+            (p.paymentStatus || '').toUpperCase() === 'PAID' ||
+            remaining <= 0
+          ) {
+            continue;
+          }
+
+          const orderDate = p.orderDate || p.createdAt || p.deliveryDate || row.created_at;
+          ordersMap.set(code, {
+            id: row.id,
+            orderId: row.id,
+            order_id: row.id,
+            orderCode: code,
+            order_code: code,
+            code: code,
+            customerId: p.customerId || agencyId,
+            customer_id: p.customerId || agencyId,
+            customerName: p.customerName || 'Đại lý',
+            customer_name: p.customerName || 'Đại lý',
+            status,
+            statusLabel,
+            status_label: statusLabel,
+            totalAmount: total,
+            total_amount: total,
+            paidAmount: paid,
+            paid_amount: paid,
+            remainingAmount: remaining,
+            remaining_amount: remaining,
+            issueDate: p.deliveryDate || p.createdAt || row.created_at,
+            deliveryDate: p.deliveryDate || row.created_at,
+            orderDate: orderDate,
+            order_date: orderDate,
+            created_at: row.created_at || p.createdAt,
+          });
+        }
+
+        // Nguồn 2: Bảng orders & invoices kết hợp
+        const dbOrdersRes = await this.databaseService.query<any>(
+          `SELECT o.id, o.code, o.status, o.total_amount, o.final_amount, o.created_at,
+                  c.name as customer_name, c.id as customer_id,
+                  inv.id as invoice_id, inv.code as invoice_code,
+                  COALESCE(inv.total_amount, o.final_amount, o.total_amount) as inv_total,
+                  COALESCE(inv.paid_amount, 0) as inv_paid,
+                  COALESCE(inv.remaining_amount, o.final_amount, o.total_amount) as inv_remaining
+           FROM orders o
+           LEFT JOIN customers c ON c.id = o.customer_id
+           LEFT JOIN invoices inv ON inv.order_id = o.id
+           WHERE (o.customer_id::text = ANY($1) OR c.code = ANY($1))
+             AND UPPER(o.status) IN ('DELIVERED', 'SHIPPED', 'COMPLETED', 'DELIVERING')
+           ORDER BY o.created_at DESC;`,
+          [aliases],
+        );
+
+        for (const row of dbOrdersRes || []) {
+          const code = row.code || row.id;
+          const total = Number(row.inv_total || row.final_amount || row.total_amount || 0);
+          const paid = Number(row.inv_paid || 0);
+          const remaining = Number(row.inv_remaining || total - paid);
+
+          const upperCode = code ? String(code).trim().toUpperCase() : '';
+          const rowId = String(row.id).trim();
+
+          // LOẠI BỎ: Nếu đơn hàng đã tạo phiếu thu rồi hoặc đã thu đủ tiền
+          if (
+            collectedCodes.has(upperCode) ||
+            collectedIds.has(rowId) ||
+            remaining <= 0
+          ) {
+            continue;
+          }
+
+          if (!ordersMap.has(code)) {
+            const status = (row.status || 'DELIVERED').toUpperCase() === 'SHIPPED' ? 'SHIPPED' : 'DELIVERED';
+            const statusLabel = status === 'DELIVERED' ? 'Đã giao hàng' : 'Đang đi giao';
+
+            ordersMap.set(code, {
+              id: row.id,
+              orderId: row.id,
+              order_id: row.id,
+              orderCode: code,
+              order_code: code,
+              code: code,
+              invoiceId: row.invoice_id,
+              invoiceCode: row.invoice_code,
+              customerId: row.customer_id || agencyId,
+              customer_id: row.customer_id || agencyId,
+              customerName: row.customer_name || 'Đại lý',
+              customer_name: row.customer_name || 'Đại lý',
+              status,
+              statusLabel,
+              status_label: statusLabel,
+              totalAmount: total,
+              total_amount: total,
+              paidAmount: paid,
+              paid_amount: paid,
+              remainingAmount: remaining,
+              remaining_amount: remaining,
+              issueDate: row.created_at,
+              deliveryDate: row.created_at,
+              orderDate: row.created_at,
+              order_date: row.created_at,
+              created_at: row.created_at,
+            });
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Lỗi lấy eligible orders: ${err.message}`);
+      }
+    }
+
+    return Array.from(ordersMap.values());
   }
 
   /**

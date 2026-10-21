@@ -4,8 +4,13 @@ import {
   NotFoundException,
   OnModuleInit,
   Logger,
+  Inject,
+  forwardRef,
+  Optional,
 } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
+import { InventoryService } from '../inventory/inventory.service';
+import { ProductsService } from '../products/products.service';
 import { CreateGoodsReceiptDto } from './dto/create-goods-receipt.dto';
 import { UpdateGoodsReceiptDto } from './dto/update-goods-receipt.dto';
 import { QueryGoodsReceiptsDto } from './dto/query-goods-receipts.dto';
@@ -18,6 +23,8 @@ import {
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class GoodsReceiptsService implements OnModuleInit {
@@ -28,8 +35,17 @@ export class GoodsReceiptsService implements OnModuleInit {
    */
   private readonly memoryReceipts = new Map<string, GoodsReceiptEntity>();
 
-  constructor(private readonly db: DatabaseService) {
+  constructor(
+    private readonly db: DatabaseService,
+    @Optional()
+    @Inject(forwardRef(() => InventoryService))
+    private readonly inventoryService?: InventoryService,
+    @Optional()
+    @Inject(forwardRef(() => ProductsService))
+    private readonly productsService?: ProductsService,
+  ) {
     this.initMemoryMockData();
+    this.loadReceiptsFromDisk();
   }
 
   /**
@@ -116,8 +132,85 @@ export class GoodsReceiptsService implements OnModuleInit {
       items: sampleItems2,
     };
 
+    const sampleItems3: GoodsReceiptItemEntity[] = [
+      {
+        id: 'f13dd6a4-4e32-4fdc-bcdb-d78ae0823a2b',
+        receiptId: 'f4256d7e-5585-421b-a9d0-1ed5c932b58d',
+        productId: '33333333-0000-0000-0000-000000000002',
+        productName: 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml',
+        productCode: 'LH-NUT-180ML',
+        unitId: 'Thùng',
+        unitName: 'Thùng',
+        packageQuantity: 2,
+        conversionFactor: 48,
+        baseQuantity: 96,
+        unitCost: 100000,
+        totalCost: 200000,
+        batchNumber: 'LOT-261021-3KXX',
+        mfgDate: new Date('2026-10-21'),
+        expiryDate: new Date('2026-11-01'),
+        createdAt: new Date('2026-10-21T02:32:02.600Z'),
+      },
+    ];
+
+    const receipt3: GoodsReceiptEntity = {
+      id: 'f4256d7e-5585-421b-a9d0-1ed5c932b58d',
+      code: 'PN2610210003',
+      warehouseId: '11111111-0000-0000-0000-000000000002',
+      warehouseName: 'Kho Miền Bắc (Hà Nội)',
+      supplierId: '22222222-0000-0000-0000-000000000004',
+      supplierName: 'Nhà máy Bao Bì & Đóng Gói Tân Tiến Phát',
+      receiptType: ReceiptType.PURCHASE_RECEIPT,
+      referenceDocument: 'REF-261021-BTF8HX',
+      status: GoodsReceiptStatus.CONFIRMED,
+      totalCost: 200000,
+      notes: 'Hàng nhập kho đầy đủ nguyên đai nguyên kiện.',
+      createdByName: 'warehousemanager',
+      receivedByName: 'warehousemanager',
+      receivedAt: new Date('2026-10-21T02:32:02.606Z'),
+      createdAt: new Date('2026-10-21T02:32:02.600Z'),
+      updatedAt: new Date('2026-10-21T02:32:02.606Z'),
+      items: sampleItems3,
+    };
+
     this.memoryReceipts.set(receipt1.id, receipt1);
     this.memoryReceipts.set(receipt2.id, receipt2);
+    this.memoryReceipts.set(receipt3.id, receipt3);
+  }
+
+  private getStorageFilePath(): string {
+    const dataDir = path.join(process.cwd(), 'uploads', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, 'goods_receipts.json');
+  }
+
+  private saveReceiptsToDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      const list = Array.from(this.memoryReceipts.values());
+      fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err: any) {
+      this.logger.warn(`Không thể lưu phiếu nhập kho ra đĩa: ${err?.message}`);
+    }
+  }
+
+  private loadReceiptsFromDisk(): void {
+    try {
+      const filePath = this.getStorageFilePath();
+      if (!fs.existsSync(filePath)) return;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.trim()) return;
+      const list: GoodsReceiptEntity[] = JSON.parse(content);
+      for (const item of list) {
+        if (item.id) {
+          this.memoryReceipts.set(item.id, item);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Không thể tải phiếu nhập kho từ đĩa: ${err?.message}`);
+    }
   }
 
   async onModuleInit() {
@@ -374,40 +467,57 @@ export class GoodsReceiptsService implements OnModuleInit {
 
       let productName = `Mặt hàng (${i.productId.slice(0, 8)})`;
       let productCode = i.productId.slice(0, 8).toUpperCase();
+
+      if (this.productsService) {
+        try {
+          const prod = (this.productsService as any).findProductInternal
+            ? (this.productsService as any).findProductInternal(i.productId)
+            : null;
+          if (prod) {
+            productName = prod.name;
+            productCode = prod.sku;
+          }
+        } catch {
+          // Bỏ qua lỗi tra cứu
+        }
+      }
+
       const pid = (i.productId || '').toLowerCase();
-      if (pid === '33333333-0000-0000-0000-000000000001' || pid === '33333333-0000-4000-8000-000000000001' || pid === 'lh-milk-900g') {
-        productName = 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g';
-        productCode = 'LH-MILK-900G';
-      } else if (pid === '33333333-0000-0000-0000-000000000002' || pid === '33333333-0000-4000-8000-000000000002' || pid === 'lh-nut-180ml') {
-        productName = 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml';
-        productCode = 'LH-NUT-180ML';
-      } else if (pid === '33333333-0000-0000-0000-000000000003' || pid === '33333333-0000-4000-8000-000000000003' || pid === 'lh-nest-70ml') {
-        productName = 'Nước Yến Sào Chưng Đường Phèn Loha Nest 70ml';
-        productCode = 'LH-NEST-70ML';
-      } else if (pid === '33333333-0000-0000-0000-000000000004' || pid === '33333333-0000-4000-8000-000000000004' || pid === 'lh-cereal-500g') {
-        productName = 'Ngũ Cốc Dinh Dưỡng Hạt Mầm Loha Meal 500g';
-        productCode = 'LH-CEREAL-500G';
-      } else if (pid === '33333333-0000-0000-0000-000000000005' || pid === '33333333-0000-4000-8000-000000000005' || pid === 'lh-collagen-50ml') {
-        productName = 'Nước Uống Collagen Đông Trùng Hạ Thảo 50ml';
-        productCode = 'LH-COLLAGEN-50ML';
-      } else if (pid === '33333333-0000-0000-0000-000000000006' || pid === '33333333-0000-4000-8000-000000000006' || pid === 'lh-tea-240ml' || pid === 'lh-tea-450ml') {
-        productName = 'Trà Hoa Cúc La Hán Quả Thanh Nhiệt 240ml';
-        productCode = 'LH-TEA-240ML';
-      } else if (pid === '33333333-0000-0000-0000-000000000007' || pid === '33333333-0000-4000-8000-000000000007' || pid === 'lh-water-500ml') {
-        productName = 'Nước Khoáng Kiềm Thiên Nhiên Loha Ion 500ml';
-        productCode = 'LH-WATER-500ML';
-      } else if (pid === '33333333-0000-0000-0000-000000000008' || pid === '33333333-0000-4000-8000-000000000008' || pid === 'lh-milk-past-1l') {
-        productName = 'Sữa Tươi Thanh Trùng Nguyên Chất 1 Lít';
-        productCode = 'LH-MILK-PAST-1L';
-      } else if (pid === '33333333-0000-0000-0000-000000000009' || pid === '33333333-0000-4000-8000-000000000009' || pid === 'lh-nest-prem-100g') {
-        productName = 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g';
-        productCode = 'LH-NEST-PREM-100G';
-      } else if (pid === '33333333-0000-0000-0000-000000000010' || pid === '33333333-0000-4000-8000-000000000010' || pid === 'lh-nuts-mix-250g') {
-        productName = 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g';
-        productCode = 'LH-NUTS-MIX-250G';
-      } else if (pid === '33333333-0000-0000-0000-000000000011' || pid === '33333333-0000-4000-8000-000000000011' || pid === 'lh-old-coffee-can') {
-        productName = 'Cà Phê Sữa Đóng Lon Loha Classic 240ml (Mẫu Cũ)';
-        productCode = 'LH-OLD-COFFEE-CAN';
+      if (productCode === i.productId.slice(0, 8).toUpperCase()) {
+        if (pid === '33333333-0000-0000-0000-000000000001' || pid === '33333333-0000-4000-8000-000000000001' || pid === 'lh-milk-900g') {
+          productName = 'Sữa Bột Dinh Dưỡng Cao Cấp Loha Gold 900g';
+          productCode = 'LH-MILK-900G';
+        } else if (pid === '33333333-0000-0000-0000-000000000002' || pid === '33333333-0000-4000-8000-000000000002' || pid === 'lh-nut-180ml') {
+          productName = 'Sữa Hạt Óc Chó Hạnh Nhân Organic 180ml';
+          productCode = 'LH-NUT-180ML';
+        } else if (pid === '33333333-0000-0000-0000-000000000003' || pid === '33333333-0000-4000-8000-000000000003' || pid === 'lh-nest-70ml') {
+          productName = 'Nước Yến Sào Chưng Đường Phèn Loha Nest 70ml';
+          productCode = 'LH-NEST-70ML';
+        } else if (pid === '33333333-0000-0000-0000-000000000004' || pid === '33333333-0000-4000-8000-000000000004' || pid === 'lh-cereal-500g') {
+          productName = 'Ngũ Cốc Dinh Dưỡng Hạt Mầm Loha Meal 500g';
+          productCode = 'LH-CEREAL-500G';
+        } else if (pid === '33333333-0000-0000-0000-000000000005' || pid === '33333333-0000-4000-8000-000000000005' || pid === 'lh-collagen-50ml') {
+          productName = 'Nước Uống Collagen Đông Trùng Hạ Thảo 50ml';
+          productCode = 'LH-COLLAGEN-50ML';
+        } else if (pid === '33333333-0000-0000-0000-000000000006' || pid === '33333333-0000-4000-8000-000000000006' || pid === 'lh-tea-240ml' || pid === 'lh-tea-450ml') {
+          productName = 'Trà Hoa Cúc La Hán Quả Thanh Nhiệt 240ml';
+          productCode = 'LH-TEA-240ML';
+        } else if (pid === '33333333-0000-0000-0000-000000000007' || pid === '33333333-0000-4000-8000-000000000007' || pid === 'lh-water-500ml') {
+          productName = 'Nước Khoáng Kiềm Thiên Nhiên Loha Ion 500ml';
+          productCode = 'LH-WATER-500ML';
+        } else if (pid === '33333333-0000-0000-0000-000000000008' || pid === '33333333-0000-4000-8000-000000000008' || pid === 'lh-milk-past-1l') {
+          productName = 'Sữa Tươi Thanh Trùng Nguyên Chất 1 Lít';
+          productCode = 'LH-MILK-PAST-1L';
+        } else if (pid === '33333333-0000-0000-0000-000000000009' || pid === '33333333-0000-4000-8000-000000000009' || pid === 'lh-nest-prem-100g') {
+          productName = 'Hộp Quà Yến Sào Tinh Chế Thượng Hạng 100g';
+          productCode = 'LH-NEST-PREM-100G';
+        } else if (pid === '33333333-0000-0000-0000-000000000010' || pid === '33333333-0000-4000-8000-000000000010' || pid === 'lh-nuts-mix-250g') {
+          productName = 'Hạt Hỗn Hợp Macca Óc Chó Hạnh Nhân Sấy Giòn 250g';
+          productCode = 'LH-NUTS-MIX-250G';
+        } else if (pid === '33333333-0000-0000-0000-000000000011' || pid === '33333333-0000-4000-8000-000000000011' || pid === 'lh-old-coffee-can') {
+          productName = 'Cà Phê Sữa Đóng Lon Loha Classic 240ml (Mẫu Cũ)';
+          productCode = 'LH-OLD-COFFEE-CAN';
+        }
       }
 
       let resolvedUnit = (i as any).unitName || i.unitId;
@@ -463,6 +573,7 @@ export class GoodsReceiptsService implements OnModuleInit {
     };
 
     this.memoryReceipts.set(receiptId, receipt);
+    this.saveReceiptsToDisk();
     return { id: receiptId };
   }
 
@@ -473,6 +584,46 @@ export class GoodsReceiptsService implements OnModuleInit {
       result[camelKey] = row[key];
     }
     return result as T;
+  }
+
+  /**
+   * Lấy danh sách phiếu nhập kho đã xác nhận để đồng bộ sang phân hệ Quản lý Lô & Hạn sử dụng (Inventory Batches)
+   */
+  public async getConfirmedReceiptsForSync(): Promise<GoodsReceiptEntity[]> {
+    let list = Array.from(this.memoryReceipts.values()).filter(
+      (r) => r.status === GoodsReceiptStatus.CONFIRMED,
+    );
+    if (this.db?.isConnected()) {
+      try {
+        const rows = await this.db.query<Record<string, unknown>>(
+          `SELECT r.*, w.name as warehouse_name
+           FROM goods_receipts r
+           LEFT JOIN warehouses w ON r.warehouse_id = w.id::text OR r.warehouse_id = w.code
+           WHERE r.status = 'CONFIRMED'
+           ORDER BY r.created_at DESC LIMIT 50`,
+        );
+        if (rows && rows.length > 0) {
+          for (const r of rows) {
+            const receipt = this.mapToCamelCase<GoodsReceiptEntity>(r);
+            const itemsRes = await this.db.query<Record<string, unknown>>(
+              `SELECT i.*, p.sku as product_code, p.name as product_name, u.name as unit_name
+               FROM goods_receipt_items i
+               LEFT JOIN products p ON i.product_id = p.id
+               LEFT JOIN product_units u ON i.unit_id = u.id::text OR i.unit_id = u.unit_name
+               WHERE i.receipt_id = $1::uuid`,
+              [receipt.id],
+            );
+            receipt.items = itemsRes.map((item) => this.mapToCamelCase<GoodsReceiptItemEntity>(item));
+            if (!list.some((existing) => existing.id === receipt.id || existing.code === receipt.code)) {
+              list.push(receipt);
+            }
+          }
+        }
+      } catch {
+        // Fallback an toàn
+      }
+    }
+    return list;
   }
 
   /**
@@ -780,6 +931,28 @@ export class GoodsReceiptsService implements OnModuleInit {
 
         await client.query('COMMIT');
 
+        // Đồng bộ phân hệ Kho (InventoryService: stock balances, products stock, batches, ledger)
+        if (this.inventoryService) {
+          await this.inventoryService.processGoodsReceiptConfirmation({
+            code: receipt.code,
+            warehouseId: targetWarehouseId,
+            warehouseName: receipt.warehouse_name,
+            items: items.map((i: any) => ({
+              productId: i.product_id,
+              productSku: i.product_code || i.sku,
+              productName: i.product_name,
+              baseQuantity: Number(i.base_quantity) || 1,
+              unitCost: Number(i.unit_cost) || 0,
+              batchNumber: i.batch_number,
+              mfgDate: i.mfg_date,
+              expiryDate: i.expiry_date,
+              notes: i.notes,
+            })),
+            userId: receiverId || undefined,
+            receivedByName: (user as { fullName?: string })?.fullName || user?.username || 'Thủ kho',
+          });
+        }
+
         // Đồng bộ trạng thái vào memory buffer nếu có
         const memReceipt = this.memoryReceipts.get(id);
         if (memReceipt) {
@@ -807,7 +980,7 @@ export class GoodsReceiptsService implements OnModuleInit {
     }
   }
 
-  private fallbackConfirm(id: string, user: ICurrentUser): { success: boolean; message: string } {
+  private async fallbackConfirm(id: string, user: ICurrentUser): Promise<{ success: boolean; message: string }> {
     let receipt = this.memoryReceipts.get(id);
     if (!receipt) {
       receipt = Array.from(this.memoryReceipts.values()).find((r) => r.id === id || r.code === id);
@@ -827,6 +1000,29 @@ export class GoodsReceiptsService implements OnModuleInit {
     receipt.receivedAt = new Date();
     receipt.updatedAt = new Date();
 
+    // Đồng bộ tồn kho và lô hàng vào phân hệ Kho (InventoryService & ProductsService)
+    if (this.inventoryService) {
+      await this.inventoryService.processGoodsReceiptConfirmation({
+        code: receipt.code,
+        warehouseId: receipt.warehouseId,
+        warehouseName: receipt.warehouseName,
+        items: (receipt.items || []).map((i) => ({
+          productId: i.productId,
+          productSku: i.productCode,
+          productName: i.productName,
+          baseQuantity: Number(i.baseQuantity) || (Number(i.packageQuantity) * Number(i.conversionFactor)),
+          unitCost: Number(i.unitCost) || 0,
+          batchNumber: i.batchNumber,
+          mfgDate: i.mfgDate,
+          expiryDate: i.expiryDate,
+          notes: i.notes,
+        })),
+        userId: user?.userId,
+        receivedByName: receipt.receivedByName,
+      });
+    }
+
+    this.saveReceiptsToDisk();
     return { success: true, message: 'Xác nhận phiếu nhập kho thành công (đã ghi thẻ kho)' };
   }
 
@@ -971,6 +1167,7 @@ export class GoodsReceiptsService implements OnModuleInit {
       }));
     }
     receipt.updatedAt = new Date();
+    this.saveReceiptsToDisk();
 
     return { success: true, message: 'Cập nhật phiếu nhập kho thành công' };
   }
