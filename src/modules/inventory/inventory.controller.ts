@@ -183,6 +183,36 @@ export class InventoryController {
   }
 
   /**
+   * Xử lý sản phẩm lỗi (Đưa sang tồn kho hoặc Tiêu hủy)
+   * POST /inventory/damaged/process
+   */
+  @Post('damaged/process')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+    UserRole.SALES_MANAGER,
+  )
+  async processDamagedStock(
+    @Body()
+    dto: {
+      warehouseId: string;
+      productId: string;
+      productSku: string;
+      batchNumber?: string;
+      expiryDate?: string;
+      action: 'TO_STOCK' | 'DESTROY';
+      quantity: number;
+      reason: string;
+    },
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<{ success: boolean; message: string; remainingQuantity: number }> {
+    return this.inventoryService.processDamagedStock(dto, currentUser);
+  }
+
+  /**
    * Khai báo tồn tối thiểu theo SKU tại kho (SN-183)
    * PATCH /inventory/stock-balances/warehouses/:warehouseId/sku/:sku/min-stock
    */

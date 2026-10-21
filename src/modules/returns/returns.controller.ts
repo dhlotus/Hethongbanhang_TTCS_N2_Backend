@@ -16,20 +16,65 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { CreateReturnReceiptDto } from './dto/create-return-receipt.dto';
+import { ApproveReturnReceiptDto, ReturnApprovalAction } from './dto/approve-return-receipt.dto';
+import { ReturnReceiptEntity } from './entities/return-receipt.entity';
 
 /**
- * Controller Trả hàng & Điều chỉnh (Module 8)
- * Matrix: Customer W*, Sales Rep W*, Warehouse W, WH Manager F, Accountant W, Sales Manager F, Admin F
+ * Controller Quản lý Phiếu trả hàng từ đại lý & nhập lại kho (TASK SN-210)
+ * Hỗ trợ các route /api/return-receipts (chuẩn tài liệu) và /api/returns (tương thích)
  */
-@Controller('returns')
+@Controller(['return-receipts', 'returns'])
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ReturnsController {
   constructor(private readonly returnsService: ReturnsService) {}
 
   /**
-   * Danh sách yêu cầu trả hàng
-   * GET /api/returns
-   * Matrix: Customer W*, Sales Rep W*, Warehouse W, WH Manager F, Accountant W, Sales Manager F, Admin F
+   * Lấy danh sách hóa đơn khả dụng để lập phiếu trả hàng
+   * GET /api/return-receipts/eligible-invoices
+   */
+  @Get('eligible-invoices')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.SALES_MANAGER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.ACCOUNTANT,
+    UserRole.ADMIN,
+  )
+  async getEligibleInvoices(
+    @Query('agencyId') agencyId: string,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<any[]> {
+    return this.returnsService.getEligibleInvoices(agencyId, currentUser);
+  }
+
+  /**
+   * Lấy chi tiết dòng sản phẩm và số lượng tối đa còn được trả của hóa đơn
+   * GET /api/return-receipts/invoice-lines/:invoiceId
+   */
+  @Get('invoice-lines/:invoiceId')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.SALES_MANAGER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.ACCOUNTANT,
+    UserRole.ADMIN,
+  )
+  async getInvoiceLines(
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<any> {
+    return this.returnsService.getOriginalInvoiceDetails(invoiceId);
+  }
+
+  /**
+   * Danh sách phiếu trả hàng
+   * GET /api/return-receipts
    */
   @Get()
   @Roles(
@@ -45,16 +90,15 @@ export class ReturnsController {
     UserRole.ADMIN,
   )
   async findAll(
-    @Query() query: Record<string, string>,
+    @Query() query: { status?: string; search?: string; agencyId?: string },
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ReturnRequestItem[]> {
-    return this.returnsService.findAll(query, currentUser);
+  ): Promise<ReturnReceiptEntity[]> {
+    return this.returnsService.findAllReturnReceipts(query, currentUser);
   }
 
   /**
-   * Chi tiết yêu cầu trả hàng
-   * GET /api/returns/:id
-   * Matrix: Customer W*, Sales Rep W*, Warehouse W, WH Manager F, Accountant W, Sales Manager F, Admin F
+   * Chi tiết phiếu trả hàng
+   * GET /api/return-receipts/:id
    */
   @Get(':id')
   @Roles(
@@ -71,15 +115,17 @@ export class ReturnsController {
   )
   async findById(
     @Param('id') id: string,
-    @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ReturnRequestItem> {
-    return this.returnsService.findById(id, currentUser);
+  ): Promise<ReturnReceiptEntity> {
+    const item = await this.returnsService.findReturnReceiptById(id);
+    if (!item) {
+      throw new Error(`Không tìm thấy phiếu trả hàng ${id}`);
+    }
+    return item;
   }
 
   /**
-   * Tạo yêu cầu trả hàng
-   * POST /api/returns
-   * Matrix: Customer W*, Sales Rep W*, Sales Manager F, Admin F
+   * API 1: Tạo mới phiếu trả hàng (Dành cho Nhân viên kinh doanh / Đại lý)
+   * POST /api/return-receipts
    */
   @Post()
   @Roles(
@@ -89,16 +135,35 @@ export class ReturnsController {
     UserRole.ADMIN,
   )
   async create(
-    @Body() dto: Partial<ReturnRequestItem>,
+    @Body() dto: CreateReturnReceiptDto,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ReturnRequestItem> {
-    return this.returnsService.create(dto, currentUser);
+  ): Promise<ReturnReceiptEntity> {
+    return this.returnsService.createReturnReceipt(dto, currentUser);
   }
 
   /**
-   * Duyệt yêu cầu trả hàng
-   * POST /api/returns/:id/approve
-   * Matrix: Sales Manager F, WH Manager F, Admin F
+   * API 2: Quản lý kho xác nhận nhận hàng
+   * PATCH /api/return-receipts/:id/approve
+   */
+  @Patch(':id/approve')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SALES_MANAGER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE,
+  )
+  async approvePatch(
+    @Param('id') id: string,
+    @Body() dto: ApproveReturnReceiptDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<ReturnReceiptEntity> {
+    return this.returnsService.approveReturnReceipt(id, dto, currentUser);
+  }
+
+  /**
+   * Tương thích POST /api/return-receipts/:id/approve
    */
   @Post(':id/approve')
   @Roles(
@@ -106,58 +171,23 @@ export class ReturnsController {
     UserRole.SALES_MANAGER,
     UserRole.WAREHOUSE_MANAGER,
     UserRole.WH_MANAGER,
-  )
-  async approve(
-    @Param('id') id: string,
-    @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<ReturnRequestItem> {
-    return this.returnsService.approve(id, currentUser);
-  }
-
-  /**
-   * Kho nhận hàng hoàn nhập kho
-   * POST /api/returns/:id/receive
-   * Matrix: Warehouse W, WH Manager F, Admin F
-   */
-  @Post(':id/receive')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.WAREHOUSE_MANAGER,
-    UserRole.WH_MANAGER,
     UserRole.WAREHOUSE_KEEPER,
     UserRole.WAREHOUSE,
   )
-  async receiveStock(
+  async approvePost(
     @Param('id') id: string,
-    @Body('note') note?: string,
-  ): Promise<ReturnRequestItem> {
-    return this.returnsService.receiveStock(id, note);
+    @Body() dto: ApproveReturnReceiptDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<ReturnReceiptEntity> {
+    const actionDto: ApproveReturnReceiptDto = dto?.action
+      ? dto
+      : { action: ReturnApprovalAction.APPROVE, note: (dto as any)?.note };
+    return this.returnsService.approveReturnReceipt(id, actionDto, currentUser);
   }
 
   /**
-   * Kế toán lập phiếu điều chỉnh công nợ / hoàn tiền
-   * POST /api/returns/:id/adjustment
-   * Matrix: Accountant W, Sales Manager F, Admin F
-   */
-  @Post(':id/adjustment')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.ACCOUNTANT,
-    UserRole.ACCOUNTANT_DEBT,
-    UserRole.SALES_MANAGER,
-  )
-  async adjustDebt(
-    @Param('id') id: string,
-    @Body('refundAmount') refundAmount?: number,
-    @Body('note') note?: string,
-  ): Promise<ReturnRequestItem> {
-    return this.returnsService.adjustDebt(id, refundAmount, note);
-  }
-
-  /**
-   * Hủy / xóa yêu cầu trả hàng
-   * DELETE /api/returns/:id
-   * Matrix: Sales Manager F, Admin F
+   * Xóa phiếu trả hàng
+   * DELETE /api/return-receipts/:id
    */
   @Delete(':id')
   @Roles(UserRole.ADMIN, UserRole.SALES_MANAGER)
