@@ -287,6 +287,7 @@ export class ShipmentsService implements OnModuleInit {
 
   private seedInitialShipments() {
     const seed: ShipmentItem[] = [
+      // Nhóm phiếu xuất chuẩn hóa theo SN-195 (có cấu trúc ShipmentLineEntity để xác nhận xuất kho)
       {
         id: 'PXK-001',
         orderId: 'ord-001',
@@ -420,31 +421,125 @@ export class ShipmentsService implements OnModuleInit {
         customerId: 'cust-003',
         customerName: 'Công Ty TNHH Thương Mại & Phân Phối Minh Khang',
         salesRepId: 'usr-sale-01',
-        warehouseId: 'wh-001',
-        status: 'DELIVERED',
-        deliveryAddress: 'Tổ 10 Gia Sàng',
-        receiverName: 'Khánh',
-        phone: '0563408845',
-        trackingNumber: 'TRK-2026-555796',
-        carrierName: 'Giao Hàng Nhanh',
-        shippedAt: new Date(Date.now() - 3600000),
-        deliveredAt: new Date(),
-        createdAt: new Date(Date.now() - 7200000),
+        warehouseId: 'wh-002',
+        status: 'SHIPPED',
+        deliveryAddress: 'Kho Tổng Phú Nhuận, 123 Nguyễn Trọng Tuyển, P.8, Q.Phú Nhuận, TP.HCM',
+        receiverName: 'Anh Nguyễn Minh Khang',
+        phone: '0901234561',
+        trackingNumber: 'TRK-2026-10404',
+        carrierName: 'LOHA Fleet Logistics',
+        tripCode: 'TRIP-2610-10404',
+        shippedAt: new Date(Date.now() - 3600000 * 4),
+        createdAt: new Date(Date.now() - 3600000 * 30),
         updatedAt: new Date(),
       },
       {
         id: 'PXK-005',
         orderId: 'ord-dh2610-10212',
         orderCode: 'DH2610-10212',
-        customerId: 'cust-004',
+        customerId: 'cust-dl-0005',
         customerName: 'Đại Lý Thực Phẩm Sạch Thăng Long',
+        salesRepId: 'usr-sale-02',
+        warehouseId: 'wh-001',
+        status: 'PACKED',
+        deliveryAddress: '36 Cầu Giấy, P.Quan Hoa, Q.Cầu Giấy, Hà Nội',
+        receiverName: 'Anh Tuấn',
+        phone: '0901234565',
+        trackingNumber: 'TRK-2026-10212',
+        carrierName: 'Giao Hàng Nhanh',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      // Nhóm phiếu xuất từ Develop (phục vụ tuyến giao hàng & theo dõi hàng trên đường SN-197)
+      {
+        id: 'shp-10088',
+        orderId: 'ord-003',
+        orderCode: 'DH2610-10088',
+        customerId: 'cust-dl-0003',
+        customerName: 'Công Ty Cổ Phần Thương Mại Quốc Tế An Phát',
+        salesRepId: 'usr-sale-01',
+        warehouseId: 'wh-002',
+        status: 'SHIPPED',
+        deliveryAddress: 'Kho Phân Phối KCN Biên Hòa 2, Đồng Nai',
+        receiverName: 'Anh Vũ Hoàng Nam',
+        phone: '0901234563',
+        trackingNumber: 'TRK-2026-10088',
+        carrierName: 'LOHA Fleet Logistics',
+        tripCode: 'TRIP-2610-10088',
+        shippedAt: new Date(Date.now() - 3600000 * 2),
+        createdAt: new Date(Date.now() - 3600000 * 24),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'shp-10178',
+        orderId: 'ord-009',
+        orderCode: 'DH2610-10178',
+        customerId: 'cust-dl-0004',
+        customerName: 'Siêu Thị Mini & Bách Hóa Tiện Lợi Daily Mart',
+        salesRepId: 'usr-sale-02',
+        warehouseId: 'wh-001',
+        status: 'SHIPPED',
+        deliveryAddress: '15 Tố Hữu, Vạn Phúc, Hà Đông, Hà Nội',
+        receiverName: 'Chị Mai',
+        phone: '0912345678',
+        trackingNumber: 'TRK-2026-10178',
+        carrierName: 'LOHA Fleet Logistics',
+        tripCode: 'TRIP-2610-10178',
+        shippedAt: new Date(Date.now() - 3600000),
+        createdAt: new Date(Date.now() - 3600000 * 12),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'shp-10234',
+        orderId: 'ord-012',
+        orderCode: 'DH2610-10234',
+        customerId: 'cust-dl-0003',
+        customerName: 'Công Ty Cổ Phần Thương Mại Quốc Tế An Phát',
         salesRepId: 'usr-sale-01',
         warehouseId: 'wh-001',
-        status: 'PICKING',
-        deliveryAddress: 'Tổ 6 Tân Thịnh',
-        receiverName: 'Ánh',
-        phone: '0562546558',
-        trackingNumber: 'TRK-2026-520340',
+        status: 'SHIPPED',
+        deliveryAddress: 'Kho Hà Nội Thanh Xuân, 280 Nguyễn Trãi, Thanh Xuân, Hà Nội',
+        receiverName: 'Anh Nam',
+        phone: '0901234563',
+        trackingNumber: 'TRK-2026-10234',
+        carrierName: 'LOHA Fleet Logistics',
+        tripCode: 'TRIP-2610-10234',
+        shippedAt: new Date(Date.now() - 3600000 * 3),
+        createdAt: new Date(Date.now() - 3600000 * 20),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'shp-10404',
+        orderId: 'ord-024',
+        orderCode: 'DH2610-10404',
+        customerId: 'cust-dl-0001',
+        customerName: 'Công Ty TNHH Thương Mại & Phân Phối Minh Khang',
+        salesRepId: 'usr-sale-01',
+        warehouseId: 'wh-002',
+        status: 'SHIPPED',
+        deliveryAddress: 'Kho Tổng Phú Nhuận, 123 Nguyễn Trọng Tuyển, P.8, Q.Phú Nhuận, TP.HCM',
+        receiverName: 'Anh Nguyễn Minh Khang',
+        phone: '0901234561',
+        trackingNumber: 'TRK-2026-10404',
+        carrierName: 'LOHA Fleet Logistics',
+        tripCode: 'TRIP-2610-10404',
+        shippedAt: new Date(Date.now() - 3600000 * 4),
+        createdAt: new Date(Date.now() - 3600000 * 30),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'shp-10212',
+        orderId: 'ord-011',
+        orderCode: 'DH2610-10212',
+        customerId: 'cust-dl-0005',
+        customerName: 'Đại Lý Thực Phẩm Sạch Thăng Long',
+        salesRepId: 'usr-sale-02',
+        warehouseId: 'wh-001',
+        status: 'PACKED',
+        deliveryAddress: '36 Cầu Giấy, P.Quan Hoa, Q.Cầu Giấy, Hà Nội',
+        receiverName: 'Anh Tuấn',
+        phone: '0901234565',
+        trackingNumber: 'TRK-2026-10212',
         carrierName: 'Giao Hàng Nhanh',
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -509,6 +604,14 @@ export class ShipmentsService implements OnModuleInit {
     for (const s of seed) {
       this.shipments.set(s.id, s);
     }
+
+    // Tương thích ngược: Đăng ký alias shp-001, shp-002, shp-003 cho các test suite và mã cũ
+    const pxk1 = this.shipments.get('PXK-001');
+    if (pxk1) this.shipments.set('shp-001', { ...pxk1, id: 'shp-001' });
+    const pxk2 = this.shipments.get('PXK-002');
+    if (pxk2) this.shipments.set('shp-002', { ...pxk2, id: 'shp-002' });
+    const pxk3 = this.shipments.get('PXK-003');
+    if (pxk3) this.shipments.set('shp-003', { ...pxk3, id: 'shp-003' });
   }
 
   /**
@@ -1437,88 +1540,75 @@ export class ShipmentsService implements OnModuleInit {
   private seedInitialTrips(): void {
     const trip1: DeliveryTripEntity = {
       id: 'trip-001',
-      tripCode: 'TRIP-2610-001',
-      name: 'Chuyến giao Miền Đông - Tuyến Bình Dương & Đồng Nai',
+      tripCode: 'TRIP-2610-10088',
+      name: 'Tuyến giao đơn DH2610-10088 - Công Ty Cổ Phần Thương Mại Quốc Tế An Phát',
       routeArea: 'Bình Dương - Đồng Nai',
-      warehouseId: '11111111-0000-0000-0000-000000000001',
+      warehouseId: 'wh-002',
       warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
-      driverName: 'Nguyễn Văn Hùng',
-      driverPhone: '0908123456',
-      vehicleNumber: '61C-456.78',
+      driverName: 'Nguyễn Văn Thắng',
+      driverPhone: '0988123456',
+      vehicleNumber: '29H-868.99',
       vehicleType: 'Xe tải 2.5T Thaco',
-      departureDate: new Date(),
+      departureDate: new Date(Date.now() - 3600000 * 2),
+      estimatedCompletionTime: new Date(Date.now() + 3600000 * 2),
       status: DeliveryTripStatus.IN_TRANSIT,
       stops: [
         {
           id: 'stop-001',
           tripId: 'trip-001',
-          shipmentId: 'PXK-001',
-          orderCode: 'DH2609-09876',
+          shipmentId: 'shp-10088',
+          orderCode: 'DH2610-10088',
           stopOrder: 1,
-          customerName: 'Đại lý Sữa & Bánh kẹo Miền Bắc',
-          receiverName: 'Anh Tuấn',
-          receiverPhone: '0988123456',
-          deliveryAddress: 'Kho số 12, KCN Đình Trám, Bắc Giang',
+          customerName: 'Công Ty Cổ Phần Thương Mại Quốc Tế An Phát',
+          receiverName: 'Anh Vũ Hoàng Nam',
+          receiverPhone: '0901234563',
+          deliveryAddress: 'Kho Phân Phối KCN Biên Hòa 2, Đồng Nai',
           packageCount: 15,
-          codAmount: 0,
-          status: 'PENDING',
-        },
-        {
-          id: 'stop-002',
-          tripId: 'trip-001',
-          shipmentId: 'PXK-004',
-          orderCode: 'DH2610-62440',
-          stopOrder: 2,
-          customerName: 'Công Ty TNHH Thương Mại & Phân Phối Minh Khang',
-          receiverName: 'Khánh',
-          receiverPhone: '0563408845',
-          deliveryAddress: 'Tổ 10 Gia Sàng',
-          packageCount: 28,
-          codAmount: 14500000,
-          status: 'DELIVERED',
-          deliveredAt: new Date(),
-        },
-      ],
-      totalStops: 2,
-      deliveredStops: 1,
-      totalCodAmount: 14500000,
-      note: 'Ưu tiên giao điểm 1 trước 11h trưa để đại lý kịp nhập kho',
-      createdAt: new Date(Date.now() - 14400000),
-      updatedAt: new Date(),
-    };
-
-    const trip2: DeliveryTripEntity = {
-      id: 'trip-002',
-      tripCode: 'TRIP-2610-002',
-      name: 'Tuyến Nội thành Hà Nội - Buổi chiều',
-      routeArea: 'Hà Nội - Hoàn Kiếm & Ba Đình',
-      warehouseId: '11111111-0000-0000-0000-000000000002',
-      warehouseName: 'Kho Miền Bắc (Hà Nội)',
-      driverName: 'Trần Quốc Tuấn',
-      driverPhone: '0912348899',
-      vehicleNumber: '29D-789.12',
-      vehicleType: 'Xe van 1.25T Hyundai',
-      departureDate: new Date(Date.now() + 3600000),
-      status: DeliveryTripStatus.ASSIGNED,
-      stops: [
-        {
-          id: 'stop-003',
-          tripId: 'trip-002',
-          shipmentId: 'PXK-005',
-          orderCode: 'DH2610-10212',
-          stopOrder: 1,
-          customerName: 'Đại Lý Thực Phẩm Sạch Thăng Long',
-          receiverName: 'Ánh',
-          receiverPhone: '0562546558',
-          deliveryAddress: 'Tổ 6 Tân Thịnh',
-          packageCount: 12,
-          codAmount: 8200000,
+          codAmount: 48640000,
           status: 'PENDING',
         },
       ],
       totalStops: 1,
       deliveredStops: 0,
-      totalCodAmount: 8200000,
+      totalCodAmount: 48640000,
+      note: 'Ưu tiên giao trước 15h',
+      createdAt: new Date(Date.now() - 3600000 * 2),
+      updatedAt: new Date(),
+    };
+
+    const trip2: DeliveryTripEntity = {
+      id: 'trip-002',
+      tripCode: 'TRIP-2610-10178',
+      name: 'Tuyến giao đơn DH2610-10178 - Siêu Thị Mini & Bách Hóa Tiện Lợi Daily Mart',
+      routeArea: 'Hà Nội - Vạn Phúc',
+      warehouseId: 'wh-001',
+      warehouseName: 'Kho Miền Bắc (Hà Nội)',
+      driverName: 'Trần Quốc Tuấn',
+      driverPhone: '0912348899',
+      vehicleNumber: '29D-789.12',
+      vehicleType: 'Xe van 1.25T Hyundai',
+      departureDate: new Date(Date.now() - 3600000),
+      estimatedCompletionTime: new Date(Date.now() + 3600000 * 3),
+      status: DeliveryTripStatus.IN_TRANSIT,
+      stops: [
+        {
+          id: 'stop-002',
+          tripId: 'trip-002',
+          shipmentId: 'shp-10178',
+          orderCode: 'DH2610-10178',
+          stopOrder: 1,
+          customerName: 'Siêu Thị Mini & Bách Hóa Tiện Lợi Daily Mart',
+          receiverName: 'Chị Mai',
+          receiverPhone: '0912345678',
+          deliveryAddress: '15 Tố Hữu, Vạn Phúc, Hà Đông, Hà Nội',
+          packageCount: 12,
+          codAmount: 12190000,
+          status: 'PENDING',
+        },
+      ],
+      totalStops: 1,
+      deliveredStops: 0,
+      totalCodAmount: 12190000,
       note: 'Đường phố cổ cấm tải giờ cao điểm, xe van vào sau 14h',
       createdAt: new Date(Date.now() - 3600000),
       updatedAt: new Date(),
@@ -1527,20 +1617,15 @@ export class ShipmentsService implements OnModuleInit {
     this.trips.set(trip1.id, trip1);
     this.trips.set(trip2.id, trip2);
 
-    const s1 = this.shipments.get('PXK-001');
+    const s1 = this.shipments.get('shp-10088');
     if (s1) {
       s1.tripId = trip1.id;
       s1.tripCode = trip1.tripCode;
     }
-    const s2 = this.shipments.get('PXK-004');
+    const s2 = this.shipments.get('shp-10178');
     if (s2) {
-      s2.tripId = trip1.id;
-      s2.tripCode = trip1.tripCode;
-    }
-    const s3 = this.shipments.get('PXK-005');
-    if (s3) {
-      s3.tripId = trip2.id;
-      s3.tripCode = trip2.tripCode;
+      s2.tripId = trip2.id;
+      s2.tripCode = trip2.tripCode;
     }
   }
 
@@ -1599,6 +1684,115 @@ export class ShipmentsService implements OnModuleInit {
     // Sắp xếp chuyến mới nhất lên đầu
     return list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
+
+  /**
+   * Thống kê tiền hàng đang nằm trên đường & cảnh báo (SN-194 / SN-197)
+   */
+  async getGoodsInTransitStats(warehouseId?: string) {
+    const trips = await this.findAllTrips();
+    let totalGoodsValueInTransit = 0;
+    let activeTripsCount = 0;
+    let overdueTripsCount = 0;
+    let totalRemainingStops = 0;
+    let totalRetainedUndeliveredValue = 0;
+    let completedTripsToday = 0;
+
+    const now = Date.now();
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    for (const trip of trips) {
+      if (warehouseId && warehouseId !== 'ALL' && trip.warehouseId !== warehouseId) {
+        continue;
+      }
+
+      if (trip.status === DeliveryTripStatus.IN_TRANSIT) {
+        activeTripsCount++;
+        const depTime = trip.departureDate ? new Date(trip.departureDate).getTime() : trip.createdAt.getTime();
+        const estTime = depTime + 4 * 3600 * 1000;
+        if (now > estTime) {
+          overdueTripsCount++;
+        }
+      } else if (trip.status === DeliveryTripStatus.COMPLETED) {
+        completedTripsToday++;
+      }
+
+      for (const stop of trip.stops) {
+        const amount = stop.codAmount || 0;
+        if (stop.status === 'PENDING') {
+          totalRemainingStops++;
+          if (trip.status === DeliveryTripStatus.IN_TRANSIT) {
+            totalGoodsValueInTransit += amount;
+          }
+        } else if (stop.status === 'FAILED') {
+          if (trip.status === DeliveryTripStatus.IN_TRANSIT && !(trip as any).returnedToWarehouse) {
+            totalRetainedUndeliveredValue += amount;
+          }
+        }
+      }
+    }
+
+    return {
+      totalGoodsValueInTransit,
+      activeTripsCount,
+      overdueTripsCount,
+      totalRemainingStops,
+      totalRetainedUndeliveredValue,
+      completedTripsToday,
+    };
+  }
+
+  /**
+   * Cập nhật trạng thái điểm dừng
+   */
+  async updateStopStatus(
+    tripId: string,
+    stopId: string,
+    payload: { status: 'DELIVERED' | 'FAILED'; failureReason?: string },
+  ): Promise<DeliveryTripEntity> {
+    const trip = await this.findTripById(tripId);
+    const stop = trip.stops.find((s) => s.id === stopId);
+    if (!stop) {
+      throw new NotFoundException(`Không tìm thấy điểm giao ${stopId}`);
+    }
+
+    stop.status = payload.status;
+    if (payload.status === 'DELIVERED') {
+      stop.deliveredAt = new Date();
+      if (stop.shipmentId) {
+        await this.confirmDelivery(stop.shipmentId, {
+          receiverName: stop.receiverName || stop.customerName,
+          deliveredAt: new Date().toISOString(),
+        });
+      }
+      if (stop.orderCode) {
+        await this.syncOrder(stop.orderCode, 'DELIVERED');
+      }
+    } else if (payload.status === 'FAILED') {
+      stop.note = payload.failureReason ? `Giao thất bại: ${payload.failureReason}` : 'Giao không thành công';
+    }
+
+    this.trips.set(trip.id, trip);
+    return trip;
+  }
+
+  /**
+   * Xác nhận đối soát xe về kho
+   */
+  async checkinTripReturn(id: string, payload: any): Promise<DeliveryTripEntity> {
+    const trip = await this.findTripById(id);
+    trip.status = DeliveryTripStatus.COMPLETED;
+    (trip as any).returnedToWarehouse = true;
+    (trip as any).returnedAt = new Date();
+    (trip as any).returnedNotes = payload?.returnedNotes;
+    (trip as any).retainedGoodsValue = 0;
+    (trip as any).inTransitGoodsValue = 0;
+    (trip as any).remainingStops = 0;
+    trip.completedAt = new Date();
+    trip.updatedAt = new Date();
+    this.trips.set(trip.id, trip);
+    return trip;
+  }
+
 
   /**
    * Chi tiết chuyến giao hàng
@@ -1946,6 +2140,28 @@ export class ShipmentsService implements OnModuleInit {
     } catch (e) {
       this.logger.warn(`Lỗi khi syncOrder (${orderIdOrCode}): ${e}`);
     }
+  }
+
+  /**
+   * Cập nhật thông tin hóa đơn cho phiếu giao hàng (SN-200)
+   */
+  async updateShipmentInvoice(shipmentId: string, invoiceId: string, invoiceCode: string): Promise<boolean> {
+    const shp = this.shipments.get(shipmentId);
+    if (shp) {
+      shp.invoiceId = invoiceId;
+      shp.invoiceCode = invoiceCode;
+      shp.updatedAt = new Date();
+      this.shipments.set(shp.id, shp);
+    }
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE shipments SET invoice_id = $1, invoice_code = $2, updated_at = NOW() WHERE id = $3;`,
+          [invoiceId, invoiceCode, shipmentId],
+        );
+      } catch {}
+    }
+    return true;
   }
 }
 

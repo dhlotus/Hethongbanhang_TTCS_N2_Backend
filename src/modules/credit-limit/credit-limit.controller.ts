@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Post,
   Put,
   Query,
   UseGuards,
@@ -20,6 +21,12 @@ import {
   CreditLimitService,
   PaginatedCreditLimitResult,
 } from './credit-limit.service';
+import { CreditEvaluationService } from './credit-evaluation.service';
+import {
+  CreditConfigDto,
+  UpdateCreditConfigDto,
+  AgencyCreditEvaluationResult,
+} from './dto/credit-config.dto';
 import { QueryCreditLimitDto } from './dto/query-credit-limit.dto';
 import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
 import { UpdateCreditStatusDto } from './dto/update-credit-status.dto';
@@ -28,13 +35,61 @@ import { AgencyCreditLimit } from './entities/agency-credit-limit.entity';
 import { CreditLimitLog } from './entities/credit-limit-log.entity';
 
 /**
- * Controller Quản lý và Khai báo Hạn mức Công nợ Đại lý (SN-34)
+ * Controller Quản lý và Khai báo Hạn mức Công nợ Đại lý (SN-34 & SN-204)
  * Áp dụng Guard kiểm tra quyền: Chỉ cho phép role ACCOUNTANT_DEBT và BUSINESS_MANAGER cập nhật
  */
 @Controller('credit-limit')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class CreditLimitController {
-  constructor(private readonly creditLimitService: CreditLimitService) {}
+  constructor(
+    private readonly creditLimitService: CreditLimitService,
+    private readonly creditEvaluationService: CreditEvaluationService,
+  ) {}
+
+  /**
+   * Lấy cấu hình kiểm soát công nợ toàn hệ thống (SN-204)
+   * GET /api/credit-limit/config
+   */
+  @Get('config')
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  getCreditConfig(): CreditConfigDto {
+    return this.creditEvaluationService.getConfig();
+  }
+
+  /**
+   * Cập nhật cấu hình kiểm soát công nợ toàn hệ thống (SN-204)
+   * PUT /api/credit-limit/config
+   */
+  @Put('config')
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.ADMIN)
+  async updateCreditConfig(
+    @Body() dto: UpdateCreditConfigDto,
+    @CurrentUser() currentUser: ICurrentUser,
+  ): Promise<CreditConfigDto> {
+    return this.creditEvaluationService.updateConfig(dto, currentUser);
+  }
+
+  /**
+   * Đánh giá chi tiết trạng thái cờ công nợ của một đại lý (SN-204)
+   * GET /api/credit-limit/evaluation/:agencyId
+   */
+  @Get('evaluation/:agencyId')
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.SALES_REP, Role.ADMIN)
+  async getAgencyCreditEvaluation(
+    @Param('agencyId') agencyId: string,
+  ): Promise<AgencyCreditEvaluationResult> {
+    return this.creditEvaluationService.evaluateAgencyCredit(agencyId);
+  }
+
+  /**
+   * Kích hoạt quét và đánh giá lại toàn bộ đại lý (SN-204)
+   * POST /api/credit-limit/evaluation/trigger-all
+   */
+  @Post('evaluation/trigger-all')
+  @Roles(Role.ACCOUNTANT, Role.ACCOUNTANT_DEBT, Role.SALES_MANAGER, Role.BUSINESS_MANAGER, Role.ADMIN)
+  async triggerEvaluateAll(): Promise<AgencyCreditEvaluationResult[]> {
+    return this.creditEvaluationService.evaluateAllAgencies();
+  }
 
   /**
    * Thống kê tổng quan hạn mức công nợ toàn hệ thống (SN-34)

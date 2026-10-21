@@ -62,7 +62,8 @@ describe('Lock / Unlock Dealer Transactions (SN-31 / SN-36)', () => {
   });
 
   it('3. Đơn đang dở của đại lý bị khóa vẫn xử lý tiếp được nhưng có CẢNH BÁO (SN-36)', async () => {
-    // 1. Tạo đơn nháp DRAFT khi đại lý chưa bị khóa
+    // 1. Đảm bảo đại lý chưa bị khóa trước khi tạo đơn nháp
+    await customersService.unlockCustomer('cust-002');
     const draftDto: CreateOrderDto = {
       customerId: 'cust-002',
       lines: [
@@ -133,5 +134,12 @@ describe('Lock / Unlock Dealer Transactions (SN-31 / SN-36)', () => {
     const createdOrder = await ordersService.createOrder(orderDto);
     expect(createdOrder.id).toBeDefined();
     expect(createdOrder.isCustomerLocked).toBeFalsy();
+  });
+
+  afterAll(async () => {
+    try {
+      await customersService.unlockCustomer('cust-001');
+      await customersService.unlockCustomer('cust-002');
+    } catch {}
   });
 });

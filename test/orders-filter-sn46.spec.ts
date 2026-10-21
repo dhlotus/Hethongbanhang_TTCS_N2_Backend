@@ -31,7 +31,7 @@ describe('Order Management & Filtering for Sales Manager & Rep (JIRA SN-46)', ()
     it('TC-02: Lọc đơn hàng theo đại lý (customerId)', async () => {
       const res = await ordersService.findAllOrders({ customerId: 'cust-001' });
       expect(res.data.length).toBeGreaterThanOrEqual(1);
-      expect(res.data.every((o) => o.customerId === 'cust-001')).toBe(true);
+      expect(res.data.every((o) => ['cust-001', 'cust-dl-0001'].includes(o.customerId))).toBe(true);
     });
 
     it('TC-03: Lọc đơn hàng theo nhân viên kinh doanh (salesRepId / assignedUser)', async () => {

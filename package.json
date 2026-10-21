@@ -13,10 +13,10 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "test": "jest --testPathPatterns=excel-import-sn147",
-    "test:watch": "jest --watch --testPathPatterns=excel-import-sn147",
-    "test:cov": "jest --coverage --testPathPatterns=excel-import-sn147",
-    "test:all": "jest"
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch --runInBand",
+    "test:cov": "jest --coverage --runInBand",
+    "test:all": "jest --runInBand"
   },
   "jest": {
     "moduleFileExtensions": [

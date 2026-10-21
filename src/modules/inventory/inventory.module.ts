@@ -6,6 +6,7 @@ import { GoodsReceiptsModule } from '../inventory-receipts/goods-receipts.module
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 import { InventoryReservationSchedulerService } from './inventory-reservation-scheduler.service';
+import { InventoryFefoService } from './inventory-fefo.service';
 
 @Module({
   imports: [
@@ -15,8 +16,16 @@ import { InventoryReservationSchedulerService } from './inventory-reservation-sc
     forwardRef(() => GoodsReceiptsModule),
   ],
   controllers: [InventoryController],
-  providers: [InventoryService, InventoryReservationSchedulerService],
-  exports: [InventoryService, InventoryReservationSchedulerService],
+  providers: [
+    InventoryService,
+    InventoryReservationSchedulerService,
+    InventoryFefoService,
+  ],
+  exports: [
+    InventoryService,
+    InventoryReservationSchedulerService,
+    InventoryFefoService,
+  ],
 })
 export class InventoryModule {}
 

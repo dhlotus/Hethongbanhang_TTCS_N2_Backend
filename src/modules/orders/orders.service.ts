@@ -39,6 +39,7 @@ import { OrderApprovalHistoryEntity } from './entities/order-approval-history.en
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { InventoryService } from '../inventory/inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CreditEvaluationService } from '../credit-limit/credit-evaluation.service';
 import {
   StockReservationEntity,
   StockReservationStatus,
@@ -118,6 +119,9 @@ export class OrdersService implements OnModuleInit {
     private readonly databaseService?: DatabaseService,
     @Optional()
     private readonly notificationsService?: NotificationsService,
+    @Optional()
+    @Inject(forwardRef(() => CreditEvaluationService))
+    private readonly creditEvaluationService?: CreditEvaluationService,
   ) {
     if (!this.databaseService || !this.databaseService.isConnected()) {
       for (const order of this.seedInitialOrders()) this.orders.set(order.id, order);
@@ -838,8 +842,44 @@ export class OrdersService implements OnModuleInit {
       approvalReasons,
     } = this.calculateOrderTotals(pricing.lines);
 
-    // 2. Kiểm tra hạn mức công nợ (Task SN-41 - Approval Flow)
-    // Trường hợp 2: Nếu (Tổng tiền đơn hàng mới + Công nợ hiện tại) > Hạn mức công nợ
+    let orderStatus = requestedStatus === OrderStatus.APPROVED
+      ? OrderStatus.PENDING
+      : requestedStatus;
+    let orderNote = dto.note;
+    const orderApprovalReasons = [...approvalReasons];
+
+    // 2. Kiểm tra hạn mức công nợ (Task SN-41 - Approval Flow & Task SN-204 - Enforcement)
+    // Tự động gắn cờ và áp dụng chế độ xử lý BLOCK_ORDER / REQUIRE_APPROVAL
+    if (this.creditEvaluationService) {
+      const creditCheck = await this.creditEvaluationService.checkOrderCreationAllowed(
+        customer.id,
+        grandTotal,
+      );
+
+      if (!creditCheck.allowed) {
+        throw new BadRequestException(
+          creditCheck.errorMessage ||
+            `[SN-204] Đại lý "${customer.name}" (${customer.code}) đang bị KHÓA BÁN do vi phạm chính sách công nợ. Chế độ hệ thống: BLOCK_ORDER (Chặn tạo đơn mới).`,
+        );
+      }
+
+      if (creditCheck.requiresApproval) {
+        if (requestedStatus !== OrderStatus.DRAFT) {
+          orderStatus = OrderStatus.PENDING_APPROVAL;
+        }
+        for (const r of creditCheck.reasons) {
+          if (!orderApprovalReasons.includes(r)) {
+            orderApprovalReasons.push(r);
+          }
+        }
+        const sn204Warning = `[SN-204 CẢNH BÁO CÔNG NỢ]: Đại lý bị gắn cờ (${creditCheck.reasons.join(
+          '; ',
+        )}). Đơn hàng chuyển sang trạng thái Cần duyệt (REQUIRE_APPROVAL).`;
+        orderNote = orderNote ? `${orderNote}\n${sn204Warning}` : sn204Warning;
+      }
+    }
+
+
     const currentDebt = customer.currentDebt || 0;
     const creditLimit = customer.creditLimit || 0;
     const projectedDebt = currentDebt + grandTotal;
@@ -848,23 +888,24 @@ export class OrdersService implements OnModuleInit {
       ? projectedDebt - creditLimit
       : 0;
 
-    const requiresOrderApproval = requiresApproval || isCreditLimitExceeded;
-    let orderStatus = requestedStatus === OrderStatus.APPROVED
-      ? OrderStatus.PENDING
-      : requestedStatus;
-    let orderNote = dto.note;
-    const orderApprovalReasons = [...approvalReasons];
-
+    const requiresOrderApproval =
+      requiresApproval || isCreditLimitExceeded || orderApprovalReasons.length > 0;
     if (isCreditLimitExceeded) {
-      orderApprovalReasons.push(
-        `Vượt hạn mức công nợ ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ (công nợ dự kiến ${projectedDebt.toLocaleString('vi-VN')} đ / hạn mức ${creditLimit.toLocaleString('vi-VN')} đ)`,
-      );
+      const reasonMsg = `Vượt hạn mức công nợ ${creditLimitExceededAmount.toLocaleString(
+        'vi-VN',
+      )} đ (công nợ dự kiến ${projectedDebt.toLocaleString(
+        'vi-VN',
+      )} đ / hạn mức ${creditLimit.toLocaleString('vi-VN')} đ)`;
+      if (!orderApprovalReasons.includes(reasonMsg)) {
+        orderApprovalReasons.push(reasonMsg);
+      }
       if (requestedStatus !== OrderStatus.DRAFT) {
         orderStatus = OrderStatus.PENDING_APPROVAL;
       }
       const warningNote = `[SN-41 CẢNH BÁO: Đơn hàng làm tổng công nợ đạt ${projectedDebt.toLocaleString('vi-VN')} đ, vượt hạn mức ${creditLimit.toLocaleString('vi-VN')} đ (vượt ${creditLimitExceededAmount.toLocaleString('vi-VN')} đ). Chờ Quản lý/Kế toán phê duyệt]`;
       orderNote = orderNote ? `${orderNote}\n${warningNote}` : warningNote;
     }
+
     let assignedWarehouseId = dto.warehouseId || DEFAULT_WAREHOUSE_ID;
     let assignedWarehouseName = dto.warehouseName || 'Kho Miền Nam (TP.HCM)';
     let assignedWarehouseCode = 'KHO-MN-01';

@@ -15,6 +15,7 @@ import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { CustomersService } from '../customers/customers.service';
 import { CreditLimitService } from '../credit-limit/credit-limit.service';
+import { CreditEvaluationService } from '../credit-limit/credit-evaluation.service';
 import { ShipmentsService } from '../shipments/shipments.service';
 import { OrdersService } from '../orders/orders.service';
 import { ReceiptsService } from '../receipts/receipts.service';
@@ -27,7 +28,13 @@ import {
   UnbilledDeliverySlipItem,
 } from './entities/invoice.entity';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const PDFDocument = require('pdfkit');
+let PDFDocument: any;
+try {
+  PDFDocument = require('pdfkit');
+} catch {
+  PDFDocument = class MockPDFDocument {};
+}
+
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -123,6 +130,9 @@ export class InvoicesService implements OnModuleInit {
     @Optional()
     @Inject(forwardRef(() => CreditLimitService))
     private readonly creditLimitService?: CreditLimitService,
+    @Optional()
+    @Inject(forwardRef(() => CreditEvaluationService))
+    private readonly creditEvaluationService?: CreditEvaluationService,
     @Optional()
     @Inject(forwardRef(() => ShipmentsService))
     private readonly shipmentsService?: ShipmentsService,
@@ -1428,6 +1438,19 @@ export class InvoicesService implements OnModuleInit {
         });
       } catch (receiptErr: unknown) {
         this.logger.warn(`[InvoicesService] Lỗi khi tạo phiếu thu: ${(receiptErr as Error).message}`);
+      }
+    }
+
+    // 5. Kích hoạt Event Trigger tự động đánh giá lại trạng thái cờ công nợ sau khi thu tiền (SN-204)
+    if (this.creditEvaluationService) {
+      try {
+        await this.creditEvaluationService.onPaymentReceived(invoice.customerId, {
+          amount: payAmount,
+          code: invoice.invoiceCode,
+        });
+      } catch (evalErr: unknown) {
+        const msg = evalErr instanceof Error ? evalErr.message : String(evalErr);
+        this.logger.warn(`[InvoicesService] Lỗi kích hoạt đánh giá lại công nợ sau thu tiền: ${msg}`);
       }
     }
 

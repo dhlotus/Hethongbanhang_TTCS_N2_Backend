@@ -5,12 +5,14 @@ import { PriceListsModule } from '../price-lists/price-lists.module';
 import { ProductsModule } from '../products/products.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { CreditLimitModule } from '../credit-limit/credit-limit.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
 @Module({
   imports: [
     forwardRef(() => CustomersModule),
+    forwardRef(() => CreditLimitModule),
     PriceListsModule,
     DiscountPoliciesModule,
     forwardRef(() => ProductsModule),
@@ -22,3 +24,4 @@ import { OrdersService } from './orders.service';
   exports: [OrdersService],
 })
 export class OrdersModule {}
+
