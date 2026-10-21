@@ -131,7 +131,7 @@ export class ShipmentsService implements OnModuleInit {
         // Đồng bộ xóa: Loại bỏ các phiếu đã bị xóa khỏi database khỏi bộ nhớ
         const dbIds = new Set(rows.map((r: any) => r.id));
         for (const [id] of this.shipments.entries()) {
-          if (id.startsWith('shp-1') && !dbIds.has(id)) {
+          if ((id.startsWith('shp-') || id.startsWith('PXK-')) && !dbIds.has(id)) {
             this.shipments.delete(id);
           }
         }
@@ -273,10 +273,22 @@ export class ShipmentsService implements OnModuleInit {
     }
   }
 
+  private generateNextShipmentCode(): string {
+    let maxNum = 0;
+    for (const id of this.shipments.keys()) {
+      const match = id.match(/^PXK-(\d+)$/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+    return `PXK-${String(maxNum + 1).padStart(3, '0')}`;
+  }
+
   private seedInitialShipments() {
     const seed: ShipmentItem[] = [
-            {
-        id: 'shp-001',
+      {
+        id: 'PXK-001',
         orderId: 'ord-001',
         orderCode: 'DH2610-10023',
         customerId: '55555555-0000-0000-0000-000000000001',
@@ -296,7 +308,7 @@ export class ShipmentsService implements OnModuleInit {
         lines: [
           new ShipmentLineEntity({
             id: 'shpl-001',
-            shipmentId: 'shp-001',
+            shipmentId: 'PXK-001',
             orderLineId: 'line-001',
             productId: 'prod-001',
             productSku: 'LH-MILK-900G',
@@ -315,7 +327,7 @@ export class ShipmentsService implements OnModuleInit {
         updatedAt: new Date(),
       },
       {
-        id: 'shp-002',
+        id: 'PXK-002',
         orderId: 'ord-002',
         orderCode: 'DH2610-10045',
         customerId: '55555555-0000-0000-0000-000000000002',
@@ -335,7 +347,7 @@ export class ShipmentsService implements OnModuleInit {
         lines: [
           new ShipmentLineEntity({
             id: 'shpl-002',
-            shipmentId: 'shp-002',
+            shipmentId: 'PXK-002',
             orderLineId: 'line-002',
             productId: 'prod-002',
             productSku: 'LH-COOKIES-500G',
@@ -353,7 +365,7 @@ export class ShipmentsService implements OnModuleInit {
         updatedAt: new Date(),
       },
       {
-        id: 'shp-003',
+        id: 'PXK-003',
         orderId: 'ord-003',
         orderCode: 'DH2609-09878',
         customerId: 'cust-001',
@@ -370,7 +382,7 @@ export class ShipmentsService implements OnModuleInit {
         lines: [
           new ShipmentLineEntity({
             id: 'shpl-003-1',
-            shipmentId: 'shp-003',
+            shipmentId: 'PXK-003',
             orderLineId: 'line-003-1',
             productId: 'prod-001',
             productSku: 'LH-MILK-900G',
@@ -384,7 +396,7 @@ export class ShipmentsService implements OnModuleInit {
           }),
           new ShipmentLineEntity({
             id: 'shpl-003-2',
-            shipmentId: 'shp-003',
+            shipmentId: 'PXK-003',
             orderLineId: 'line-003-2',
             productId: 'prod-003',
             productSku: 'LH-NEST-70ML',
@@ -402,7 +414,7 @@ export class ShipmentsService implements OnModuleInit {
         updatedAt: new Date(),
       },
       {
-        id: 'shp-1792084366553',
+        id: 'PXK-004',
         orderId: 'ord-dh2610-62440',
         orderCode: 'DH2610-62440',
         customerId: 'cust-003',
@@ -421,7 +433,7 @@ export class ShipmentsService implements OnModuleInit {
         updatedAt: new Date(),
       },
       {
-        id: 'shp-1792084655213',
+        id: 'PXK-005',
         orderId: 'ord-dh2610-10212',
         orderCode: 'DH2610-10212',
         customerId: 'cust-004',
@@ -438,7 +450,7 @@ export class ShipmentsService implements OnModuleInit {
         updatedAt: new Date(),
       },
       {
-        id: 'shp-dh-2026-0001',
+        id: 'PXK-006',
         orderId: '77777777-0000-0000-0000-000000000001',
         orderCode: 'DH-2026-0001',
         customerId: '55555555-0000-0000-0000-000000000001',
@@ -466,7 +478,7 @@ export class ShipmentsService implements OnModuleInit {
         updatedAt: new Date(Date.now() - 86400000 * 2),
       },
       {
-        id: 'shp-dh-2026-0002',
+        id: 'PXK-007',
         orderId: 'ord-002',
         orderCode: 'DH2610-10045',
         customerId: '55555555-0000-0000-0000-000000000003',
@@ -912,7 +924,7 @@ export class ShipmentsService implements OnModuleInit {
       }
     }
 
-    const id = `shp-${Date.now()}`;
+    const id = this.generateNextShipmentCode();
     const newShipment: ShipmentItem = {
       id,
       orderId: dto.order_id || dto.orderId || orderCode,
@@ -1298,7 +1310,7 @@ export class ShipmentsService implements OnModuleInit {
       throw new BadRequestException('Đơn hàng này không còn mặt hàng nào bị nợ cần giao bù.');
     }
 
-    const id = `shp-bo-${Date.now()}`;
+    const id = this.generateNextShipmentCode();
     const backorderShipment: any = {
       id,
       orderId: lastShipment.orderId,
@@ -1440,7 +1452,7 @@ export class ShipmentsService implements OnModuleInit {
         {
           id: 'stop-001',
           tripId: 'trip-001',
-          shipmentId: 'shp-001',
+          shipmentId: 'PXK-001',
           orderCode: 'DH2609-09876',
           stopOrder: 1,
           customerName: 'Đại lý Sữa & Bánh kẹo Miền Bắc',
@@ -1454,7 +1466,7 @@ export class ShipmentsService implements OnModuleInit {
         {
           id: 'stop-002',
           tripId: 'trip-001',
-          shipmentId: 'shp-1792084366553',
+          shipmentId: 'PXK-004',
           orderCode: 'DH2610-62440',
           stopOrder: 2,
           customerName: 'Công Ty TNHH Thương Mại & Phân Phối Minh Khang',
@@ -1492,7 +1504,7 @@ export class ShipmentsService implements OnModuleInit {
         {
           id: 'stop-003',
           tripId: 'trip-002',
-          shipmentId: 'shp-1792084655213',
+          shipmentId: 'PXK-005',
           orderCode: 'DH2610-10212',
           stopOrder: 1,
           customerName: 'Đại Lý Thực Phẩm Sạch Thăng Long',
@@ -1515,17 +1527,17 @@ export class ShipmentsService implements OnModuleInit {
     this.trips.set(trip1.id, trip1);
     this.trips.set(trip2.id, trip2);
 
-    const s1 = this.shipments.get('shp-001');
+    const s1 = this.shipments.get('PXK-001');
     if (s1) {
       s1.tripId = trip1.id;
       s1.tripCode = trip1.tripCode;
     }
-    const s2 = this.shipments.get('shp-1792084366553');
+    const s2 = this.shipments.get('PXK-004');
     if (s2) {
       s2.tripId = trip1.id;
       s2.tripCode = trip1.tripCode;
     }
-    const s3 = this.shipments.get('shp-1792084655213');
+    const s3 = this.shipments.get('PXK-005');
     if (s3) {
       s3.tripId = trip2.id;
       s3.tripCode = trip2.tripCode;

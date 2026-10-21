@@ -41,7 +41,7 @@ export class ShipmentEntity {
   updatedAt: Date;
 
   constructor(partial?: Partial<ShipmentEntity>) {
-    this.id = partial?.id || `shp-${Date.now()}`;
+    this.id = partial?.id || '';
     this.orderId = partial?.orderId || '';
     this.orderCode = partial?.orderCode || '';
     this.customerId = partial?.customerId || '';
