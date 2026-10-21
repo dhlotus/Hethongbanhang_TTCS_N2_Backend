@@ -1368,17 +1368,17 @@ export class OrdersService implements OnModuleInit {
     }
 
     // 7. Tìm kiếm tự do (mã đơn, mã đại lý, tên đại lý, sđt, người nhận, nhân viên)
-    if (query.search && query.search.trim()) {
-      const q = query.search.toLowerCase().trim();
+    const searchKey = (query.search || (query as any).q || '').toLowerCase().trim();
+    if (searchKey) {
       list = list.filter(
         (o) =>
-          (o.orderCode && o.orderCode.toLowerCase().includes(q)) ||
-          (o.customerName && o.customerName.toLowerCase().includes(q)) ||
-          (o.customerCode && o.customerCode.toLowerCase().includes(q)) ||
-          (o.salesRepName && o.salesRepName.toLowerCase().includes(q)) ||
+          (o.orderCode && o.orderCode.toLowerCase().includes(searchKey)) ||
+          (o.customerName && o.customerName.toLowerCase().includes(searchKey)) ||
+          (o.customerCode && o.customerCode.toLowerCase().includes(searchKey)) ||
+          (o.salesRepName && o.salesRepName.toLowerCase().includes(searchKey)) ||
           (o.deliveryPoint?.receiverName &&
-            o.deliveryPoint.receiverName.toLowerCase().includes(q)) ||
-          (o.deliveryPoint?.phone && o.deliveryPoint.phone.includes(q)),
+            o.deliveryPoint.receiverName.toLowerCase().includes(searchKey)) ||
+          (o.deliveryPoint?.phone && o.deliveryPoint.phone.includes(searchKey)),
       );
     }
 
