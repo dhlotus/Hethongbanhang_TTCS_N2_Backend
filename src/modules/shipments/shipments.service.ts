@@ -593,7 +593,8 @@ export class ShipmentsService implements OnModuleInit {
   }
 
   async findById(id: string, currentUser?: ICurrentUser): Promise<ShipmentItem> {
-    let shipment = this.shipments.get(id);
+    const existingMemoryShipment = this.shipments.get(id);
+    let shipment = existingMemoryShipment;
 
     // Nếu có DB, tìm trong DB và load kèm danh sách items
     if (this.databaseService?.isConnected()) {
@@ -622,6 +623,9 @@ export class ShipmentsService implements OnModuleInit {
             warehouseId: r.warehouse_id,
             warehouseName: r.warehouse_name,
             status: r.status,
+            isConfirmed: r.is_confirmed !== undefined ? Boolean(r.is_confirmed) : Boolean(existingMemoryShipment?.isConfirmed),
+            confirmedAt: r.confirmed_at ? new Date(r.confirmed_at) : existingMemoryShipment?.confirmedAt,
+            confirmedBy: r.confirmed_by || existingMemoryShipment?.confirmedBy,
             deliveryAddress: r.delivery_address,
             receiverName: r.receiver_name,
             phone: r.phone,
@@ -635,6 +639,8 @@ export class ShipmentsService implements OnModuleInit {
             tripCode: r.trip_code,
             invoiceId: r.invoice_id,
             invoiceCode: r.invoice_code,
+            lines: existingMemoryShipment?.lines || [],
+            hasShortDelivery: r.has_short_delivery !== undefined ? Boolean(r.has_short_delivery) : Boolean(existingMemoryShipment?.hasShortDelivery),
             shippedAt: r.shipped_at ? new Date(r.shipped_at) : undefined,
             deliveredAt: r.delivered_at ? new Date(r.delivered_at) : undefined,
             createdAt: new Date(r.created_at),
@@ -661,6 +667,29 @@ export class ShipmentsService implements OnModuleInit {
         }
       } catch (err) {
         this.logger.error(`Lỗi tìm shipment ${id} trong DB: ${err}`);
+      }
+    }
+
+    // Đảm bảo shipment có items nếu đã có lines (tương thích cả SN-188 và SN-195)
+    if (shipment) {
+      if ((!shipment.items || shipment.items.length === 0) && shipment.lines && shipment.lines.length > 0) {
+        shipment.items = shipment.lines.map((l: any) => ({
+          id: l.id,
+          sku_code: l.productSku,
+          skuCode: l.productSku,
+          product_name: l.productName,
+          productName: l.productName,
+          quantity_requested: Number(l.shippedQuantity ?? l.orderedQuantity ?? 1),
+          quantityRequested: Number(l.shippedQuantity ?? l.orderedQuantity ?? 1),
+          selected_batch_no: 'LÔ-TIÊU-CHUẨN',
+          selectedBatchNo: 'LÔ-TIÊU-CHUẨN',
+          fefo_suggested_batch_no: 'LÔ-TIÊU-CHUẨN',
+          fefoSuggestedBatchNo: 'LÔ-TIÊU-CHUẨN',
+          is_overridden: false,
+          isOverridden: false,
+          override_reason: l.shortDeliveryReason || '',
+          overrideReason: l.shortDeliveryReason || '',
+        }));
       }
     }
 
