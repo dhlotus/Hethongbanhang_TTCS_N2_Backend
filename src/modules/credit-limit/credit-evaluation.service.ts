@@ -191,9 +191,10 @@ export class CreditEvaluationService implements OnModuleInit, OnModuleDestroy {
 
     if (this.invoicesService) {
       try {
-        const allInvoices = await this.invoicesService.findAll({ customerId: customer.id });
-        unpaidInvoices = allInvoices
-          .filter((inv) => inv.remainingAmount > 0)
+        const res = await this.invoicesService.findAll({ customerId: customer.id });
+        const invoiceList: any[] = Array.isArray(res) ? res : (res as any)?.items || (res as any)?.data || [];
+        unpaidInvoices = invoiceList
+          .filter((inv) => inv && inv.remainingAmount > 0)
           .map((inv) => ({
             id: inv.id,
             code: inv.invoiceCode,

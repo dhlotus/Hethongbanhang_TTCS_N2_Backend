@@ -487,17 +487,15 @@ export class CreditLimitService implements OnModuleInit {
     const oldTempLimit = Number(currentEntity.temporaryCreditLimit || 0);
     const newTempLimit = Number(dto.temporaryCreditLimit ?? currentEntity.temporaryCreditLimit ?? 0);
 
-    // Chặn trùng lặp / Dirty Audit Log khi không có gì thay đổi
     const isUnchanged =
       newCreditLimit === oldCreditLimit &&
       newMaxDebtDays === oldMaxDebtDays &&
       newTempLimit === oldTempLimit &&
       resolvedPaymentTerms === currentEntity.paymentTerms;
 
+    // Nếu không có thay đổi nào so với hiện tại, trả về thực thể hiện tại mà không báo lỗi
     if (isUnchanged) {
-      throw new BadRequestException(
-        'Hạn mức công nợ, số ngày nợ và điều khoản thanh toán không có gì thay đổi so với hiện tại. Không tạo bản ghi kiểm toán rác.',
-      );
+      return currentEntity;
     }
 
     const actorName =

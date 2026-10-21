@@ -4,15 +4,17 @@ import {
   Delete,
   Get,
   Header,
+  MethodNotAllowedException,
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { InvoicesService, InvoiceItem, DealerDebtSummary } from './invoices.service';
+import { InvoicesService, InvoiceItem, DealerDebtSummary, PaginatedInvoicesResult } from './invoices.service';
 import { DebtReminderSchedulerService } from './debt-reminder-scheduler.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -20,9 +22,11 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
+import { IssueInvoiceDto } from './dto/issue-invoice.dto';
+import { UnbilledDeliverySlip } from './entities/invoice.entity';
 
 /**
- * Controller Hoá đơn & Sổ Công nợ Đại lý (Module 7 - SN-207 & SN-208)
+ * Controller Hoá đơn & Sổ Công nợ Đại lý (Module 7 - SN-200 & SN-207 & SN-208)
  */
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -31,6 +35,25 @@ export class InvoicesController {
     private readonly invoicesService: InvoicesService,
     private readonly debtReminderSchedulerService: DebtReminderSchedulerService,
   ) {}
+
+  /**
+   * Danh sách phiếu giao hàng đã giao thành công chưa xuất hoá đơn (SN-200)
+   * GET /api/invoices/unbilled-deliveries?customerId=...
+   */
+  @Get('unbilled-deliveries')
+  @Roles(
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+    UserRole.CUSTOMER,
+  )
+  async getUnbilledDeliveries(
+    @Query('customerId') customerId?: string,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ): Promise<UnbilledDeliverySlip[]> {
+    return this.invoicesService.getUnbilledDeliveries(customerId, currentUser);
+  }
 
   /**
    * Tổng hợp công nợ và hạn mức còn lại của đại lý (SN-207 C)
@@ -46,6 +69,22 @@ export class InvoicesController {
     UserRole.ADMIN,
   )
   async getMyDebtSummary(@CurrentUser() currentUser: ICurrentUser): Promise<DealerDebtSummary> {
+    return this.invoicesService.getMyDebtSummary(currentUser);
+  }
+
+  /**
+   * Alias: GET /api/invoices/my-debt
+   */
+  @Get('my-debt')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async getMyDebt(@CurrentUser() currentUser: ICurrentUser): Promise<DealerDebtSummary> {
     return this.invoicesService.getMyDebtSummary(currentUser);
   }
 
@@ -135,12 +174,35 @@ export class InvoicesController {
   async findAll(
     @Query() query: Record<string, string>,
     @CurrentUser() currentUser: ICurrentUser,
-  ): Promise<InvoiceItem[]> {
+  ): Promise<InvoiceItem[] | PaginatedInvoicesResult> {
     return this.invoicesService.findAll(query as any, currentUser);
   }
 
   /**
-   * Tải hóa đơn PDF / HTML chuẩn in ấn (SN-207 B)
+   * Template in ấn hoá đơn bán hàng trực tiếp (SN-200 ý 5)
+   * GET /api/invoices/:id/print
+   */
+  @Get(':id/print')
+  @Roles(
+    UserRole.CUSTOMER,
+    UserRole.SALES_REP,
+    UserRole.ACCOUNTANT,
+    UserRole.ACCOUNTANT_DEBT,
+    UserRole.SALES_MANAGER,
+    UserRole.ADMIN,
+  )
+  async printInvoice(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+  ) {
+    const result = await this.invoicesService.generateInvoicePdfHtml(id, currentUser);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(result.html);
+  }
+
+  /**
+   * Tải hóa đơn PDF / HTML chuẩn in ấn (SN-200 ý 5 & SN-207 B)
    * GET /api/invoices/:id/pdf
    */
   @Get(':id/pdf')
@@ -217,38 +279,55 @@ export class InvoicesController {
   }
 
   /**
-   * Phát hành hoá đơn mới
+   * Phát hành hoá đơn mới từ phiếu đã giao hoặc dữ liệu chuẩn (SN-200)
    * POST /api/invoices
    */
   @Post()
   @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)
   async create(
-    @Body() dto: Partial<InvoiceItem>,
+    @Body() dto: IssueInvoiceDto | (Partial<InvoiceItem> & { deliverySlipIds?: string[] }),
     @CurrentUser() currentUser: ICurrentUser,
   ): Promise<InvoiceItem> {
-    return this.invoicesService.create(dto, currentUser);
+    if ('deliverySlipIds' in dto && Array.isArray((dto as any).deliverySlipIds) && (dto as any).deliverySlipIds.length > 0) {
+      return this.invoicesService.issueInvoiceFromDeliveries(dto as IssueInvoiceDto, currentUser);
+    }
+    return this.invoicesService.create(dto as Partial<InvoiceItem>, currentUser);
   }
 
   /**
-   * Cập nhật hoá đơn
+   * RÀNG BUỘC 4 (SN-200): Hoá đơn đã phát hành KHÔNG ĐƯỢC PHÉP SỬA
+   * PUT /api/invoices/:id
+   */
+  @Put(':id')
+  @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)
+  async updatePut(): Promise<never> {
+    throw new MethodNotAllowedException(
+      'Hoá đơn đã phát hành không thể sửa xóa. Mọi thay đổi bắt buộc phải lập chứng từ điều chỉnh theo quy định.',
+    );
+  }
+
+  /**
+   * RÀNG BUỘC 4 (SN-200): Hoá đơn đã phát hành KHÔNG ĐƯỢC PHÉP SỬA
    * PATCH /api/invoices/:id
    */
   @Patch(':id')
   @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)
-  async update(
-    @Param('id') id: string,
-    @Body() dto: Partial<InvoiceItem>,
-  ): Promise<InvoiceItem> {
-    return this.invoicesService.update(id, dto);
+  async update(): Promise<never> {
+    throw new MethodNotAllowedException(
+      'Hoá đơn đã phát hành không thể sửa xóa. Mọi thay đổi bắt buộc phải lập chứng từ điều chỉnh theo quy định.',
+    );
   }
 
   /**
-   * Hủy / xóa hoá đơn
+   * RÀNG BUỘC 4 (SN-200): Hoá đơn đã phát hành KHÔNG ĐƯỢC PHÉP XOÁ
    * DELETE /api/invoices/:id
    */
   @Delete(':id')
   @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.ACCOUNTANT_DEBT)
-  async remove(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
-    return this.invoicesService.remove(id);
+  async remove(): Promise<never> {
+    throw new MethodNotAllowedException(
+      'Hoá đơn đã phát hành không thể sửa xóa. Mọi thay đổi bắt buộc phải lập chứng từ điều chỉnh theo quy định.',
+    );
   }
 }
+

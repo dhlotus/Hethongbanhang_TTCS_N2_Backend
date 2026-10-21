@@ -35,8 +35,11 @@ export class WarehousesController {
     UserRole.ACCOUNTANT,
     UserRole.SALES_REP,
   )
-  findAll(@CurrentUser() currentUser?: ICurrentUser): Promise<WarehouseEntity[]> {
-    return this.warehousesService.findAll(currentUser);
+  findAll(
+    @CurrentUser() currentUser?: ICurrentUser,
+    @Query() query?: Record<string, string>,
+  ): Promise<any> {
+    return this.warehousesService.findAll(currentUser, query);
   }
 
   @Get('managers')
@@ -73,7 +76,7 @@ export class WarehousesController {
   }
 
   @Get('agencies/defaults')
-  @Roles(...WAREHOUSE_MANAGER_ROLES)
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
   listAgencyDefaults(): Promise<AgencyWarehouseAssignmentEntity[]> {
     return this.warehousesService.listAgencyDefaults();
   }

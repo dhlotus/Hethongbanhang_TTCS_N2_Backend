@@ -1,4 +1,4 @@
-export type NotificationType = 'ORDER' | 'STOCK_ALERT' | 'DELIVERY' | 'PRICING' | 'CREDIT';
+export type NotificationType = 'ORDER' | 'STOCK_ALERT' | 'DELIVERY' | 'PRICING' | 'CREDIT' | 'SHIPMENT' | 'COLLECTION' | 'RECONCILIATION';
 
 export class NotificationEntity {
   id: string;

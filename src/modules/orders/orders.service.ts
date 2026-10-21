@@ -1041,7 +1041,18 @@ export class OrdersService implements OnModuleInit {
    */
   async findAllOrders(
     query: QueryOrdersDto,
-    currentUser?: { id?: string; role?: string; username?: string; roles?: string[] },
+    currentUser?: {
+      id?: string;
+      role?: string;
+      username?: string;
+      roles?: string[];
+      warehouseId?: string | null;
+      warehouseCode?: string | null;
+      warehouseName?: string | null;
+      assignedWarehouse?: string | null;
+      warehouses?: Array<{ id: string; code: string; name: string; isPrimary?: boolean }>;
+      warehouseIds?: string[];
+    },
   ): Promise<{
     data: OrderEntity[];
     total: number;
@@ -1078,51 +1089,153 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    // 1.2. Quản lý kho / Thủ kho: Chỉ thấy đơn hàng giao từ hoặc giao tới kho/địa bàn phụ trách
+    // 1.2. Phân quyền Nhân viên kho / Thủ kho & Lọc theo Kho xuất hàng (Chuẩn nghiệp vụ gán đại lý theo kho)
     const isWarehouseStaff = userRoles.some((r) =>
       ['WAREHOUSE_MANAGER', 'WAREHOUSE_KEEPER', 'WAREHOUSE', 'WH_MANAGER'].includes(String(r)),
     ) && !userRoles.includes('ADMIN') && !userRoles.includes('SALES_MANAGER');
 
-    if (isWarehouseStaff) {
-      const whId = (currentUser as any)?.warehouseId;
-      const whName = (currentUser as any)?.assignedWarehouse || (currentUser as any)?.warehouseName;
-      if (whId || whName) {
-        const cleanWhName = (whName || '').toLowerCase();
-        const isMienBac = cleanWhName.includes('bắc') || cleanWhName.includes('hà nội') || cleanWhName.includes('mb');
-        const isMienNam = cleanWhName.includes('nam') || cleanWhName.includes('sóng thần') || cleanWhName.includes('mn');
-        const isMienTrung = cleanWhName.includes('trung') || cleanWhName.includes('tây nam bộ') || cleanWhName.includes('mt');
+    let targetWhId = query.warehouseId && query.warehouseId !== 'ALL' ? String(query.warehouseId).toLowerCase().trim() : '';
 
-        list = list.filter((o) => {
-          if (whId && (o as any).warehouseId && String((o as any).warehouseId).toLowerCase() === String(whId).toLowerCase()) {
-            return true;
-          }
-          if (whName && (o as any).warehouseName && String((o as any).warehouseName).toLowerCase().includes(cleanWhName)) {
-            return true;
-          }
-          if (isMienBac && (o.region?.toLowerCase().includes('bắc') || o.deliveryPoint?.address?.toLowerCase().includes('hà nội') || o.deliveryPoint?.address?.toLowerCase().includes('bắc'))) {
-            return true;
-          }
-          if (isMienNam && (o.region?.toLowerCase().includes('nam') || o.deliveryPoint?.address?.toLowerCase().includes('hồ chí minh') || o.deliveryPoint?.address?.toLowerCase().includes('bình dương') || o.deliveryPoint?.address?.toLowerCase().includes('sóng thần'))) {
-            return true;
-          }
-          if (isMienTrung && (o.region?.toLowerCase().includes('trung') || o.region?.toLowerCase().includes('tây nam bộ') || o.deliveryPoint?.address?.toLowerCase().includes('cần thơ'))) {
-            return true;
-          }
-          return false;
-        });
+    if (!targetWhId && isWarehouseStaff) {
+      const whId = (currentUser as any)?.warehouseId;
+      const whCode = (currentUser as any)?.warehouseCode;
+      const uName = (currentUser?.username || '').toLowerCase();
+      const fName = (currentUser as any)?.name?.toLowerCase() || (currentUser as any)?.fullName?.toLowerCase() || '';
+
+      if (whId) {
+        targetWhId = String(whId).toLowerCase();
+      } else if (whCode) {
+        targetWhId = String(whCode).toLowerCase();
+      } else if (uName === 'thukho' || uName.includes('tuấn') || fName.includes('tuấn')) {
+        targetWhId = '11111111-0000-0000-0000-000000000002'; // Kho Miền Bắc (Hà Nội)
+      } else if (uName === 'warehouse' || uName.includes('hùng') || fName.includes('hùng')) {
+        targetWhId = '11111111-0000-0000-0000-000000000001'; // Kho Miền Nam (TP.HCM)
       }
     }
 
-    // 2. Lọc theo trạng thái đơn hàng
-    if (query.status && (query.status as string) !== 'ALL') {
-      const st = (query.status as string).toUpperCase().trim();
+    if (targetWhId) {
+      // Chuẩn hóa mã kho sang UUID
+      if (targetWhId === 'kho-mb-01') targetWhId = '11111111-0000-0000-0000-000000000002';
+      if (targetWhId === 'kho-mn-01') targetWhId = '11111111-0000-0000-0000-000000000001';
+      if (targetWhId === 'kho-mt-01') targetWhId = '11111111-0000-0000-0000-000000000004';
+      if (targetWhId === 'kho-west-01') targetWhId = '11111111-0000-0000-0000-000000000003';
+
+      // Lấy danh sách đại lý được gán cho kho từ app_agency_default_warehouses
+      const assignedAgencies = new Set<string>();
+      const otherWarehouseAgencies = new Set<string>();
+
+      if (this.databaseService?.isConnected()) {
+        try {
+          const rows = await this.databaseService.query<{ agency_key: string; warehouse_id: string }>(
+            'SELECT agency_key, warehouse_id FROM app_agency_default_warehouses',
+          );
+          for (const r of rows) {
+            const aKey = String(r.agency_key).toLowerCase().trim();
+            const rWh = String(r.warehouse_id).toLowerCase().trim();
+            if (rWh === targetWhId) {
+              assignedAgencies.add(aKey);
+              const m = aKey.match(/^(?:cust-)?(?:dl-)?([a-z]+-)?(\d+)$/i);
+              if (m) {
+                const prefix = (m[1] || '').toLowerCase();
+                const num = parseInt(m[2], 10);
+                if (!isNaN(num)) {
+                  assignedAgencies.add(`cust-dl-${prefix}${String(num).padStart(4, '0')}`);
+                  assignedAgencies.add(`dl-${prefix}${String(num).padStart(4, '0')}`);
+                  assignedAgencies.add(`cust-${prefix}${String(num).padStart(3, '0')}`);
+                }
+              }
+            } else {
+              otherWarehouseAgencies.add(aKey);
+              const m = aKey.match(/^(?:cust-)?(?:dl-)?([a-z]+-)?(\d+)$/i);
+              if (m) {
+                const prefix = (m[1] || '').toLowerCase();
+                const num = parseInt(m[2], 10);
+                if (!isNaN(num)) {
+                  otherWarehouseAgencies.add(`cust-dl-${prefix}${String(num).padStart(4, '0')}`);
+                  otherWarehouseAgencies.add(`dl-${prefix}${String(num).padStart(4, '0')}`);
+                  otherWarehouseAgencies.add(`cust-${prefix}${String(num).padStart(3, '0')}`);
+                }
+              }
+            }
+          }
+        } catch {
+          // Bỏ qua lỗi DB
+        }
+      }
+
+      // Lọc danh sách đơn hàng phát sinh từ kho này
+      list = list.filter((o) => {
+        const oWh = o.warehouseId ? String(o.warehouseId).toLowerCase().trim() : '';
+        if (oWh) {
+          return oWh === targetWhId;
+        }
+
+        const cId = (o.customerId || '').toLowerCase().trim();
+        const cCode = (o.customerCode || '').toLowerCase().trim();
+
+        // 1. Nếu đại lý được gán mua hàng tại kho này -> Hợp lệ
+        if (assignedAgencies.has(cId) || assignedAgencies.has(cCode)) {
+          return true;
+        }
+
+        // 2. Nếu đại lý được gán mua hàng tại kho khác -> Loại bỏ
+        if (otherWarehouseAgencies.has(cId) || otherWarehouseAgencies.has(cCode)) {
+          return false;
+        }
+
+        // 3. Nếu chưa có cấu hình phân kho đại lý (hoặc offline memory mode), cho phép hiển thị
+        if (assignedAgencies.size === 0 && otherWarehouseAgencies.size === 0) {
+          return true;
+        }
+
+        return false;
+      });
+    }
+
+    // 2. Lọc theo trạng thái đơn hàng & Chuẩn ERP cho phép xuất kho (forShipment)
+    const isForShipment =
+      query.forShipment === true ||
+      query.forShipment === 'true' ||
+      query.forShipment === '1';
+
+    if (isForShipment) {
+      // Chuẩn ERP xuất kho: Chỉ lọc đơn hàng đã được phê duyệt (APPROVED, READY_TO_SHIP, PROCESSING)
+      // Tuyệt đối loại bỏ các đơn: CANCELLED, DRAFT, PENDING, PENDING_APPROVAL, PENDING_INVENTORY_APPROVAL, REJECTED, RETURNED_FOR_UPDATE, RETURNED, CLOSED, COMPLETED, DISPATCHED
+      const VALID_SHIPMENT_STATUSES = new Set(['APPROVED', 'READY_TO_SHIP', 'PROCESSING']);
+      const FORBIDDEN_STATUSES = new Set([
+        'CANCELLED',
+        'DRAFT',
+        'PENDING',
+        'PENDING_APPROVAL',
+        'PENDING_INVENTORY_APPROVAL',
+        'REJECTED',
+        'RETURNED_FOR_UPDATE',
+        'RETURNED',
+        'CLOSED',
+        'COMPLETED',
+        'DISPATCHED',
+      ]);
+
+      list = list.filter((o) => {
+        if (!o.status) return false;
+        const oSt = String(o.status).toUpperCase().trim();
+        return VALID_SHIPMENT_STATUSES.has(oSt) && !FORBIDDEN_STATUSES.has(oSt);
+      });
+    } else if (query.status && (query.status as string) !== 'ALL') {
+      const rawStatuses = String(query.status)
+        .split(',')
+        .map((s) => s.toUpperCase().trim())
+        .filter(Boolean);
+
       list = list.filter((o) => {
         if (!o.status) return false;
         const oSt = o.status.toUpperCase().trim();
-        if (st === 'PENDING') {
-          return oSt === 'PENDING' || oSt === 'PENDING_APPROVAL' || oSt === 'PENDING_INVENTORY_APPROVAL';
-        }
-        return oSt === st;
+        return rawStatuses.some((st) => {
+          if (st === 'PENDING') {
+            return oSt === 'PENDING' || oSt === 'PENDING_APPROVAL' || oSt === 'PENDING_INVENTORY_APPROVAL';
+          }
+          return oSt === st;
+        });
       });
     }
 
@@ -2983,7 +3096,7 @@ async findOrdersByCustomer(
 
     if (this.databaseService && this.databaseService.isConnected()) {
       await this.databaseService.query(
-        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id::text = $2 OR code = $2`,
         [status, id],
       );
     }

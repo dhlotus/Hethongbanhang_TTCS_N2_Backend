@@ -61,9 +61,9 @@ export class GoodsReceiptsService implements OnModuleInit {
       id: '11111111-2222-3333-4444-555555550001',
       code: 'PN2610130001',
       warehouseId: DEFAULT_WAREHOUSE_ID,
-      warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+      warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
       supplierId: '22222222-0000-0000-0000-000000000001',
-      supplierName: 'Công ty Cổ phần Sữa Quốc Tế (IDP)',
+      supplierName: 'Công ty Cổ phần Nước giải khát LOHA Quốc Tế',
       receiptType: ReceiptType.PURCHASE_RECEIPT,
       referenceDocument: 'HĐ-IDP-99214',
       status: GoodsReceiptStatus.CONFIRMED,
@@ -102,9 +102,9 @@ export class GoodsReceiptsService implements OnModuleInit {
       id: '11111111-2222-3333-4444-555555550002',
       code: 'PN2610140002',
       warehouseId: DEFAULT_WAREHOUSE_ID,
-      warehouseName: 'Kho Tổng Miền Nam - LOHA WH01',
+      warehouseName: 'Kho Miền Nam (TP. Hồ Chí Minh)',
       supplierId: '22222222-0000-0000-0000-000000000002',
-      supplierName: 'Công ty TNHH Nông Sản Xanh Loha',
+      supplierName: 'Công ty TNHH Khai Thác Khoáng Tinh Khiết Aqua Life',
       receiptType: ReceiptType.PURCHASE_RECEIPT,
       referenceDocument: 'PXK-NSX-8812',
       status: GoodsReceiptStatus.DRAFT,
@@ -280,6 +280,81 @@ export class GoodsReceiptsService implements OnModuleInit {
   }
 
   /**
+   * Chuẩn hóa và phân giải tên nhà cung cấp chính xác từ supplierId hoặc explicitName
+   */
+  private resolveSupplierName(supplierId?: string, explicitName?: string): string {
+    const isGenericName = !explicitName || 
+      explicitName.trim() === '' || 
+      explicitName === 'Nhà cung cấp' || 
+      explicitName === 'Nhà cung cấp đối tác' ||
+      explicitName === 'Chưa chọn NCC';
+
+    if (!isGenericName) {
+      return explicitName.trim();
+    }
+    if (!supplierId) {
+      return 'Chưa chọn NCC';
+    }
+    const cleanId = supplierId.toLowerCase().trim();
+    const map: Record<string, string> = {
+      '22222222-0000-0000-0000-000000000001': 'Công ty Cổ phần Nước giải khát LOHA Quốc Tế',
+      'ncc-bev-01': 'Công ty Cổ phần Nước giải khát LOHA Quốc Tế',
+      'ncc-idp': 'Công ty Cổ phần Sữa Quốc Tế (IDP)',
+      '22222222-0000-0000-0000-000000000002': 'Công ty TNHH Khai Thác Khoáng Tinh Khiết Aqua Life',
+      'ncc-aqua-02': 'Công ty TNHH Khai Thác Khoáng Tinh Khiết Aqua Life',
+      'ncc-nsx': 'Công ty TNHH Nông Sản Xanh Loha',
+      '22222222-0000-0000-0000-000000000003': 'Công ty Cổ phần Sữa & Dinh Dưỡng Quốc Tế NutriPlus',
+      'ncc-dairy-03': 'Công ty Cổ phần Sữa & Dinh Dưỡng Quốc Tế NutriPlus',
+      '22222222-0000-0000-0000-000000000004': 'Nhà máy Bao Bì & Đóng Gói Tân Tiến Phát',
+      'ncc-pack-04': 'Nhà máy Bao Bì & Đóng Gói Tân Tiến Phát',
+      '22222222-0000-0000-0000-000000000005': 'Hợp tác xã Nông Sản Hữu Cơ Sạch Thảo Mộc Xanh',
+      'ncc-old-05': 'Hợp tác xã Nông Sản Hữu Cơ Sạch Thảo Mộc Xanh',
+    };
+    if (map[cleanId]) {
+      return map[cleanId];
+    }
+    if (explicitName && explicitName.trim()) {
+      return explicitName.trim();
+    }
+    return 'Nhà cung cấp đối tác';
+  }
+
+  /**
+   * Chuẩn hóa và phân giải tên kho chính xác từ warehouseId hoặc explicitName
+   */
+  private resolveWarehouseName(warehouseId?: string, explicitName?: string): string {
+    const isGenericName = !explicitName || 
+      explicitName.trim() === '' || 
+      explicitName === 'Kho Tổng Miền Nam - LOHA WH01' || 
+      explicitName === 'Kho Tổng Miền Nam';
+
+    if (!isGenericName) {
+      return explicitName.trim();
+    }
+    if (!warehouseId) {
+      return 'Kho Miền Nam (TP. Hồ Chí Minh)';
+    }
+    const cleanId = warehouseId.toLowerCase().trim();
+    const map: Record<string, string> = {
+      '11111111-0000-0000-0000-000000000001': 'Kho Miền Nam (TP. Hồ Chí Minh)',
+      'kho-mn-01': 'Kho Miền Nam (TP. Hồ Chí Minh)',
+      '11111111-0000-0000-0000-000000000002': 'Kho Miền Bắc (Hà Nội)',
+      'kho-mb-01': 'Kho Miền Bắc (Hà Nội)',
+      '11111111-0000-0000-0000-000000000003': 'Kho Miền Tây (Cần Thơ)',
+      'kho-west-01': 'Kho Miền Tây (Cần Thơ)',
+      '11111111-0000-0000-0000-000000000004': 'Kho Miền Trung (Đà Nẵng)',
+      'kho-mt-01': 'Kho Miền Trung (Đà Nẵng)',
+    };
+    if (map[cleanId]) {
+      return map[cleanId];
+    }
+    if (explicitName && explicitName.trim()) {
+      return explicitName.trim();
+    }
+    return 'Kho Miền Nam (TP. Hồ Chí Minh)';
+  }
+
+  /**
    * Tạo phiếu nhập trên In-memory buffer khi không thể truy cập PostgreSQL
    */
   private fallbackCreate(dto: CreateGoodsReceiptDto, user: ICurrentUser): { id: string } {
@@ -290,21 +365,8 @@ export class GoodsReceiptsService implements OnModuleInit {
 
     const totalCost = dto.items.reduce((sum, item) => sum + (item.packageQuantity * (item.unitCost || 0)), 0);
 
-    let supplierName = 'Chưa chọn NCC';
-    if (dto.supplierId === '22222222-0000-0000-0000-000000000001') {
-      supplierName = 'Công ty Cổ phần Sữa Quốc Tế (IDP)';
-    } else if (dto.supplierId === '22222222-0000-0000-0000-000000000002') {
-      supplierName = 'Công ty TNHH Nông Sản Xanh Loha';
-    } else if (dto.supplierId) {
-      supplierName = 'Nhà cung cấp đối tác';
-    }
-
-    let warehouseName = 'Kho Tổng Miền Nam - LOHA WH01';
-    if (dto.warehouseId === '11111111-0000-0000-0000-000000000002') {
-      warehouseName = 'Kho Phân Phối Hà Nội';
-    } else if (dto.warehouseId === '11111111-0000-0000-0000-000000000003') {
-      warehouseName = 'Kho Vùng Tây Nam Bộ';
-    }
+    const supplierName = this.resolveSupplierName(dto.supplierId, dto.supplierName);
+    const warehouseName = this.resolveWarehouseName(dto.warehouseId, dto.warehouseName);
 
     const items: GoodsReceiptItemEntity[] = dto.items.map((i) => {
       const baseQty = Number(i.packageQuantity) * Number(i.conversionFactor);
@@ -479,7 +541,12 @@ export class GoodsReceiptsService implements OnModuleInit {
       );
 
       return {
-        data: rows.map((r) => this.mapToCamelCase<GoodsReceiptEntity>(r)),
+        data: rows.map((r) => {
+          const entity = this.mapToCamelCase<GoodsReceiptEntity>(r);
+          entity.warehouseName = this.resolveWarehouseName(entity.warehouseId, entity.warehouseName);
+          entity.supplierName = this.resolveSupplierName(entity.supplierId, entity.supplierName);
+          return entity;
+        }),
         total,
         page,
         limit,
@@ -501,7 +568,11 @@ export class GoodsReceiptsService implements OnModuleInit {
     limit: number;
     totalPages: number;
   } {
-    let list = Array.from(this.memoryReceipts.values());
+    let list = Array.from(this.memoryReceipts.values()).map((r) => {
+      r.warehouseName = this.resolveWarehouseName(r.warehouseId, r.warehouseName);
+      r.supplierName = this.resolveSupplierName(r.supplierId, r.supplierName);
+      return r;
+    });
 
     if (query.warehouseId) {
       list = list.filter((r) => r.warehouseId === query.warehouseId);
@@ -579,6 +650,8 @@ export class GoodsReceiptsService implements OnModuleInit {
       );
 
       const receipt = this.mapToCamelCase<GoodsReceiptEntity>(receiptRes[0]);
+      receipt.warehouseName = this.resolveWarehouseName(receipt.warehouseId, receipt.warehouseName);
+      receipt.supplierName = this.resolveSupplierName(receipt.supplierId, receipt.supplierName);
       receipt.items = itemsRes.map((item) => this.mapToCamelCase<GoodsReceiptItemEntity>(item));
       return receipt;
     } catch (err) {
@@ -595,6 +668,8 @@ export class GoodsReceiptsService implements OnModuleInit {
     if (!receipt) {
       throw new NotFoundException(`Không tìm thấy phiếu nhập có ID: ${id}`);
     }
+    receipt.warehouseName = this.resolveWarehouseName(receipt.warehouseId, receipt.warehouseName);
+    receipt.supplierName = this.resolveSupplierName(receipt.supplierId, receipt.supplierName);
     return receipt;
   }
 
@@ -866,8 +941,14 @@ export class GoodsReceiptsService implements OnModuleInit {
       throw new BadRequestException('Phiếu đã xác nhận không thể chỉnh sửa, vui lòng lập phiếu điều chỉnh');
     }
 
-    if (dto.warehouseId) receipt.warehouseId = dto.warehouseId;
-    if (dto.supplierId !== undefined) receipt.supplierId = dto.supplierId;
+    if (dto.warehouseId || dto.warehouseName) {
+      if (dto.warehouseId) receipt.warehouseId = dto.warehouseId;
+      receipt.warehouseName = this.resolveWarehouseName(dto.warehouseId || receipt.warehouseId, dto.warehouseName);
+    }
+    if (dto.supplierId !== undefined || dto.supplierName !== undefined) {
+      if (dto.supplierId !== undefined) receipt.supplierId = dto.supplierId;
+      receipt.supplierName = this.resolveSupplierName(dto.supplierId || receipt.supplierId, dto.supplierName);
+    }
     if (dto.referenceDocument !== undefined) receipt.referenceDocument = dto.referenceDocument;
     if (dto.notes !== undefined) receipt.notes = dto.notes;
     if (dto.items && dto.items.length > 0) {
