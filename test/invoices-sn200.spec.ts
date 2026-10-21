@@ -171,9 +171,9 @@ describe('[SN-200] Nghiệp vụ Phát hành Hoá đơn từ Phiếu Thực Giao
       // Đặt 100, thực giao 80. Đơn giá 200,000, giảm 10% = 180,000/thùng
       // Tổng tiền = 80 * 180,000 = 14,400,000 VND (thay vì 100 * 180,000 = 18,000,000 VND)
       expect(invoice.amount).toBe(14400000);
-      expect(invoice.items?.[0].quantity).toBe(80);
-      expect(invoice.items?.[0].orderedQuantity).toBe(100);
-      expect(invoice.items?.[0].lineTotal).toBe(14400000);
+      expect(invoice.items?.[0]?.quantity).toBe(80);
+      expect(invoice.items?.[0]?.orderedQuantity).toBe(100);
+      expect(invoice.items?.[0]?.lineTotal).toBe(14400000);
     });
 
     it('Gộp được 2 phiếu giao hàng của cùng một đại lý vào một hoá đơn duy nhất', async () => {

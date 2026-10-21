@@ -1715,10 +1715,7 @@ export class InventoryService implements OnModuleInit {
     dto: AdjustStockDto,
     currentUserOrId: ICurrentUser | string,
   ): Promise<StockAdjustmentResult> {
-    const rawWh = dto.warehouseId || (dto as any).warehouse_id;
-    if (!rawWh || !rawWh.trim()) {
-      throw new BadRequestException('Kho điều chỉnh (warehouseId / warehouse_id) bắt buộc phải có.');
-    }
+    const rawWh = dto.warehouseId || (dto as any).warehouse_id || DEFAULT_WAREHOUSE_ID;
 
     const resolvedWh = await this.resolveWarehouseId(rawWh);
     if (!resolvedWh) {

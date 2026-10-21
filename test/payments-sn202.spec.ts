@@ -71,10 +71,10 @@ describe('PaymentsService (SN-202) - Ghi nhận thanh toán & Đối trừ công
       findUnpaidInvoicesForCustomer: jest.fn().mockImplementation(async () => {
         return currentInvoices.filter((inv: InvoiceItem) => inv.remainingAmount > 0);
       }),
-      updateInvoiceStateInMemory: jest.fn().mockImplementation(async (id: string, updates: Partial<InvoiceItem>) => {
-        const target = currentInvoices.find((inv: InvoiceItem) => inv.id === id);
+      updateInvoiceStateInMemory: jest.fn().mockImplementation(async (updated: InvoiceItem) => {
+        const target = currentInvoices.find((inv: InvoiceItem) => inv.id === updated.id);
         if (target) {
-          Object.assign(target, updates);
+          Object.assign(target, updated);
         }
       }),
     };

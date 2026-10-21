@@ -1483,6 +1483,28 @@ export class ShipmentsService implements OnModuleInit {
       this.logger.warn(`Lỗi khi syncOrder (${orderIdOrCode}): ${e}`);
     }
   }
+
+  /**
+   * Cập nhật thông tin hóa đơn cho phiếu giao hàng (SN-200)
+   */
+  async updateShipmentInvoice(shipmentId: string, invoiceId: string, invoiceCode: string): Promise<boolean> {
+    const shp = this.shipments.get(shipmentId);
+    if (shp) {
+      shp.invoiceId = invoiceId;
+      shp.invoiceCode = invoiceCode;
+      shp.updatedAt = new Date();
+      this.shipments.set(shp.id, shp);
+    }
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE shipments SET invoice_id = $1, invoice_code = $2, updated_at = NOW() WHERE id = $3;`,
+          [invoiceId, invoiceCode, shipmentId],
+        );
+      } catch {}
+    }
+    return true;
+  }
 }
 
 
