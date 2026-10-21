@@ -28,6 +28,14 @@ import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { InventoryTransactionEntity } from './entities/inventory-transaction.entity';
 import type { LowStockAlert, StockBalance } from './entities/stock-balance.entity';
 import { InventoryService, StockAdjustmentResult, StockOverviewItem } from './inventory.service';
+import { InventoryFefoService } from './inventory-fefo.service';
+import {
+  ConfirmFefoDispatchDto,
+  FefoBatchDetail,
+  FefoRecommendationResult,
+  QueryFefoRecommendationDto,
+} from './dto/fefo-recommendation.dto';
+import { DEFAULT_WAREHOUSE_ID } from '../warehouses/warehouse.constants';
 import { InventoryAuditEntity } from './entities/inventory-audit.entity';
 import {
   CreateInventoryAuditDto,
@@ -44,17 +52,19 @@ import { StockAdjustmentEntity } from './entities/stock-adjustment.entity';
 import { ShipmentsService } from '../shipments/shipments.service';
 
 /**
- * Controller Quản lý Tồn kho & Sổ kho (SN-10, EP-04 & SN-23):
+ * Controller Quản lý Tồn kho & Sổ kho (SN-10, EP-04, SN-23 & SN-187 FEFO):
  * - Áp dụng JwtAuthGuard & RolesGuard để kiểm soát quyền
  * - Đảm bảo Nhân viên kinh doanh (SALES_REP) và Khách hàng (CUSTOMER) KHÔNG THỂ sửa/điều chỉnh tồn kho
  * - Chỉ Quản trị viên (ADMIN) và Thủ kho / Quản lý kho (WAREHOUSE_KEEPER, WAREHOUSE_MANAGER) mới có quyền điều chỉnh tồn kho
  * - Cung cấp sổ kho bất biến lưu vết các giao dịch quy đổi (SN-23)
+ * - Cung cấp thuật toán gợi ý xuất Lô hạn dùng gần nhất FEFO (SN-187)
  */
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InventoryController {
   constructor(
     private readonly inventoryService: InventoryService,
+    private readonly fefoService: InventoryFefoService,
     @Optional()
     @Inject(forwardRef(() => ShipmentsService))
     private readonly shipmentsService?: ShipmentsService,
@@ -521,29 +531,25 @@ export class InventoryController {
   }
 
   // =========================================================================
-  // THEO DÕI LÔ HÀNG & HẠN SỬ DỤNG (SN-184 / EP-SN-229)
+  // THEO DÕI LÔ HÀNG, HẠN SỬ DỤNG & GỢI Ý XUẤT FEFO (SN-184, SN-187)
   // =========================================================================
 
   /**
-   * Truy vấn danh sách lô hàng kèm cảnh báo cận hạn (SN-184 AC-2 & AC-3)
-   * GET /inventory/batches?warehouseId=...&status=...&expiryThresholdDays=30
-   * Quyền: WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN, SALES_MANAGER, ACCOUNTANT
+   * Lấy danh sách gợi ý Lô xuất theo nguyên tắc hạn dùng gần nhất FEFO (SN-187)
+   * GET /api/inventory/batches/fefo-recommendations?warehouseId=...&productId=...&requiredQuantity=...
    */
-  @Get('batches')
+  @Get('batches/fefo-recommendations')
   @Roles(
     UserRole.ADMIN,
-    UserRole.WAREHOUSE_KEEPER,
     UserRole.WAREHOUSE_MANAGER,
-    UserRole.WAREHOUSE,
+    UserRole.WAREHOUSE_KEEPER,
     UserRole.WH_MANAGER,
     UserRole.SALES_MANAGER,
-    UserRole.ACCOUNTANT,
   )
-  async getBatches(
-    @Query() query: QueryBatchesDto,
-    @CurrentUser() currentUser?: ICurrentUser,
-  ) {
-    return this.inventoryService.getBatches(query, currentUser);
+  async getFefoRecommendations(
+    @Query() query: QueryFefoRecommendationDto,
+  ): Promise<FefoRecommendationResult> {
+    return this.fefoService.getFefoRecommendation(query);
   }
 
   /**
@@ -592,6 +598,48 @@ export class InventoryController {
     @Query('date') date?: string,
   ) {
     return this.inventoryService.generateBatchNumber(productId, sku, date);
+  }
+
+  /**
+   * Truy vấn danh sách lô hàng kèm cảnh báo cận hạn (SN-184 AC-2 & AC-3)
+   * GET /inventory/batches?warehouseId=...&status=...&expiryThresholdDays=30
+   * Quyền: WAREHOUSE_KEEPER, WAREHOUSE_MANAGER, ADMIN, SALES_MANAGER, ACCOUNTANT
+   */
+  @Get('batches')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE,
+    UserRole.WH_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.ACCOUNTANT,
+  )
+  async getBatches(
+    @Query() query: QueryBatchesDto,
+    @CurrentUser() currentUser?: ICurrentUser,
+  ) {
+    return this.inventoryService.getBatches(query, currentUser);
+  }
+
+  /**
+   * Xác nhận xuất kho theo Lô đã chọn (SN-187)
+   * POST /api/inventory/batches/dispatch
+   * - Bắt buộc nhập lý do nếu chọn lô khác với đề xuất FEFO
+   * - Tự động trừ tồn kho của các lô đã chọn
+   */
+  @Post('batches/dispatch')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.WH_MANAGER,
+  )
+  async confirmFefoDispatch(
+    @Body() dto: ConfirmFefoDispatchDto,
+    @CurrentUser() user?: ICurrentUser,
+  ) {
+    return this.fefoService.confirmFefoDispatch(dto, user);
   }
 
   /**
@@ -710,7 +758,6 @@ export class InventoryController {
     }
     return this.shipmentsService.findById(id, currentUser);
   }
-
   /**
    * SN-214: Tạo phiếu điều chỉnh tồn kho (Chờ duyệt)
    * POST /inventory/stock-adjustments
@@ -784,5 +831,4 @@ export class InventoryController {
   ): Promise<StockAdjustmentEntity> {
     return this.inventoryService.rejectStockAdjustment(id, dto, currentUser);
   }
-
 }
