@@ -72,7 +72,7 @@ export class InventoryController {
 
   /**
    * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
-   * GET /inventory/stock?warehouse=...&category=...&status=...&search=...
+   * GET /inventory/stock?warehouse=...&category=...&status=...&search=...&page=...&limit=...
    * Quyền: Mọi vai trò đã đăng nhập (Admin, Sales, Warehouse, Accountant)
    */
   @Get('stock')
@@ -83,7 +83,9 @@ export class InventoryController {
     @Query('category') category?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
-  ): Promise<StockOverviewItem[]> {
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<any> {
     return this.inventoryService.getStockOverview(
       {
         warehouse: warehouse || warehouseId,
@@ -91,6 +93,8 @@ export class InventoryController {
         category,
         status,
         search,
+        page: page ? parseInt(page, 10) : undefined,
+        limit: limit ? parseInt(limit, 10) : undefined,
       },
       currentUser,
     );

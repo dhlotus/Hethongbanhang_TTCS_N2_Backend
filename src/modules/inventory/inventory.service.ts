@@ -869,6 +869,59 @@ export class InventoryService implements OnModuleInit {
   /**
    * Xem tổng quan sổ tồn kho minh bạch 3 cột (thực tế, tạm giữ, khả thi) theo SKU và từng kho (SN-10, SN-180)
    */
+  getStockOverview(
+    warehouseId: string,
+    currentUser?: ICurrentUser,
+  ): Promise<StockOverviewItem[]>;
+  getStockOverview(
+    query: {
+      warehouse?: string;
+      warehouseId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+      page: number;
+      limit?: number;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<{
+    data: StockOverviewItem[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    summary: {
+      totalPhysical: number;
+      totalReserved: number;
+      totalAvailable: number;
+      lowStockCount: number;
+      outOfStockCount: number;
+      nearOutOfStockCount: number;
+      totalSku: number;
+    };
+  }>;
+  getStockOverview(
+    query?: {
+      warehouse?: string;
+      warehouseId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<StockOverviewItem[]>;
+  getStockOverview(
+    query?: {
+      warehouse?: string;
+      warehouseId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+      page?: number;
+      limit?: number;
+    },
+    currentUser?: ICurrentUser,
+  ): Promise<any>;
   async getStockOverview(
     query?: {
       warehouse?: string;
@@ -876,9 +929,11 @@ export class InventoryService implements OnModuleInit {
       category?: string;
       status?: string;
       search?: string;
+      page?: number;
+      limit?: number;
     } | string,
     currentUser?: ICurrentUser,
-  ): Promise<StockOverviewItem[]> {
+  ): Promise<any> {
     const q = typeof query === 'string' ? { warehouseId: query } : query;
     const isUuid = (val?: string) =>
       Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim()));
@@ -1367,7 +1422,7 @@ export class InventoryService implements OnModuleInit {
           );
         }
 
-        return damagedItems;
+        items = damagedItems;
       } else if (q.status === 'BELOW_MIN_STOCK') {
         if (warehouseId === 'ALL') {
           // Khi cùng chọn bộ lọc "Tất cả kho hàng" và "Dưới tồn tối thiểu":
@@ -1406,18 +1461,18 @@ export class InventoryService implements OnModuleInit {
             );
           }
 
-          return alertItems;
+          items = alertItems;
+        } else {
+          items = items.filter(
+            (i) => i.isBelowMinStock || ((i.minStockLevel ?? 0) > 0 && i.availableStock <= (i.minStockLevel ?? 0)),
+          );
         }
-
-        items = items.filter(
-          (i) => i.isBelowMinStock || ((i.minStockLevel ?? 0) > 0 && i.availableStock <= (i.minStockLevel ?? 0)),
-        );
       } else {
         items = items.filter((i) => i.status === q.status);
       }
     }
 
-    if (q?.warehouse && q.warehouse !== 'ALL' && warehouseId !== 'ALL') {
+    if (q?.status !== 'DAMAGED' && q?.warehouse && q.warehouse !== 'ALL' && warehouseId !== 'ALL') {
       const qWhLower = q.warehouse.toLowerCase();
       items = items.filter(
         (i) =>
@@ -1425,6 +1480,53 @@ export class InventoryService implements OnModuleInit {
           i.warehouseId === q.warehouse ||
           i.warehouse?.toLowerCase().includes(qWhLower),
       );
+    }
+
+    // Nếu có tham số phân trang page hoặc limit: trả về cấu trúc phân trang kèm summary tổng quan
+    if (q && (q.page !== undefined || q.limit !== undefined)) {
+      const page = Math.max(1, Number(q.page) || 1);
+      const limit = Math.max(1, Number(q.limit) || 10);
+      const total = items.length;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const paginatedData = items.slice((page - 1) * limit, page * limit);
+
+      let totalPhysical = 0;
+      let totalReserved = 0;
+      let totalAvailable = 0;
+      let lowStockCount = 0;
+      let outOfStockCount = 0;
+      let nearOutOfStockCount = 0;
+
+      for (const item of items) {
+        totalPhysical += item.physicalStock;
+        totalReserved += item.reservedStock;
+        totalAvailable += item.availableStock;
+        if (item.status === 'LOW_STOCK') lowStockCount++;
+        if (item.status === 'OUT_OF_STOCK') outOfStockCount++;
+        const isNearOutOfStock =
+          item.availableStock > 0 &&
+          (item.status === 'LOW_STOCK' ||
+            Boolean(item.isBelowMinStock) ||
+            ((item.minStockLevel || 0) > 0 && item.availableStock <= (item.minStockLevel || 0)));
+        if (isNearOutOfStock) nearOutOfStockCount++;
+      }
+
+      return {
+        data: paginatedData,
+        total,
+        page,
+        limit,
+        totalPages,
+        summary: {
+          totalPhysical,
+          totalReserved,
+          totalAvailable,
+          lowStockCount,
+          outOfStockCount,
+          nearOutOfStockCount,
+          totalSku: total,
+        },
+      };
     }
 
     return items;
