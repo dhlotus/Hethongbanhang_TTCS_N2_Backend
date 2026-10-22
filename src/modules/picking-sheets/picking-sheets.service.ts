@@ -64,6 +64,21 @@ export class PickingSheetsService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.ensureTable();
     await this.loadSheetsFromDb();
+    await this.syncCompletedSheetsWithOrders();
+  }
+
+  private async syncCompletedSheetsWithOrders(): Promise<void> {
+    for (const sheet of this.sheets.values()) {
+      if (sheet.status === 'COMPLETED' || sheet.status === 'PARTIALLY_COMPLETED') {
+        for (const orderId of sheet.sourceOrderIds || []) {
+          try {
+            await this.ordersService.updatePickingStatus(orderId, OrderStatus.PACKED, sheet.sheetCode);
+          } catch (e) {
+            this.logger.debug(`Đồng bộ trạng thái PACKED cho đơn ${orderId}: ${e}`);
+          }
+        }
+      }
+    }
   }
 
   private async ensureTable(): Promise<void> {
@@ -169,17 +184,41 @@ export class PickingSheetsService implements OnModuleInit {
     if (this.databaseService && this.databaseService.isConnected()) {
       try {
         const rows = await this.databaseService.query<any>(
-          `SELECT wl.zone, wl.aisle, wl.rack, wl.shelf, wl.bin, wl.code
+          `SELECT wl.zone, wl.aisle, wl.rack, wl.shelf, wl.bin, wl.code, ib.batch_number, ib.quantity
            FROM inventory_batches ib
            JOIN warehouse_locations wl ON wl.id = ib.location_id
            LEFT JOIN products p ON p.id = ib.product_id
-           WHERE ib.warehouse_id::text = $1 AND (ib.product_id::text = $2 OR p.sku ILIKE $3 OR ib.batch_number ILIKE $3)
-           LIMIT 1`,
+           WHERE (ib.warehouse_id::text = $1 OR $1 IS NULL)
+             AND (ib.product_id::text = $2 OR p.sku ILIKE $3 OR ib.batch_number ILIKE $3)
+           ORDER BY wl.aisle, wl.rack, wl.shelf, wl.bin`,
           [warehouseId, productId || '', `%${normalizedSku}%`],
         );
         if (rows && rows.length > 0) {
-          const r = rows[0];
-          return this.formatConfiguredLocation(r.zone, r.aisle, r.rack, r.shelf, r.bin, r.code);
+          const locDetails = rows.map((r) => ({
+            detail: this.formatConfiguredLocation(r.zone, r.aisle, r.rack, r.shelf, r.bin, r.code),
+            batchNumber: r.batch_number,
+            quantity: Number(r.quantity) || 0,
+          }));
+
+          // Sắp xếp theo thứ tự S-Shape sortIndex
+          locDetails.sort((a, b) => a.detail.sortIndex - b.detail.sortIndex);
+
+          const primary = locDetails[0].detail;
+          if (locDetails.length > 1) {
+            primary.hasMultipleLocations = true;
+            primary.multipleLocations = locDetails.map((l) => ({
+              code: l.detail.formattedCode,
+              zone: l.detail.zone,
+              aisle: l.detail.aisle,
+              rack: l.detail.rack,
+              shelf: l.detail.shelf,
+              bin: l.detail.bin,
+              batchNumber: l.batchNumber,
+              quantity: l.quantity,
+            }));
+            primary.formattedCode = `${primary.formattedCode} (+${locDetails.length - 1} vị trí khác)`;
+          }
+          return primary;
         }
       } catch (err) {
         this.logger.debug(`Tra cứu vị trí kho từ DB: ${err}`);
@@ -189,6 +228,7 @@ export class PickingSheetsService implements OnModuleInit {
     // 2. Tra cứu cấu hình vị trí thực tế chuẩn hóa theo danh mục kho
     const stdLocations: Record<string, { zone: string; aisle: string; rack: string; shelf: string; bin: string; code: string }> = {
       'LH-COLA-330': { zone: 'KHU_KHO', aisle: 'A1', rack: 'R1', shelf: 'S1', bin: 'B01', code: 'KMN-A1-T1-01' },
+      'LOHA-COLA-330': { zone: 'KHU_KHO', aisle: 'A1', rack: 'R1', shelf: 'S1', bin: 'B01', code: 'KMN-A1-T1-01' },
       'LH-MILK-900G': { zone: 'KHU_MAT', aisle: 'B2', rack: 'R2', shelf: 'S2', bin: 'B01', code: 'KMN-B2-T2-01' },
       'LH-NUT-180ML': { zone: 'KHU_MAT', aisle: 'B2', rack: 'R2', shelf: 'S1', bin: 'B02', code: 'KMN-B2-T1-02' },
       'LH-NEST-70ML': { zone: 'KHU_KHO', aisle: 'A1', rack: 'R2', shelf: 'S1', bin: 'B03', code: 'KMN-A1-T1-03' },
@@ -301,24 +341,64 @@ export class PickingSheetsService implements OnModuleInit {
     const rawOrdersRes = await this.ordersService.findAllOrders({ limit: 100 } as any, currentUser as any);
     const allOrders = Array.isArray(rawOrdersRes) ? rawOrdersRes : rawOrdersRes?.data || [];
 
-    // Lọc trạng thái đủ điều kiện: chỉ các đơn đã duyệt (APPROVED) hoặc đang trong tiến trình kho (PROCESSING)
-    const eligibleOrders = allOrders.filter(
-      (o: any) =>
-        o.status === OrderStatus.APPROVED ||
-        o.status === OrderStatus.PROCESSING ||
-        o.status === 'APPROVED' ||
-        o.status === 'PROCESSING',
-    );
-
-    // Tìm danh sách orderId đang nằm trong các phiếu soạn IN_PROGRESS
+    // Tìm danh sách orderId đang nằm trong các phiếu soạn IN_PROGRESS và các phiếu đã hoàn tất
     const activeSheetOrdersMap = new Map<string, string>();
+    const finishedOrderIds = new Set<string>();
+
     for (const sheet of this.sheets.values()) {
       if (sheet.status === 'IN_PROGRESS') {
         for (const ordId of sheet.sourceOrderIds || []) {
           activeSheetOrdersMap.set(ordId, sheet.sheetCode);
         }
+        for (const code of sheet.sourceOrderCodes || []) {
+          activeSheetOrdersMap.set(code, sheet.sheetCode);
+        }
+      } else if (sheet.status === 'COMPLETED' || sheet.status === 'PARTIALLY_COMPLETED') {
+        for (const ordId of sheet.sourceOrderIds || []) {
+          finishedOrderIds.add(ordId);
+        }
+        for (const code of sheet.sourceOrderCodes || []) {
+          finishedOrderIds.add(code);
+        }
       }
     }
+
+    // Lọc trạng thái đủ điều kiện:
+    // - Chỉ các đơn đã duyệt (APPROVED) hoặc đang trong tiến trình kho (PROCESSING)
+    // - TUYỆT ĐỐI LOẠI BỎ các đơn đã nằm trong các phiếu soạn đã hoàn thành (COMPLETED / PARTIALLY_COMPLETED)
+    // - TUYỆT ĐỐI LOẠI BỎ các đơn đã PACKED, DISPATCHED, SHIPPED, DELIVERED, COMPLETED, CANCELLED
+    const eligibleOrders = allOrders.filter((o: any) => {
+      const id = o.id;
+      const code = o.orderCode;
+      if (finishedOrderIds.has(id) || (code && finishedOrderIds.has(code))) {
+        return false;
+      }
+
+      const st = String(o.status || '').toUpperCase();
+      if (
+        st === OrderStatus.PACKED ||
+        st === OrderStatus.DISPATCHED ||
+        st === OrderStatus.SHIPPED ||
+        st === OrderStatus.DELIVERED ||
+        st === OrderStatus.COMPLETED ||
+        st === OrderStatus.CANCELLED ||
+        st === 'PACKED' ||
+        st === 'DISPATCHED' ||
+        st === 'SHIPPED' ||
+        st === 'DELIVERED' ||
+        st === 'COMPLETED' ||
+        st === 'CANCELLED'
+      ) {
+        return false;
+      }
+
+      return (
+        st === OrderStatus.APPROVED ||
+        st === OrderStatus.PROCESSING ||
+        st === 'APPROVED' ||
+        st === 'PROCESSING'
+      );
+    });
 
     return eligibleOrders.map((o: any) => ({
       ...o,
@@ -405,13 +485,27 @@ export class PickingSheetsService implements OnModuleInit {
         throw new BadRequestException('Vui lòng chọn ít nhất 1 đơn hàng để tạo lượt soạn hàng');
       }
 
-      // 1. Kiểm tra đơn hàng có đang nằm trong phiếu soạn IN_PROGRESS khác không (Chống tạo trùng)
+      // 1. Kiểm tra đơn hàng có đang nằm trong phiếu soạn IN_PROGRESS khác hoặc đã hoàn tất không (Chống tạo trùng)
       for (const sheet of this.sheets.values()) {
         if (sheet.status === 'IN_PROGRESS') {
           for (const selectedId of dto.selectedOrderIds) {
-            if (sheet.sourceOrderIds.includes(selectedId)) {
+            if (
+              sheet.sourceOrderIds.includes(selectedId) ||
+              (sheet.sourceOrderCodes && sheet.sourceOrderCodes.includes(selectedId))
+            ) {
               throw new BadRequestException(
-                `Đơn hàng ID ${selectedId} đang được soạn trong phiếu ${sheet.sheetCode}. Không thể đưa vào phiếu mới!`,
+                `Đơn hàng ${selectedId} đang được soạn trong phiếu ${sheet.sheetCode}. Không thể đưa vào phiếu mới!`,
+              );
+            }
+          }
+        } else if (sheet.status === 'COMPLETED' || sheet.status === 'PARTIALLY_COMPLETED') {
+          for (const selectedId of dto.selectedOrderIds) {
+            if (
+              sheet.sourceOrderIds.includes(selectedId) ||
+              (sheet.sourceOrderCodes && sheet.sourceOrderCodes.includes(selectedId))
+            ) {
+              throw new BadRequestException(
+                `Đơn hàng ${selectedId} đã được soạn hoàn tất trong phiếu ${sheet.sheetCode}. Không thể soạn lại!`,
               );
             }
           }
@@ -428,6 +522,15 @@ export class PickingSheetsService implements OnModuleInit {
 
       if (selectedOrders.length === 0) {
         throw new BadRequestException('Không tìm thấy thông tin các đơn hàng đã chọn');
+      }
+
+      // Kiểm tra xem có đơn nào trong danh sách chọn không tồn tại hoặc không tìm thấy
+      const foundIds = new Set(selectedOrders.flatMap((o: any) => [o.id, o.orderCode]));
+      const missingIds = dto.selectedOrderIds.filter((id) => !foundIds.has(id));
+      if (missingIds.length > 0) {
+        throw new BadRequestException(
+          `Không tìm thấy hoặc không đủ điều kiện cho các đơn hàng: ${missingIds.join(', ')}`,
+        );
       }
 
       // Kiểm tra trạng thái từng đơn: chỉ nhận các đơn đã duyệt (APPROVED hoặc PROCESSING)
@@ -614,96 +717,128 @@ export class PickingSheetsService implements OnModuleInit {
     dto: UpdatePickingItemDto,
     currentUser?: ICurrentUser,
   ): Promise<PickingSheetEntity> {
-    const sheet = await this.findOne(sheetId, currentUser);
+    return this.lock.acquire(async () => {
+      const sheet = await this.findOne(sheetId, currentUser);
 
-    if (sheet.status === 'COMPLETED' || sheet.status === 'CANCELLED') {
-      throw new BadRequestException('Không thể chỉnh sửa phiếu soạn đã hoàn tất hoặc đã hủy');
-    }
-
-    const itemIndex = sheet.items.findIndex((it) => it.id === itemId);
-    if (itemIndex === -1) {
-      throw new NotFoundException(`Không tìm thấy dòng hàng với ID: ${itemId}`);
-    }
-
-    const currentItem = sheet.items[itemIndex];
-    const pickedQty = Number(dto.pickedQuantity);
-
-    if (isNaN(pickedQty) || pickedQty < 0) {
-      throw new BadRequestException('Số lượng thực soạn phải là số hợp lệ không âm');
-    }
-
-    if (pickedQty > currentItem.totalRequiredQuantity) {
-      throw new BadRequestException(
-        `Số lượng thực soạn (${pickedQty}) không được vượt quá số lượng yêu cầu (${currentItem.totalRequiredQuantity})`,
-      );
-    }
-
-    const isShort = pickedQty < currentItem.totalRequiredQuantity;
-    const effectiveReason = dto.shortPickReason?.trim() || currentItem.shortPickReason?.trim();
-    const effectiveReasonCode = dto.shortPickReasonCode || currentItem.shortPickReasonCode;
-
-    if (isShort && !effectiveReason) {
-      throw new BadRequestException(
-        'Khi soạn thiếu hàng (số lượng nhặt < số lượng cần), bắt buộc phải nhập lý do giải trình',
-      );
-    }
-
-    let nextStatus: PickingItemStatus = 'PENDING';
-    if (pickedQty >= currentItem.totalRequiredQuantity) {
-      nextStatus = 'PICKED';
-    } else if (effectiveReason) {
-      nextStatus = 'SHORT_PICKED';
-    }
-
-    // Phân bổ số lượng nhặt cho từng đơn hàng thành phần theo thứ tự yêu cầu
-    let remainingToAllocate = pickedQty;
-    const updatedOrders = currentItem.orders.map((alloc) => {
-      if (remainingToAllocate <= 0) {
-        return { ...alloc, pickedQuantity: 0 };
+      if (sheet.status === 'COMPLETED' || sheet.status === 'CANCELLED') {
+        throw new BadRequestException('Không thể chỉnh sửa phiếu soạn đã hoàn tất hoặc đã hủy');
       }
-      if (remainingToAllocate >= alloc.requiredQuantity) {
-        remainingToAllocate -= alloc.requiredQuantity;
-        return { ...alloc, pickedQuantity: alloc.requiredQuantity };
+
+      const itemIndex = sheet.items.findIndex((it) => it.id === itemId);
+      if (itemIndex === -1) {
+        throw new NotFoundException(`Không tìm thấy dòng hàng với ID: ${itemId}`);
       }
-      const partial = remainingToAllocate;
-      remainingToAllocate = 0;
-      return { ...alloc, pickedQuantity: partial };
+
+      const currentItem = sheet.items[itemIndex];
+      const pickedQty = Number(dto.pickedQuantity);
+
+      if (isNaN(pickedQty) || pickedQty < 0) {
+        throw new BadRequestException('Số lượng thực soạn phải là số hợp lệ không âm');
+      }
+
+      if (pickedQty > currentItem.totalRequiredQuantity) {
+        throw new BadRequestException(
+          `Số lượng thực soạn (${pickedQty}) không được vượt quá số lượng yêu cầu (${currentItem.totalRequiredQuantity})`,
+        );
+      }
+
+      const isShort = pickedQty < currentItem.totalRequiredQuantity;
+
+      // Kiểm tra lý do soạn thiếu: không được chỉ chứa khoảng trắng
+      if (dto.shortPickReason !== undefined && dto.shortPickReason.trim().length === 0) {
+        throw new BadRequestException('Lý do soạn thiếu không được chỉ chứa khoảng trắng');
+      }
+
+      const effectiveReason =
+        dto.shortPickReason !== undefined
+          ? dto.shortPickReason.trim()
+          : (currentItem.shortPickReason ? currentItem.shortPickReason.trim() : '');
+      const effectiveReasonCode =
+        dto.shortPickReasonCode || currentItem.shortPickReasonCode;
+
+      if (isShort && (!effectiveReason || effectiveReason.length === 0)) {
+        throw new BadRequestException(
+          'Khi soạn thiếu hàng (số lượng nhặt < số lượng cần), bắt buộc phải nhập lý do giải trình',
+        );
+      }
+
+      let nextStatus: PickingItemStatus = 'PENDING';
+      if (pickedQty >= currentItem.totalRequiredQuantity) {
+        nextStatus = 'PICKED';
+      } else if (effectiveReason) {
+        nextStatus = 'SHORT_PICKED';
+      }
+
+      // Phân bổ số lượng nhặt cho từng đơn hàng thành phần theo thứ tự yêu cầu
+      let remainingToAllocate = pickedQty;
+      const updatedOrders = currentItem.orders.map((alloc) => {
+        if (remainingToAllocate <= 0) {
+          return { ...alloc, pickedQuantity: 0 };
+        }
+        if (remainingToAllocate >= alloc.requiredQuantity) {
+          remainingToAllocate -= alloc.requiredQuantity;
+          return { ...alloc, pickedQuantity: alloc.requiredQuantity };
+        }
+        const partial = remainingToAllocate;
+        remainingToAllocate = 0;
+        return { ...alloc, pickedQuantity: partial };
+      });
+
+      const updatedItem: PickingLineItem = {
+        ...currentItem,
+        totalPickedQuantity: pickedQty,
+        status: nextStatus,
+        shortPickReason: isShort ? effectiveReason : undefined,
+        shortPickReasonCode: isShort ? effectiveReasonCode : undefined,
+        notes: dto.notes?.trim() || currentItem.notes,
+        orders: updatedOrders,
+        completedAt: nextStatus !== 'PENDING' ? new Date().toISOString() : undefined,
+      };
+
+      sheet.items[itemIndex] = updatedItem;
+      this.recalculateSheetSummary(sheet);
+
+      await this.persistSheet(sheet);
+      return sheet;
     });
-
-    const updatedItem: PickingLineItem = {
-      ...currentItem,
-      totalPickedQuantity: pickedQty,
-      status: nextStatus,
-      shortPickReason: isShort ? effectiveReason : undefined,
-      shortPickReasonCode: isShort ? effectiveReasonCode : undefined,
-      notes: dto.notes?.trim() || currentItem.notes,
-      orders: updatedOrders,
-      completedAt: nextStatus !== 'PENDING' ? new Date().toISOString() : undefined,
-    };
-
-    sheet.items[itemIndex] = updatedItem;
-    this.recalculateSheetSummary(sheet);
-
-    await this.persistSheet(sheet);
-    return sheet;
   }
 
   /**
    * Thao tác nhanh 1 chạm: Đánh dấu soạn đủ 100% cho dòng hàng
    */
   async quickPickAllItem(sheetId: string, itemId: string, currentUser?: ICurrentUser): Promise<PickingSheetEntity> {
-    const sheet = await this.findOne(sheetId, currentUser);
-    const item = sheet.items.find((it) => it.id === itemId);
-    if (!item) throw new NotFoundException('Không tìm thấy dòng hàng');
+    return this.lock.acquire(async () => {
+      const sheet = await this.findOne(sheetId, currentUser);
+      if (sheet.status === 'COMPLETED' || sheet.status === 'CANCELLED') {
+        throw new BadRequestException('Không thể chỉnh sửa phiếu soạn đã hoàn tất hoặc đã hủy');
+      }
 
-    return this.updateLineItem(
-      sheetId,
-      itemId,
-      {
-        pickedQuantity: item.totalRequiredQuantity,
-      },
-      currentUser,
-    );
+      const item = sheet.items.find((it) => it.id === itemId);
+      if (!item) throw new NotFoundException('Không tìm thấy dòng hàng');
+
+      // Tự động phân bổ 100% cho từng đơn
+      const updatedOrders = item.orders.map((alloc) => ({
+        ...alloc,
+        pickedQuantity: alloc.requiredQuantity,
+      }));
+
+      const updatedItem: PickingLineItem = {
+        ...item,
+        totalPickedQuantity: item.totalRequiredQuantity,
+        status: 'PICKED',
+        shortPickReason: undefined,
+        shortPickReasonCode: undefined,
+        orders: updatedOrders,
+        completedAt: new Date().toISOString(),
+      };
+
+      const itemIdx = sheet.items.findIndex((it) => it.id === itemId);
+      sheet.items[itemIdx] = updatedItem;
+      this.recalculateSheetSummary(sheet);
+
+      await this.persistSheet(sheet);
+      return sheet;
+    });
   }
 
   /**
@@ -711,36 +846,54 @@ export class PickingSheetsService implements OnModuleInit {
    * Bắt buộc tất cả dòng thiếu phải có lý do
    */
   async completeSheet(sheetId: string, currentUser?: ICurrentUser): Promise<PickingSheetEntity> {
-    const sheet = await this.findOne(sheetId, currentUser);
+    return this.lock.acquire(async () => {
+      const sheet = await this.findOne(sheetId, currentUser);
 
-    if (sheet.status === 'COMPLETED') {
+      if (sheet.status === 'COMPLETED' || sheet.status === 'PARTIALLY_COMPLETED') {
+        return sheet;
+      }
+
+      // Kiểm tra dòng chưa xử lý
+      const pendingItems = sheet.items.filter((it) => it.status === 'PENDING');
+      if (pendingItems.length > 0) {
+        throw new BadRequestException(
+          `Còn ${pendingItems.length} mặt hàng chưa được kiểm đếm hoặc đánh dấu. Vui lòng hoàn thành trước khi chốt phiếu.`,
+        );
+      }
+
+      // Kiểm tra dòng thiếu chưa có lý do
+      const missingReasonItems = sheet.items.filter(
+        (it) => it.totalPickedQuantity < it.totalRequiredQuantity && !it.shortPickReason?.trim(),
+      );
+      if (missingReasonItems.length > 0) {
+        throw new BadRequestException(
+          `Có ${missingReasonItems.length} mặt hàng soạn thiếu nhưng chưa nhập lý do giải trình`,
+        );
+      }
+
+      const hasShort = sheet.items.some((i) => i.status === 'SHORT_PICKED');
+      sheet.status = hasShort ? 'PARTIALLY_COMPLETED' : 'COMPLETED';
+      sheet.completedAt = new Date().toISOString();
+      sheet.updatedAt = new Date().toISOString();
+      this.recalculateSheetSummary(sheet);
+
+      // Cập nhật trạng thái các đơn hàng sang PACKED (Đã soạn hàng & đóng gói xong)
+      for (const orderId of sheet.sourceOrderIds || []) {
+        try {
+          await this.ordersService.updatePickingStatus(
+            orderId,
+            OrderStatus.PACKED,
+            sheet.sheetCode,
+          );
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          this.logger.warn(`Lỗi cập nhật trạng thái PACKED cho đơn ${orderId}: ${msg}`);
+        }
+      }
+
+      await this.persistSheet(sheet);
       return sheet;
-    }
-
-    // Kiểm tra dòng chưa xử lý
-    const pendingItems = sheet.items.filter((it) => it.status === 'PENDING');
-    if (pendingItems.length > 0) {
-      throw new BadRequestException(
-        `Còn ${pendingItems.length} mặt hàng chưa được kiểm đếm hoặc đánh dấu. Vui lòng hoàn thành trước khi chốt phiếu.`,
-      );
-    }
-
-    // Kiểm tra dòng thiếu chưa có lý do
-    const missingReasonItems = sheet.items.filter(
-      (it) => it.totalPickedQuantity < it.totalRequiredQuantity && !it.shortPickReason?.trim(),
-    );
-    if (missingReasonItems.length > 0) {
-      throw new BadRequestException(
-        `Có ${missingReasonItems.length} mặt hàng soạn thiếu nhưng chưa nhập lý do giải trình`,
-      );
-    }
-
-    this.recalculateSheetSummary(sheet);
-    sheet.completedAt = new Date().toISOString();
-    sheet.updatedAt = new Date().toISOString();
-
-    await this.persistSheet(sheet);
-    return sheet;
+    });
   }
 
   /**
@@ -748,19 +901,21 @@ export class PickingSheetsService implements OnModuleInit {
    * Phục hồi trạng thái đơn về APPROVED nếu cần
    */
   async deleteSheet(sheetId: string, currentUser?: ICurrentUser): Promise<{ success: boolean; message: string }> {
-    const sheet = await this.findOne(sheetId, currentUser);
+    return this.lock.acquire(async () => {
+      const sheet = await this.findOne(sheetId, currentUser);
 
-    if (sheet.status === 'IN_PROGRESS') {
-      // Revert đơn hàng về APPROVED nếu đơn đang mang mã phiếu này
-      for (const orderId of sheet.sourceOrderIds || []) {
-        try {
-          await this.ordersService.updatePickingStatus(orderId, OrderStatus.APPROVED, undefined);
-        } catch {}
+      if (sheet.status === 'IN_PROGRESS') {
+        // Revert đơn hàng về APPROVED nếu đơn đang mang mã phiếu này
+        for (const orderId of sheet.sourceOrderIds || []) {
+          try {
+            await this.ordersService.updatePickingStatus(orderId, OrderStatus.APPROVED, undefined);
+          } catch {}
+        }
       }
-    }
 
-    await this.removeSheetFromDb(sheet.id);
-    return { success: true, message: `Đã xóa phiếu soạn hàng ${sheet.sheetCode} thành công` };
+      await this.removeSheetFromDb(sheet.id);
+      return { success: true, message: `Đã xóa phiếu soạn hàng ${sheet.sheetCode} thành công` };
+    });
   }
 
   /**
@@ -774,8 +929,8 @@ export class PickingSheetsService implements OnModuleInit {
     const totalRequiredQuantity = sheet.items.reduce((s, i) => s + i.totalRequiredQuantity, 0);
     const totalPickedQuantity = sheet.items.reduce((s, i) => s + i.totalPickedQuantity, 0);
 
-    let status: PickingSheetStatus = 'IN_PROGRESS';
-    if (totalLines > 0 && processedItems.length === totalLines) {
+    let status: PickingSheetStatus = sheet.status || 'IN_PROGRESS';
+    if (sheet.status === 'COMPLETED' || sheet.status === 'PARTIALLY_COMPLETED') {
       const hasShort = sheet.items.some((i) => i.status === 'SHORT_PICKED');
       status = hasShort ? 'PARTIALLY_COMPLETED' : 'COMPLETED';
     }

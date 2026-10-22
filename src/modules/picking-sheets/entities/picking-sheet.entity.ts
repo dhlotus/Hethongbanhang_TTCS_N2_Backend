@@ -57,6 +57,17 @@ export interface WarehouseLocationDetail {
   formattedCode: string;
   sortIndex: number;
   isConfigured?: boolean;
+  hasMultipleLocations?: boolean;
+  multipleLocations?: Array<{
+    code: string;
+    zone: string;
+    aisle: string;
+    rack: string;
+    shelf: string;
+    bin: string;
+    batchNumber?: string;
+    quantity?: number;
+  }>;
 }
 
 export interface OrderAllocationItem {

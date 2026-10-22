@@ -3085,7 +3085,9 @@ async findOrdersByCustomer(
     const validTransitions: OrderStatus[] = [
       OrderStatus.APPROVED,
       OrderStatus.PROCESSING,
+      OrderStatus.PACKED,
       OrderStatus.DISPATCHED,
+      OrderStatus.COMPLETED,
     ];
 
     if (!validTransitions.includes(status)) {
@@ -3094,16 +3096,29 @@ async findOrdersByCustomer(
       );
     }
 
-    if (this.databaseService && this.databaseService.isConnected()) {
-      await this.databaseService.query(
-        `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id::text = $2 OR code = $2`,
-        [status, id],
-      );
-    }
-
     order.status = status;
     order.updatedAt = new Date();
     this.orders.set(order.id, order);
+
+    if (this.databaseService && this.databaseService.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id::text = $2 OR code = $2`,
+          [status, id],
+        );
+      } catch (e) {
+        this.logger.debug(`Bảng orders: ${e}`);
+      }
+
+      try {
+        await this.databaseService.query(
+          `UPDATE app_order_records SET payload = $2::jsonb, updated_at = $3 WHERE id = $1 OR order_code = $1`,
+          [order.id, JSON.stringify(order), order.updatedAt],
+        );
+      } catch (e) {
+        this.logger.warn(`Lỗi cập nhật app_order_records cho đơn ${order.id}: ${e}`);
+      }
+    }
 
     return order;
   }
