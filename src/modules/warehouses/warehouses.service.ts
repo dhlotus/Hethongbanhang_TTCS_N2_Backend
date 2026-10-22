@@ -356,6 +356,18 @@ export class WarehousesService implements OnModuleInit {
     return rows[0];
   }
 
+  async deleteLocation(warehouseId: string, locationId: string): Promise<{ success: boolean; message: string }> {
+    await this.requireWarehouse(warehouseId);
+    const result = await this.databaseService.query(
+      `DELETE FROM warehouse_locations WHERE id = $1 AND warehouse_id = $2 RETURNING id`,
+      [locationId, warehouseId],
+    );
+    if (!result[0]) {
+      throw new NotFoundException('Không tìm thấy vị trí kho cần xóa');
+    }
+    return { success: true, message: 'Đã xóa vị trí kho thành công' };
+  }
+
   async listAgencyDefaults(): Promise<AgencyWarehouseAssignmentEntity[]> {
     try {
       const rows = await this.databaseService.query<AgencyWarehouseAssignmentEntity>(

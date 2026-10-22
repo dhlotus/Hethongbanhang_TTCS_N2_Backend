@@ -75,6 +75,15 @@ export class WarehousesController {
     return this.warehousesService.createLocation(id, dto);
   }
 
+  @Delete(':id/locations/:locationId')
+  @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
+  deleteLocation(
+    @Param('id') warehouseId: string,
+    @Param('locationId') locationId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.warehousesService.deleteLocation(warehouseId, locationId);
+  }
+
   @Get('agencies/defaults')
   @Roles(...WAREHOUSE_MANAGER_ROLES, UserRole.WAREHOUSE_KEEPER, UserRole.WAREHOUSE)
   listAgencyDefaults(): Promise<AgencyWarehouseAssignmentEntity[]> {

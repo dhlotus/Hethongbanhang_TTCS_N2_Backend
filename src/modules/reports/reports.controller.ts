@@ -14,6 +14,7 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ICurrentUser } from '../auth/interfaces/current-user.interface';
 import { QueryMultidimensionalSalesReportDto } from './dto/query-sales-report.dto';
+import { QueryInventoryReportDto } from './dto/query-inventory-report.dto';
 
 @Controller('reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -67,7 +68,37 @@ export class ReportsController {
   }
 
   /**
-   * Báo cáo kho hàng & vận hành
+   * Xuất Báo cáo Tồn kho & Vòng quay hàng ra Excel (.xlsx) chuẩn nghiệp vụ (SN-219)
+   * GET /api/reports/inventory/export-excel
+   */
+  @Get('inventory/export-excel')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SALES_MANAGER,
+    UserRole.WAREHOUSE_MANAGER,
+    UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.ACCOUNTANT,
+  )
+  async exportInventoryReportExcel(
+    @Query() query: QueryInventoryReportDto,
+    @CurrentUser() currentUser: ICurrentUser,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.reportsService.exportInventoryReportExcel(query, currentUser);
+    const fileName = `Bao_cao_ton_kho_vong_quay_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Length': buffer.length,
+    });
+
+    res.end(buffer);
+  }
+
+  /**
+   * Báo cáo kho hàng & vòng quay hàng (SN-219)
    * GET /api/reports/inventory
    */
   @Get('inventory')
@@ -76,9 +107,11 @@ export class ReportsController {
     UserRole.SALES_MANAGER,
     UserRole.WAREHOUSE_MANAGER,
     UserRole.WH_MANAGER,
+    UserRole.WAREHOUSE_KEEPER,
+    UserRole.ACCOUNTANT,
   )
   async getInventoryReport(
-    @Query() query: Record<string, string>,
+    @Query() query: QueryInventoryReportDto,
     @CurrentUser() currentUser: ICurrentUser,
   ) {
     return this.reportsService.getInventoryReport(query, currentUser);

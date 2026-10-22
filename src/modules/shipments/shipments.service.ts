@@ -925,6 +925,28 @@ export class ShipmentsService implements OnModuleInit {
     if (status === 'DELIVERED') shipment.deliveredAt = new Date();
     this.shipments.set(id, shipment);
 
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE shipments 
+           SET status = $1, tracking_number = $2, carrier_name = $3, proof_of_delivery_url = $4, shipped_at = $5, delivered_at = $6, updated_at = $7 
+           WHERE id = $8`,
+          [
+            shipment.status,
+            shipment.trackingNumber || null,
+            shipment.carrierName || null,
+            shipment.proofOfDeliveryUrl || null,
+            shipment.shippedAt || null,
+            shipment.deliveredAt || null,
+            shipment.updatedAt,
+            id,
+          ],
+        );
+      } catch (dbErr) {
+        this.logger.error(`Lỗi cập nhật CSDL phiếu xuất kho ${id}: ${dbErr}`);
+      }
+    }
+
     if (shipment.orderCode || shipment.orderId) {
       await this.syncOrder(shipment.orderCode || shipment.orderId, status);
     }
@@ -938,6 +960,7 @@ export class ShipmentsService implements OnModuleInit {
 
   /**
    * SN-198: Xác nhận giao hàng thành công kèm ảnh chứng từ
+   * Ghi nhận người nhận, thời điểm giao, ảnh biên bản có chữ ký và lưu bền vững vào CSDL
    */
   async confirmDelivery(
     id: string,
@@ -958,6 +981,46 @@ export class ShipmentsService implements OnModuleInit {
     }
     shipment.updatedAt = new Date();
     this.shipments.set(id, shipment);
+
+    // Cập nhật bền vững vào cơ sở dữ liệu PostgreSQL (SN-198)
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE shipments 
+           SET status = $1, receiver_name = $2, delivered_at = $3, proof_of_delivery_url = $4, delivery_note = $5, updated_at = $6
+           WHERE id = $7`,
+          [
+            shipment.status,
+            shipment.receiverName,
+            shipment.deliveredAt,
+            shipment.proofOfDeliveryUrl || null,
+            shipment.deliveryNote || null,
+            shipment.updatedAt,
+            id,
+          ],
+        );
+      } catch (dbErr) {
+        this.logger.error(`Lỗi cập nhật CSDL khi xác nhận giao hàng ${id}: ${dbErr}`);
+      }
+    }
+
+    // Cập nhật trạng thái điểm giao trong Chuyến giao hàng nếu phiếu thuộc một chuyến (SN-196)
+    if (shipment.tripId) {
+      const trip = this.trips.get(shipment.tripId);
+      if (trip) {
+        const stop = trip.stops.find((st) => st.shipmentId === shipment.id);
+        if (stop) {
+          stop.status = 'DELIVERED';
+          stop.deliveredAt = shipment.deliveredAt;
+        }
+        trip.deliveredStops = trip.stops.filter((st) => st.status === 'DELIVERED').length;
+        if (trip.deliveredStops === trip.totalStops) {
+          trip.status = DeliveryTripStatus.COMPLETED;
+          trip.completedAt = new Date();
+        }
+        trip.updatedAt = new Date();
+      }
+    }
 
     if (shipment.orderCode || shipment.orderId) {
       await this.syncOrder(shipment.orderCode || shipment.orderId, 'DELIVERED');
@@ -984,6 +1047,39 @@ export class ShipmentsService implements OnModuleInit {
     }
     shipment.updatedAt = new Date();
     this.shipments.set(id, shipment);
+
+    // Cập nhật bền vững vào cơ sở dữ liệu PostgreSQL (SN-198)
+    if (this.databaseService?.isConnected()) {
+      try {
+        await this.databaseService.query(
+          `UPDATE shipments 
+           SET status = $1, failure_reason = $2, delivery_note = $3, updated_at = $4
+           WHERE id = $5`,
+          [
+            shipment.status,
+            shipment.failureReason,
+            shipment.deliveryNote || null,
+            shipment.updatedAt,
+            id,
+          ],
+        );
+      } catch (dbErr) {
+        this.logger.error(`Lỗi cập nhật CSDL khi báo giao hàng thất bại ${id}: ${dbErr}`);
+      }
+    }
+
+    // Cập nhật trạng thái điểm giao của chuyến xe sang FAILED nếu thuộc chuyến (SN-196)
+    if (shipment.tripId) {
+      const trip = this.trips.get(shipment.tripId);
+      if (trip) {
+        const stop = trip.stops.find((st) => st.shipmentId === shipment.id);
+        if (stop) {
+          stop.status = 'FAILED';
+          stop.note = payload.failureReason.trim();
+        }
+        trip.updatedAt = new Date();
+      }
+    }
 
     if (shipment.orderCode || shipment.orderId) {
       await this.syncOrder(shipment.orderCode || shipment.orderId, 'PACKED');
