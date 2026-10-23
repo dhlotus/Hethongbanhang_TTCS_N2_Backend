@@ -5,6 +5,7 @@ export interface ICurrentUser {
   email: string;
   roles: UserRole[];
   username?: string;
+  fullName?: string;
   avatarUrl?: string | null;
   customerId?: string | null;
   customerCode?: string | null;

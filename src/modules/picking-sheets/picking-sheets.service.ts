@@ -677,7 +677,7 @@ export class PickingSheetsService implements OnModuleInit {
         orderCount: selectedOrders.length,
         status: 'IN_PROGRESS',
         pickerId: currentUser?.userId,
-        pickerName: dto.pickerName || currentUser?.username || 'Thủ kho phụ trách',
+        pickerName: dto.pickerName || currentUser?.fullName || currentUser?.username || 'Thủ kho phụ trách',
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
         items,
