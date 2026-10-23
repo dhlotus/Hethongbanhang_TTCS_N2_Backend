@@ -370,6 +370,37 @@ export class InventoryService implements OnModuleInit {
   public async resolveWarehouseId(rawWh?: string): Promise<{ id: string; code: string; name: string } | null> {
     if (!rawWh || !rawWh.trim()) return null;
     const clean = rawWh.trim();
+
+    const SLUG_MAP: Record<string, string> = {
+      'kho-bac': '11111111-0000-0000-0000-000000000002',
+      'kho-mien-bac': '11111111-0000-0000-0000-000000000002',
+      'khobac': '11111111-0000-0000-0000-000000000002',
+      'kho_bac': '11111111-0000-0000-0000-000000000002',
+      'mb': '11111111-0000-0000-0000-000000000002',
+      'north': '11111111-0000-0000-0000-000000000002',
+      'kho-trung': '11111111-0000-0000-0000-000000000004',
+      'kho-mien-trung': '11111111-0000-0000-0000-000000000004',
+      'khotrung': '11111111-0000-0000-0000-000000000004',
+      'kho_trung': '11111111-0000-0000-0000-000000000004',
+      'mt': '11111111-0000-0000-0000-000000000004',
+      'central': '11111111-0000-0000-0000-000000000004',
+      'kho-nam': '11111111-0000-0000-0000-000000000001',
+      'kho-mien-nam': '11111111-0000-0000-0000-000000000001',
+      'khonam': '11111111-0000-0000-0000-000000000001',
+      'kho_nam': '11111111-0000-0000-0000-000000000001',
+      'mn': '11111111-0000-0000-0000-000000000001',
+      'south': '11111111-0000-0000-0000-000000000001',
+      'kho-tay': '11111111-0000-0000-0000-000000000003',
+      'kho-mien-tay': '11111111-0000-0000-0000-000000000003',
+      'khotay': '11111111-0000-0000-0000-000000000003',
+      'kho_tay': '11111111-0000-0000-0000-000000000003',
+      'kho-west': '11111111-0000-0000-0000-000000000003',
+      'kho-west-01': '11111111-0000-0000-0000-000000000003',
+      'west': '11111111-0000-0000-0000-000000000003',
+      'can-tho': '11111111-0000-0000-0000-000000000003',
+    };
+    const mapped = SLUG_MAP[clean.toLowerCase()] || clean;
+
     if (this.databaseService?.isConnected()) {
       try {
         const rows = await this.databaseService.query<{ id: string; code: string; name: string }>(
@@ -377,16 +408,16 @@ export class InventoryService implements OnModuleInit {
            WHERE id::text = $1 OR code = $1 OR name = $1
               OR $1 ILIKE '%' || code || '%' OR $1 ILIKE '%' || name || '%'
            LIMIT 1`,
-          [clean],
+          [mapped],
         );
         if (rows[0]) return rows[0];
       } catch {}
     }
     const standard = STANDARD_WAREHOUSES.find(
       (w) =>
-        w.id === clean ||
-        w.code.toLowerCase() === clean.toLowerCase() ||
-        w.name.toLowerCase().includes(clean.toLowerCase()),
+        w.id === mapped ||
+        w.code.toLowerCase() === mapped.toLowerCase() ||
+        w.name.toLowerCase().includes(mapped.toLowerCase()),
     );
     if (standard) {
       return { id: standard.id, code: standard.code, name: standard.name };
